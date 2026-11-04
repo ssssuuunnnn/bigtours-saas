@@ -25,7 +25,6 @@ docker compose up --build
 | API | <http://localhost:4000> |
 | PostgreSQL | `localhost:5432`（帳號密碼 `postgres`） |
 | Mailpit（信件） | <http://localhost:8025> |
-| MinIO（檔案） | <http://localhost:9001>（帳號 `minioadmin`，密碼 `minioadmin`） |
 
 `apps`、`packages/shared/src` 的程式修改後會自動重新載入。
 
@@ -57,4 +56,4 @@ docker compose up --build
 
 ## 目前進度
 
-已完成員工從保留名額到送出報名的流程，以及申請取消。尚未開發：後台（平台、旅行社、企業窗口與登入）、員工名單匯入、Email 寄送、資料匯出、分房確認、報名後修改、背景工作（清理逾時保留、到期刪除個資）、條款上傳與級距上限檢查。MinIO 與 Mailpit 已備好，尚未接上程式。
+已完成員工從保留名額到送出報名的流程，以及申請取消。尚未開發：後台（平台、旅行社、企業窗口與登入）、員工名單匯入、Email 寄送、資料匯出、分房確認、報名後修改、背景工作（清理逾時保留、到期刪除個資）、條款上傳與級距上限檢查。Mailpit 已備好，尚未接上程式。本機檔案儲存服務等開發條款與圖片上傳時再加入。
