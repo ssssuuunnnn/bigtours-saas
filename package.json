@@ -13,5 +13,8 @@
     "pg": "^8",
     "tsx": "^4",
     "typescript": "^5"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0"
   }
 }

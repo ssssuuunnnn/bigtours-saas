@@ -1,4 +1,4 @@
-import { encrypt, hashToken, loadKey } from '@bigtours/shared/crypto';
+import { encrypt, hashPassword, hashToken, loadKey } from '@bigtours/shared/crypto';
 import pg from 'pg';
 
 // 本機示範資料。連結固定，方便開發；只在本機使用。
@@ -10,19 +10,49 @@ await client.connect();
 
 const one = async (sql: string, params: unknown[] = []) => (await client.query(sql, params)).rows[0];
 
+const ADMIN_EMAIL = 'admin@demo-travel.test';
+const ADMIN_PASSWORD = 'demo-password-123';
+const printAdmin = () => console.log(`\n旅行社後台：${base.replace('{agency}', 'demo-travel')}/admin\n帳號 ${ADMIN_EMAIL}，密碼 ${ADMIN_PASSWORD}`);
+
+async function ensureTiers() {
+  const tiers: [number, number, number][] = [[1, 199, 500], [200, 1000, 1000]];
+  for (let lo = 1001, price = 1500; lo <= 5000; lo += 500, price += 500) tiers.push([lo, lo + 499, price]);
+  for (const [lo, hi, price] of tiers) {
+    await client.query(`INSERT INTO pricing_tiers (min_travelers, max_travelers, price_amount) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, [lo, hi, price]);
+  }
+}
+
+async function ensureAdminData(agencyId: string) {
+  await ensureTiers();
+  await client.query(
+    `INSERT INTO agency_users (agency_id, email, password_hash, name, role) VALUES ($1, $2, $3, '示範管理員', 'admin') ON CONFLICT (agency_id, email) DO NOTHING`,
+    [agencyId, ADMIN_EMAIL, await hashPassword(ADMIN_PASSWORD)],
+  );
+  const granted = await one(`SELECT 1 AS x FROM agency_quota_ledger WHERE agency_id = $1 AND reason = 'grant' LIMIT 1`, [agencyId]);
+  if (!granted) {
+    await client.query(
+      `INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason, note)
+       SELECT $1, id, 10, 'grant', '本機示範額度' FROM pricing_tiers WHERE is_active`,
+      [agencyId],
+    );
+  }
+}
+
 await client.query('BEGIN');
 try {
   const code = 'demo-travel';
   const old = await one('SELECT id FROM agencies WHERE code = $1', [code]);
   if (old && process.env.SEED_ONLY_IF_EMPTY) {
-    // docker compose 每次啟動都會執行，不可覆蓋開發中的資料
-    await client.query('ROLLBACK');
+    // docker compose 每次啟動都會執行，不可覆蓋開發中的資料；只補上後來新增的後台示範帳號
+    await ensureAdminData(old.id);
+    await client.query('COMMIT');
     await client.end();
+    printAdmin();
     console.log('示範資料已存在，略過。');
     process.exit(0);
   }
   if (old) {
-    for (const t of ['room_assignments', 'rooms', 'room_preferences', 'registration_revisions', 'traveler_options', 'travelers', 'seat_hold_items', 'seat_holds', 'registration_drafts', 'registrations', 'event_employees', 'event_fields', 'option_session_quotas', 'options', 'option_groups', 'traveler_types', 'event_sessions', 'agency_quota_ledger', 'events', 'company_contacts', 'companies', 'agency_users']) {
+    for (const t of ['admin_sessions', 'audit_logs', 'room_assignments', 'rooms', 'room_preferences', 'registration_revisions', 'traveler_options', 'travelers', 'seat_hold_items', 'seat_holds', 'registration_drafts', 'registrations', 'event_employees', 'event_fields', 'option_session_quotas', 'options', 'option_groups', 'traveler_types', 'event_sessions', 'agency_quota_ledger', 'events', 'company_contacts', 'companies', 'agency_users']) {
       await client.query(`DELETE FROM ${t} WHERE agency_id = $1`, [old.id]);
     }
     await client.query('DELETE FROM agencies WHERE id = $1', [old.id]);
@@ -30,15 +60,9 @@ try {
   const agency = (await one(`INSERT INTO agencies (code, name, primary_color) VALUES ($1, '示範旅行社', '#0f766e') RETURNING id`, [code])).id;
   const company = (await one(`INSERT INTO companies (agency_id, name) VALUES ($1, '艾克米科技') RETURNING id`, [agency])).id;
 
-  let tier = await one('SELECT id FROM pricing_tiers WHERE min_travelers = 200 AND max_travelers = 1000');
-  if (!tier) {
-    const tiers: [number, number, number][] = [[1, 199, 500], [200, 1000, 1000]];
-    for (let lo = 1001, price = 1500; lo <= 5000; lo += 500, price += 500) tiers.push([lo, lo + 499, price]);
-    for (const [lo, hi, price] of tiers) {
-      await client.query(`INSERT INTO pricing_tiers (min_travelers, max_travelers, price_amount) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, [lo, hi, price]);
-    }
-    tier = await one('SELECT id FROM pricing_tiers WHERE min_travelers = 200 AND max_travelers = 1000');
-  }
+  await ensureAdminData(agency);
+  const tier = await one('SELECT id FROM pricing_tiers WHERE min_travelers = 200 AND max_travelers = 1000');
+  await client.query(`INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason, note) VALUES ($1, $2, -1, 'event_created', '示範活動')`, [agency, tier.id]);
 
   const event = (await one(
     `INSERT INTO events (agency_id, company_id, slug, name, status, pricing_tier_id, default_subsidy_amount, default_dependent_limit, ends_on,
@@ -107,6 +131,7 @@ try {
     );
     console.log(`${no} ${name}：${base.replace('{agency}', code)}/acme-2027/e/${token}`);
   }
+  printAdmin();
   await client.query('COMMIT');
 } catch (err) {
   await client.query('ROLLBACK');

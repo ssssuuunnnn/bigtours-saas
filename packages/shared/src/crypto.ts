@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 
 /** 本機以環境變數提供金鑰；正式環境改由金鑰管理服務提供。 */
 export function loadKey(base64: string | undefined): Buffer {
@@ -26,4 +26,24 @@ export function hashToken(hashKey: string, token: string): Buffer {
 
 export function generateToken(): string {
   return randomBytes(32).toString('base64url');
+}
+
+const SCRYPT = { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
+
+function derive(password: string, salt: Buffer): Promise<Buffer> {
+  return new Promise((resolve, reject) =>
+    scrypt(password, salt, 32, SCRYPT, (err, key) => (err ? reject(err) : resolve(key))),
+  );
+}
+
+export async function hashPassword(password: string): Promise<string> {
+  const salt = randomBytes(16);
+  return `scrypt$${salt.toString('base64')}$${(await derive(password, salt)).toString('base64')}`;
+}
+
+export async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  const [scheme, salt, key] = stored.split('$');
+  if (scheme !== 'scrypt' || !salt || !key) return false;
+  const expected = Buffer.from(key, 'base64');
+  return timingSafeEqual(await derive(password, Buffer.from(salt, 'base64')), expected);
 }

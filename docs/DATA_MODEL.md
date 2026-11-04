@@ -1,6 +1,6 @@
 # 大團系統 資料模型
 
-> 狀態：第一版。需求來源為 [PRD](PRD.md)，架構見 [ARCHITECTURE](ARCHITECTURE.md)，完整欄位與限制定義在 [db/migrations/0001_init.sql](../db/migrations/0001_init.sql)。
+> 狀態：第一版。需求來源為 [PRD](PRD.md)，架構見 [ARCHITECTURE](ARCHITECTURE.md)，完整欄位與限制定義在 [db/migrations](../db/migrations)。
 
 ## 1. 資料表總覽
 
@@ -9,6 +9,7 @@
 | 平台與額度 | `agencies`、`platform_users` | 旅行社租戶、平台人員 |
 | | `pricing_tiers`、`agency_quota_ledger` | 收費級距；開通、扣除、退回額度的流水帳 |
 | 旅行社與企業 | `agency_users`、`companies`、`company_contacts` | 旅行社人員（管理員、操作員）、企業客戶、企業窗口 |
+| | `admin_sessions` | 後台登入的工作階段（只存雜湊值） |
 | 活動設定 | `events`、`event_sessions` | 活動、梯次與名額 |
 | | `traveler_types` | 旅客類型與團費 |
 | | `option_groups`、`options`、`option_session_quotas` | 選項群組、選項、各梯次的選項名額 |

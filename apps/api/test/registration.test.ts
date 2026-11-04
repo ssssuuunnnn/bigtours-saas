@@ -6,6 +6,7 @@ import pg from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.ts';
+import { configureApp } from '../src/configure-app.ts';
 import { RegistrationService } from '../src/registration.service.ts';
 
 let app: INestApplication;
@@ -96,9 +97,10 @@ async function inBatches<T>(items: (() => Promise<T>)[], size = 40): Promise<T[]
 beforeAll(async () => {
   admin = new pg.Client({ connectionString: process.env.DATABASE_ADMIN_URL });
   await admin.connect();
-  tierId = (await q1(`INSERT INTO pricing_tiers (min_travelers, max_travelers, price_amount) VALUES (1, 5000, 500)
+  tierId = (await q1(`INSERT INTO pricing_tiers (min_travelers, max_travelers, price_amount, is_active) VALUES (1, 5000, 500, false)
                       ON CONFLICT (min_travelers, max_travelers) DO UPDATE SET price_amount = EXCLUDED.price_amount RETURNING id`)).id;
-  app = await NestFactory.create(AppModule, { logger: false });
+  app = await NestFactory.create(AppModule, { logger: false, bodyParser: false });
+  configureApp(app);
   await app.init();
   await app.listen(0);
   service = app.get(RegistrationService);
