@@ -1,0 +1,10 @@
+{
+  "name": "@bigtours/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts", "./crypto": "./src/crypto.ts" },
+  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "dependencies": { "zod": "^3" },
+  "devDependencies": { "@types/node": "^22", "typescript": "^5", "vitest": "^3" }
+}

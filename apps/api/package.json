@@ -1,0 +1,31 @@
+{
+  "name": "@bigtours/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file=../../.env src/main.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@bigtours/shared": "workspace:*",
+    "@nestjs/common": "^12",
+    "@nestjs/core": "^12",
+    "@nestjs/platform-express": "^12",
+    "pg": "^8",
+    "reflect-metadata": "^0.2",
+    "rxjs": "^7",
+    "zod": "^3"
+  },
+  "devDependencies": {
+    "@types/express": "^5",
+    "@types/node": "^22",
+    "@types/pg": "^8",
+    "@types/supertest": "^6",
+    "supertest": "^7",
+    "tsx": "^4",
+    "typescript": "^5",
+    "vitest": "^3"
+  }
+}

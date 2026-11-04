@@ -1,0 +1,26 @@
+{
+  "name": "bigtours-saas",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.16.1",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @bigtours/api --filter @bigtours/web dev",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:migrate": "tsx --env-file=.env db/migrate.ts",
+    "db:seed": "tsx --env-file=.env db/seed.ts",
+    "test": "pnpm --filter @bigtours/shared --filter @bigtours/api test",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "@bigtours/shared": "workspace:*",
+    "@types/node": "^22",
+    "@types/pg": "^8",
+    "pg": "^8",
+    "tsx": "^4",
+    "typescript": "^5"
+  }
+}
