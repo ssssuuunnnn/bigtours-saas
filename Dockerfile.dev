@@ -1,0 +1,17 @@
+# 本機開發用映像檔。原始碼由 docker-compose.yml 掛載，修改後會自動重新載入。
+FROM node:22-bookworm-slim
+
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN corepack enable
+
+WORKDIR /app
+
+# 先複製依賴設定，套件沒變動時可重用快取
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json tsconfig.json ./
+COPY apps/api/package.json apps/api/
+COPY apps/web/package.json apps/web/
+COPY packages/shared/package.json packages/shared/
+RUN pnpm install --frozen-lockfile
+
+COPY . .

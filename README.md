@@ -4,37 +4,46 @@
 
 ## 本機啟動
 
-需要 Node.js 22 以上、pnpm 與 Docker。
+只需要 Docker，不用在電腦上安裝 Node.js 或 pnpm。
 
 ```bash
-cp .env.example .env
-pnpm install
-pnpm db:up        # 啟動 PostgreSQL、MinIO、Mailpit
-pnpm db:migrate   # 建立資料表與應用程式資料庫角色
-pnpm db:seed      # 建立示範資料，並印出員工專屬連結
-pnpm dev          # 前端 :3000、API :4000
+docker compose up --build
 ```
 
-開啟 `db:seed` 印出的連結即可報名，例如：
-<http://demo-travel.lvh.me:3000/acme-2027/e/demo-e001-local-development-only>
+第一次會下載映像檔與安裝套件，需要幾分鐘。看到 API 與前端都啟動後，開啟示範連結：
 
-`*.lvh.me` 會指回本機，需要網路才能解析。第二梯次只有 3 個名額，方便測試額滿與保留狀態。重新執行 `pnpm db:seed` 會重設示範資料。
+- [王小明（預設補助，可帶 2 位眷屬）](http://demo-travel.lvh.me:3000/acme-2027/e/demo-e001-local-development-only)
+- [林美惠（補助 $20,000，可帶 3 位眷屬）](http://demo-travel.lvh.me:3000/acme-2027/e/demo-e002-local-development-only)
+- [陳志豪（補助 $5,000，不能帶眷屬）](http://demo-travel.lvh.me:3000/acme-2027/e/demo-e003-local-development-only)
+- [張雅婷（預設補助，可帶 2 位眷屬）](http://demo-travel.lvh.me:3000/acme-2027/e/demo-e004-local-development-only)
+
+第二梯次只有 3 個名額，方便測試額滿與保留狀態。`*.lvh.me` 會指回本機，需要網路才能解析。
 
 | 服務 | 網址 |
 |---|---|
 | 前端 | <http://demo-travel.lvh.me:3000> |
 | API | <http://localhost:4000> |
+| PostgreSQL | `localhost:5432`（帳號密碼 `postgres`） |
 | Mailpit（信件） | <http://localhost:8025> |
-| MinIO（檔案） | <http://localhost:9001> |
+| MinIO（檔案） | <http://localhost:9001>（帳號 `minioadmin`，密碼 `minioadmin`） |
 
-## 測試
+`apps`、`packages/shared/src` 的程式修改後會自動重新載入。
 
-資料庫啟動並完成 migration 後執行：
+## 常用指令
 
-```bash
-pnpm test        # 費用計算與 API 整合測試（含併發防超賣）
-pnpm typecheck
-```
+| 目的 | 指令 |
+|---|---|
+| 啟動 | `docker compose up --build` |
+| 停止，保留資料 | `docker compose down` |
+| 停止並清除所有資料 | `docker compose down -v` |
+| 重設示範資料 | `docker compose run --rm migrate pnpm exec tsx db/seed.ts` |
+| 執行測試（需先啟動） | `docker compose run --rm --no-deps api pnpm --filter @bigtours/shared --filter @bigtours/api test` |
+| 檢查型別 | `docker compose run --rm --no-deps api pnpm -r typecheck` |
+| 新增或更新套件後 | `docker compose up --build` |
+
+新增套件時，先在容器內更新 lockfile：`docker compose run --rm --no-deps -v "$PWD:/app" api pnpm --filter @bigtours/web add <套件>`。
+
+如果 3000、4000、5432 等連接埠已被占用，請先停止占用的程式，或修改 `docker-compose.yml` 的 `ports`。
 
 ## 專案結構
 

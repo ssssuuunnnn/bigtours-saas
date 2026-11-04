@@ -61,7 +61,7 @@
 
 ## 6. 本機開發環境
 
-以 Docker Compose 一鍵啟動。
+所有服務（前端、API、資料庫與周邊服務）都在 Docker Compose 內執行，以 `docker compose up --build` 一鍵啟動，電腦上只需要 Docker。原始碼掛載進容器，修改後自動重新載入。
 
 | 正式環境 | 本機替代 | 用途 |
 |---|---|---|

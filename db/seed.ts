@@ -14,6 +14,13 @@ await client.query('BEGIN');
 try {
   const code = 'demo-travel';
   const old = await one('SELECT id FROM agencies WHERE code = $1', [code]);
+  if (old && process.env.SEED_ONLY_IF_EMPTY) {
+    // docker compose 每次啟動都會執行，不可覆蓋開發中的資料
+    await client.query('ROLLBACK');
+    await client.end();
+    console.log('示範資料已存在，略過。');
+    process.exit(0);
+  }
   if (old) {
     for (const t of ['room_assignments', 'rooms', 'room_preferences', 'registration_revisions', 'traveler_options', 'travelers', 'seat_hold_items', 'seat_holds', 'registration_drafts', 'registrations', 'event_employees', 'event_fields', 'option_session_quotas', 'options', 'option_groups', 'traveler_types', 'event_sessions', 'agency_quota_ledger', 'events', 'company_contacts', 'companies', 'agency_users']) {
       await client.query(`DELETE FROM ${t} WHERE agency_id = $1`, [old.id]);

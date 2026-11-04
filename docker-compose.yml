@@ -1,3 +1,21 @@
+# 本機開發環境：docker compose up --build
+# 以下密碼與金鑰都只供本機使用，不可用於正式環境。
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile.dev
+  image: bigtours-dev
+  environment: &app-env
+    DATABASE_ADMIN_URL: postgres://postgres:postgres@postgres:5432/bigtours
+    DATABASE_URL: postgres://bigtours_app:bigtours_app@postgres:5432/bigtours
+    PLATFORM_DOMAIN: lvh.me
+    API_PORT: "4000"
+    API_URL: http://api:4000
+    DATA_ENCRYPTION_KEY: ZGV2LW9ubHkta2V5LWRvLW5vdC11c2UtaW4tcHJvZCE=
+    TOKEN_HASH_KEY: dev-only-token-hash-key
+    WEB_BASE_URL: http://{agency}.lvh.me:3000
+
 services:
   postgres:
     image: postgres:16
@@ -11,6 +29,43 @@ services:
       interval: 3s
       timeout: 3s
       retries: 20
+
+  # 建立資料表，第一次啟動時加入示範資料，完成後結束
+  migrate:
+    <<: *app
+    command: sh -c "pnpm exec tsx db/migrate.ts && SEED_ONLY_IF_EMPTY=1 pnpm exec tsx db/seed.ts"
+    volumes:
+      - ./db:/app/db
+      - ./packages/shared/src:/app/packages/shared/src
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    command: pnpm --filter @bigtours/api exec tsx watch src/main.ts
+    ports: ["4000:4000"]
+    volumes:
+      - ./apps/api/src:/app/apps/api/src
+      - ./apps/api/test:/app/apps/api/test
+      - ./packages/shared/src:/app/packages/shared/src
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    <<: *app
+    command: pnpm --filter @bigtours/web dev
+    ports: ["3000:3000"]
+    volumes:
+      - ./apps/web/app:/app/apps/web/app
+      - ./apps/web/lib:/app/apps/web/lib
+      - ./apps/web/messages:/app/apps/web/messages
+      - ./apps/web/next.config.ts:/app/apps/web/next.config.ts
+      - ./packages/shared/src:/app/packages/shared/src
+    depends_on:
+      - api
+
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
@@ -19,9 +74,11 @@ services:
       MINIO_ROOT_PASSWORD: minioadmin
     ports: ["9000:9000", "9001:9001"]
     volumes: [minio-data:/data]
+
   mailpit:
     image: axllent/mailpit:latest
     ports: ["1025:1025", "8025:8025"]
+
 volumes:
   postgres-data:
   minio-data:
