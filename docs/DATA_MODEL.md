@@ -71,7 +71,7 @@ agencies
 
 ### 3.4 員工帳號與登入
 
-- `events.theme_color` 為 NULL 時沿用旅行社的預設主色。
+- `events.theme_color` 必填，建立活動時預設為系統預設色；複製活動時帶入原活動的主色。
 - 帳號為 `event_employees.employee_no`，屬於活動名單，不跨活動共用；`password_hash` 為 NULL 表示尚未設定密碼。
 - `employee_password_links` 只存雜湊。每位員工同時只有一個可用連結，由唯一索引保證；重新產生時先撤銷舊連結。
 - 使用連結時以同一筆更新確認並標記 `used_at`，同時送出也只會成功一次；設定完成後撤銷該員工所有登入狀態。
