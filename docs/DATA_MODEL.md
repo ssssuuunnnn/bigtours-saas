@@ -8,7 +8,7 @@
 |---|---|---|
 | 平台與額度 | `agencies`、`platform_users` | 旅行社租戶、平台人員 |
 | | `pricing_tiers`、`agency_quota_ledger` | 收費級距；開通、扣除、退回額度的流水帳 |
-| 旅行社與企業 | `agency_users`、`companies`、`company_contacts` | 旅行社人員（管理員、活動操作員、營運人員，含釘選的選單項目）、企業客戶、企業窗口 |
+| 旅行社與企業 | `agency_users`、`companies`、`company_contacts` | 旅行社人員（管理員、活動操作員、營運人員，含釘選的選單項目）、企業客戶（含前台顯示的名稱與 Logo）、企業窗口 |
 | 活動設定 | `events`、`event_sessions` | 活動、梯次與名額 |
 | | `traveler_types` | 旅客類型與團費 |
 | | `option_groups`、`options`、`option_session_quotas` | 選項群組、選項、各梯次的選項名額 |
