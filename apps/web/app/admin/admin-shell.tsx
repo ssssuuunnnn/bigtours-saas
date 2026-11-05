@@ -1,0 +1,82 @@
+'use client';
+
+import { useCallback, useEffect, useState } from 'react';
+import { ApiError } from '../../lib/api';
+import { adminApi, type AdminMe } from '../../lib/admin-api';
+import { a } from '../../messages/admin';
+
+export const adminError = (e: unknown) => a.errors[e instanceof ApiError ? e.code : 'fallback'] ?? a.errors.fallback!;
+
+/** 共用外框：確認登入狀態，未登入時顯示登入表單。 */
+export function AdminShell({ children }: { children: (me: AdminMe) => React.ReactNode }) {
+  const [me, setMe] = useState<AdminMe | null>(null);
+  const [view, setView] = useState<'loading' | 'login' | 'ready' | 'failed'>('loading');
+
+  const load = useCallback(() => {
+    adminApi.me().then((m) => { setMe(m); setView('ready'); }).catch((e) => {
+      setView(e instanceof ApiError && e.status === 401 ? 'login' : 'failed');
+    });
+  }, []);
+  useEffect(load, [load]);
+
+  if (view === 'loading') return <main className="center-note" aria-busy="true"><p>{a.loading}</p></main>;
+  if (view === 'failed') return <main className="center-note"><p role="alert">{a.loadFailed}</p></main>;
+  if (view === 'login' || !me) return <AdminLogin onDone={load} />;
+  return (
+    <div className="admin">
+      <header className="admin-bar">
+        <a href="/admin" className="admin-brand">{me.agencyName}<span>{a.title}</span></a>
+        <span className="admin-user">{me.user.name}</span>
+        <button type="button" className="link" onClick={() => adminApi.logout().finally(() => { setMe(null); setView('login'); })}>{a.logout}</button>
+      </header>
+      {children(me)}
+    </div>
+  );
+}
+
+function AdminLogin({ onDone }: { onDone: () => void }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true); setError(null);
+    try {
+      await adminApi.login(email, password);
+      onDone();
+    } catch {
+      setError(a.loginFailed);
+      setPassword('');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <main className="admin-login">
+      <form className="block auth-form" onSubmit={submit}>
+        <h1>{a.title}</h1>
+        {error && <p className="error" role="alert">{error}</p>}
+        <label className="field"><span>{a.email}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></label>
+        <label className="field"><span>{a.password}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></label>
+        <button type="submit" className="primary wide" disabled={busy}>{busy ? a.loggingIn : a.login}</button>
+      </form>
+    </main>
+  );
+}
+
+export function MoveButtons({ name, canUp, canDown, onUp, onDown }: { name: string; canUp: boolean; canDown: boolean; onUp: () => void; onDown: () => void }) {
+  return (
+    <span className="move">
+      <button type="button" aria-label={a.moveUp(name)} disabled={!canUp} onClick={onUp}>▲</button>
+      <button type="button" aria-label={a.moveDown(name)} disabled={!canDown} onClick={onDown}>▼</button>
+    </span>
+  );
+}
+
+/** 交換相鄰兩項後的 ID 順序。 */
+export const swapped = <T extends { id: string }>(list: T[], i: number, j: number) => {
+  const next = [...list];
+  [next[i], next[j]] = [next[j]!, next[i]!];
+  return next;
+};
