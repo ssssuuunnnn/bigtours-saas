@@ -254,6 +254,33 @@ describe('活動頁開關與報名期間', () => {
     expect((await state(e, cookie).expect(200)).body.event).toMatchObject({ hasTerms: true, paymentInstructions: '請匯款' });
   });
 
+  it('行程 PDF 只給已登入的員工，不能讀其他活動的選項', async () => {
+    const e = await makeEvent();
+    await makeEmployee(e);
+    const cookie = sessionCookie(await login(e, 'E001', PASSWORD).expect(204));
+    const group = await q1(`INSERT INTO option_groups (agency_id, event_id, name) VALUES ($1, $2, 'G') RETURNING id`, [e.agencyId, e.eventId]);
+    const option = await q1(`INSERT INTO options (agency_id, group_id, name) VALUES ($1, $2, 'O') RETURNING id`, [e.agencyId, group.id]);
+    const path = `${base}/options/${option.id}/pdf`;
+    await on(e, http().get(path)).expect(401);
+    await on(e, http().get(path)).set('cookie', cookie).expect(404);
+    await on(e, http().get(`${base}/options/not-a-uuid/pdf`)).set('cookie', cookie).expect(404);
+    const groupsOf = async () => (await state(e, cookie).expect(200)).body.optionGroups[0].options[0];
+    expect((await groupsOf()).hasPdf).toBe(false);
+
+    const key = `${e.agencyId}/${randomUUID()}.pdf`;
+    await storage.put(key, Buffer.from('%PDF-1.4 option'));
+    await q1(`UPDATE options SET pdf_object_key = $2, pdf_file_name = '行程.pdf' WHERE id = $1`, [option.id, key]);
+    expect((await groupsOf()).hasPdf).toBe(true);
+    const r = await on(e, http().get(path)).set('cookie', cookie).buffer(true)
+      .parse((res, cb) => { const c: Buffer[] = []; res.on('data', (d) => c.push(d)); res.on('end', () => cb(null, Buffer.concat(c))); }).expect(200);
+    expect(r.body.toString()).toBe('%PDF-1.4 option');
+
+    const other = await makeEvent();
+    await makeEmployee(other);
+    const otherCookie = sessionCookie(await login(other, 'E001', PASSWORD).expect(204));
+    await on(other, http().get(path)).set('cookie', otherCookie).expect(404);
+  });
+
   it('登入頁不需登入即可取得報名期間與活動頁狀態', async () => {
     const e = await makeEvent();
     const r = await on(e, http().get(`${base}/landing`));

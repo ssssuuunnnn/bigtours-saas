@@ -4,6 +4,7 @@ import { AccessService } from './access.service.ts';
 import { DatabaseService } from './database.service.ts';
 import { EncryptionService } from './encryption.service.ts';
 import { DomainError } from './errors.ts';
+import { imageContentType, isImageKind, publicImages, StorageService } from './storage.service.ts';
 
 const LINK_DAYS = 14;
 const SESSION_HOURS = 12;
@@ -21,6 +22,7 @@ export class AccountService {
     @Inject(DatabaseService) private readonly db: DatabaseService,
     @Inject(EncryptionService) private readonly encryption: EncryptionService,
     @Inject(AccessService) private readonly access: AccessService,
+    @Inject(StorageService) private readonly storage: StorageService,
   ) {}
 
   /** 登入頁使用，不需登入。 */
@@ -37,8 +39,17 @@ export class AccountService {
         registrationClosesAt: event.registrationClosesAt,
         pageState: event.pageState,
         pageOpensAt: event.pageOpensAt,
+        images: publicImages(event.slug, event.images),
       },
     };
+  }
+
+  async readImage(host: string | undefined, slug: string, kind: string) {
+    const agency = await this.access.findAgency(host);
+    const event = await this.access.findEvent(agency.id, slug);
+    const key = isImageKind(kind) ? event.images[kind] : null;
+    if (!key) throw new DomainError('NOT_FOUND');
+    return { contentType: imageContentType(key), content: await this.storage.get(key) };
   }
 
   /** 帳號不存在、密碼錯誤與鎖定中都回傳相同錯誤。 */

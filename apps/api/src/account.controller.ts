@@ -4,7 +4,7 @@ import type { Response } from 'express';
 import { SESSION_COOKIE } from './access.service.ts';
 import { AccountService } from './account.service.ts';
 import { DomainError } from './errors.ts';
-import { assertSameOrigin, requestHost, sessionTokenFrom, type RequestHeaders } from './http.ts';
+import { assertSameOrigin, requestHost, sendImage, sessionTokenFrom, type RequestHeaders } from './http.ts';
 
 /** Cookie 限定此活動的路徑：帳號不跨活動共用，同一個瀏覽器也能分別登入不同活動。 */
 const cookieOptions = (slug: string) => ({
@@ -17,6 +17,13 @@ const cookieOptions = (slug: string) => ({
 @Controller('api/v1/public/events/:slug')
 export class AccountController {
   constructor(@Inject(AccountService) private readonly accounts: AccountService) {}
+
+  /** 登入頁背景要在登入前顯示，所以不需登入。 */
+  @Get('images/:kind')
+  async image(@Headers() h: RequestHeaders, @Param('slug') slug: string, @Param('kind') kind: string, @Res() res: Response) {
+    const file = await this.accounts.readImage(requestHost(h), slug, kind);
+    sendImage(res, file.contentType, file.content);
+  }
 
   @Get('landing')
   landing(@Headers() h: RequestHeaders, @Param('slug') slug: string) {

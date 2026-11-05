@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { adminApi, type AdminEvent } from '../../../../lib/admin-api';
 import { a } from '../../../../messages/admin';
 import { adminError } from '../../admin-shell';
+import { ImagesField } from './images-field';
 
 const HEX = /^#[0-9A-Fa-f]{6}$/;
 
@@ -74,6 +75,8 @@ export function BasicPanel({ event, onSaved }: { event: AdminEvent; onSaved: () 
         <button type="button" className="link" onClick={() => setDays([...days, { title: a.dayTitle(days.length + 1), description: '' }])}>{a.addDay}</button>
       </fieldset>
 
+      <ImagesField event={event} onChanged={onSaved} />
+
       <fieldset className="span-3">
         <legend>{a.themeColor}</legend>
         <div className="admin-color">
@@ -86,7 +89,6 @@ export function BasicPanel({ event, onSaved }: { event: AdminEvent; onSaved: () 
 
       <label className="field"><span>{a.supportPhone}</span><input type="text" maxLength={30} value={supportPhone} onChange={(e) => setSupportPhone(e.target.value)} /></label>
       <label className="field"><span>{a.supportHours}</span><input type="text" maxLength={100} value={supportHours} onChange={(e) => setSupportHours(e.target.value)} /></label>
-      <p className="muted span-3">{a.imagesLater}</p>
 
       <div className="admin-form-actions span-3">
         <button type="submit" className="primary" disabled={busy}>{a.save}</button>

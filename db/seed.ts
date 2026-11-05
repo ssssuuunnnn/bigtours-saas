@@ -111,6 +111,8 @@ try {
     [event, termsKey],
   );
 
+  await client.query(`UPDATE options SET pdf_object_key = $1, pdf_file_name = '美麗海水族館行程.pdf' WHERE agency_id = $2 AND name = '美麗海水族館'`, [termsKey, agency]);
+
   const fields: [string, string, string, unknown, boolean, boolean][] = [
     ['birthday', '生日', 'date', null, true, false],
     ['national_id', '身分證字號', 'text', null, true, true],
