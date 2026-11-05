@@ -427,12 +427,26 @@ export class RegistrationService {
         const v = t.fieldValues[f.key];
         const empty = v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
         if (f.isRequired && empty) errors.push({ key: t.key, field: f.key });
-        if (!empty && f.type === 'select' && Array.isArray(f.choices) && !f.choices.includes(v)) {
-          errors.push({ key: t.key, field: f.key });
-        }
+        if (!empty && !this.isValidFieldValue(f, v)) errors.push({ key: t.key, field: f.key });
       }
     }
     if (errors.length) throw new DomainError('INVALID_DETAILS', { errors });
+  }
+
+  private isValidFieldValue(field: EventConfig['fields'][number], value: unknown): boolean {
+    const choices = Array.isArray(field.choices) ? field.choices : [];
+    switch (field.type) {
+      case 'select':
+        return choices.includes(value);
+      case 'multiselect':
+        return Array.isArray(value) && new Set(value).size === value.length && value.every((v) => choices.includes(v));
+      case 'number':
+        return (typeof value === 'number' || typeof value === 'string') && value !== '' && Number.isFinite(Number(value));
+      case 'date':
+        return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
+      default:
+        return typeof value === 'string';
+    }
   }
 
   /** 每個受名額限制的選項在此梯次需要幾個名額；沒有名額設定的選項不限量。 */
@@ -559,6 +573,9 @@ export class RegistrationService {
   private async loadAvailability(tx: Tx, eventId: string) {
     const sessions = await tx.query(
       `SELECT s.id, s.name, s.departs_on, s.returns_on, s.capacity, s.sold_count,
+              s.outbound_flight_no, s.return_flight_no,
+              to_char(s.departure_time, 'HH24:MI') AS departure_time,
+              to_char(s.return_arrival_time, 'HH24:MI') AS return_arrival_time,
               COALESCE((SELECT sum(h.quantity) FROM seat_holds h
                          WHERE h.session_id = s.id AND h.status = 'active' AND h.expires_at > now()), 0)::int AS held
          FROM event_sessions s WHERE s.event_id = $1 ORDER BY s.sort_order, s.departs_on, s.name`,
@@ -576,6 +593,10 @@ export class RegistrationService {
       name: s.name,
       departsOn: s.departs_on,
       returnsOn: s.returns_on,
+      outboundFlightNo: s.outbound_flight_no,
+      returnFlightNo: s.return_flight_no,
+      departureTime: s.departure_time,
+      returnArrivalTime: s.return_arrival_time,
       remaining: Math.max(s.capacity - s.sold_count - s.held, 0),
       status: seatStatus(s.capacity, s.sold_count, s.held),
       options: quotas.rows
@@ -645,7 +666,7 @@ export class RegistrationService {
     return rows[0] ? this.encryption.decryptJson<DraftPayload>(rows[0].payload_encrypted) : null;
   }
 
-  /** 回傳給前端的草稿不含敏感欄位原值，連結外流也不會洩漏完整個資。 */
+  /** 回傳給前端的草稿不含敏感欄位原值，帳號外流也不會洩漏完整個資。 */
   private async loadDraft(tx: Tx, employeeId: string, config: EventConfig) {
     const draft = await this.readDraftPayload(tx, employeeId);
     if (!draft) return null;
@@ -692,7 +713,7 @@ export class RegistrationService {
     const masks: Record<string, string> = {};
     for (const f of config.fields) {
       const v = values[f.key];
-      if (v === undefined || v === null || v === '') continue;
+      if (v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0)) continue;
       if (f.isSensitive) {
         sensitive[f.key] = v;
         masks[f.key] = maskValue(String(v));

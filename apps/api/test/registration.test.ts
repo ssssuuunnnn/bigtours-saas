@@ -56,16 +56,20 @@ async function makeEmployee(f: Fixture, o: { subsidy?: number | null; limit?: nu
   const token = generateToken();
   const eventId = (await q1(`SELECT id FROM events WHERE agency_id = $1`, [f.agencyId])).id;
   const id = (await q1(
-    `INSERT INTO event_employees (agency_id, event_id, employee_no, name, subsidy_amount, dependent_limit, link_token_hash, link_token_encrypted)
-     VALUES ($1, $2, $3, 'N', $4, $5, $6, '\\x00') RETURNING id`,
-    [f.agencyId, eventId, randomUUID(), o.subsidy ?? null, o.limit ?? null, hashToken(process.env.TOKEN_HASH_KEY!, token)],
+    `INSERT INTO event_employees (agency_id, event_id, employee_no, name, subsidy_amount, dependent_limit)
+     VALUES ($1, $2, $3, 'N', $4, $5) RETURNING id`,
+    [f.agencyId, eventId, randomUUID(), o.subsidy ?? null, o.limit ?? null],
   )).id;
+  await admin.query(
+    `INSERT INTO employee_sessions (agency_id, event_employee_id, token_hash, expires_at) VALUES ($1, $2, $3, now() + interval '1 hour')`,
+    [f.agencyId, id, hashToken(process.env.TOKEN_HASH_KEY!, token)],
+  );
   return { token, id };
 }
 
 const call = (f: Fixture, token: string) => {
   const base = `/api/v1/public/events/${f.slug}`;
-  const h = (r: request.Test) => r.set('x-forwarded-host', f.host).set('x-employee-token', token);
+  const h = (r: request.Test) => r.set('x-forwarded-host', f.host).set('cookie', `bt_session=${token}`);
   const http = request(app.getHttpServer());
   return {
     state: () => h(http.get(base)),
@@ -163,23 +167,26 @@ describe('完整流程', () => {
 });
 
 describe('存取控制', () => {
-  it('錯誤連結、其他活動、其他旅行社一律 404', async () => {
+  it('登入狀態錯誤或屬於其他旅行社時需要登入；其他活動、未知旅行社一律 404', async () => {
     const a = await makeFixture();
     const b = await makeFixture();
     const { token } = await makeEmployee(a);
-    expect((await call(a, 'wrong-token').state()).status).toBe(404);
+    expect((await call(a, 'wrong-token').state()).status).toBe(401);
     expect((await call(a, token).state()).status).toBe(200);
     expect((await call({ ...a, slug: 'other' }, token).state()).status).toBe(404);
-    expect((await call(b, token).state()).status).toBe(404);
+    expect((await call(b, token).state()).status).toBe(401);
     expect((await call({ ...a, host: 'unknown.lvh.me' }, token).state()).status).toBe(404);
     expect((await call({ ...a, host: 'evil.example.com' }, token).state()).status).toBe(404);
   });
 
-  it('重新產生連結後舊連結失效', async () => {
+  it('登入狀態過期或被撤銷後需要重新登入', async () => {
     const f = await makeFixture();
-    const { token, id } = await makeEmployee(f);
-    await admin.query(`UPDATE event_employees SET link_token_hash = $1 WHERE id = $2`, [hashToken(process.env.TOKEN_HASH_KEY!, generateToken()), id]);
-    expect((await call(f, token).state()).status).toBe(404);
+    const expired = await makeEmployee(f);
+    await admin.query(`UPDATE employee_sessions SET expires_at = now() - interval '1 second' WHERE event_employee_id = $1`, [expired.id]);
+    expect((await call(f, expired.token).state()).status).toBe(401);
+    const revoked = await makeEmployee(f);
+    await admin.query(`UPDATE employee_sessions SET revoked_at = now() WHERE event_employee_id = $1`, [revoked.id]);
+    expect((await call(f, revoked.token).state()).status).toBe(401);
   });
 
   it('報名截止後不能保留', async () => {
