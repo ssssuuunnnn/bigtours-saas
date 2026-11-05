@@ -453,3 +453,161 @@ describe('活動設定', () => {
     await root(a).del(`/events/${a.eventId}`).expect(403);
   });
 });
+
+describe('旅客類型、房型與自選行程', () => {
+  const pricing = (types: object[], o: object = {}) => ({ types, defaultSubsidyAmount: 0, defaultDependentLimit: 0, allowDependentsOnly: false, ...o });
+  const type = (o: object = {}) => ({ id: null, name: '成人眷屬', basePrice: 10800, note: null, occupiesBed: true, ...o });
+  const withSelf = async (a: Ag) =>
+    (await q1(`INSERT INTO traveler_types (agency_id, event_id, name, base_price, is_employee_self) VALUES ($1, $2, '員工本人', 0, true) RETURNING id`, [a.agencyId, a.eventId])).id as string;
+  const room = (o: object = {}) => ({ id: null, name: '三人房', capacity: 3, surcharge: 0, bedQuota: 30, ...o });
+  const group = (o: object = {}) => ({ name: '第二天下午體驗', isRequired: true, maxSelect: 1, preferenceCount: 3, ...o });
+
+  it('新活動固定有員工本人，不能改名、不能不佔床，也不能刪除', async () => {
+    const a = await makeAgency('admin');
+    const self = await withSelf(a);
+    const saved = await api(a).put('/pricing', pricing([
+      type({ id: self, name: '改名', basePrice: 9800, occupiesBed: false, note: '已含保險' }),
+      type({ name: '嬰兒眷屬', basePrice: 1500, occupiesBed: false, note: '未滿 2 歲' }),
+    ], { defaultSubsidyAmount: 5000, defaultDependentLimit: 2, allowDependentsOnly: true })).expect(200);
+    expect(saved.body.types[0]).toMatchObject({ id: self, name: '員工本人', basePrice: 9800, occupiesBed: true, note: '已含保險', isEmployeeSelf: true });
+    expect(saved.body.types[1]).toMatchObject({ name: '嬰兒眷屬', occupiesBed: false, isEmployeeSelf: false });
+    expect(saved.body).toMatchObject({ defaultSubsidyAmount: 5000, defaultDependentLimit: 2, allowDependentsOnly: true });
+
+    const noSelf = await api(a).put('/pricing', pricing([type()])).expect(422);
+    expect(noSelf.body.code).toBe('INVALID_INPUT');
+    const dup = await api(a).put('/pricing', pricing([type({ id: self }), type(), type()])).expect(409);
+    expect(dup.body.code).toBe('DUPLICATE_NAME');
+    const dupSelf = await api(a).put('/pricing', pricing([type({ id: self }), type({ name: '員工本人' })])).expect(409);
+    expect(dupSelf.body.code).toBe('DUPLICATE_NAME');
+    expect((await api(a).get('/pricing').expect(200)).body.types).toHaveLength(2);
+  });
+
+  it('沒列出的旅客類型會刪除；已有旅客使用時不能刪，也不能套用其他活動的類型', async () => {
+    const a = await makeAgency('admin');
+    const self = await withSelf(a);
+    const saved = await api(a).put('/pricing', pricing([type({ id: self }), type()])).expect(200);
+    const adult = saved.body.types[1].id as string;
+
+    const other = await makeAgency('admin');
+    const otherSelf = await withSelf(other);
+    await api(a).put('/pricing', pricing([type({ id: self }), type({ id: otherSelf, name: 'X' })])).expect(422);
+
+    const s = await api(a).post('/sessions', session()).expect(201);
+    const emp = await q1(`INSERT INTO event_employees (agency_id, event_id, employee_no, name) VALUES ($1, $2, 'E1', 'N') RETURNING id`, [a.agencyId, a.eventId]);
+    const reg = await q1(
+      `INSERT INTO registrations (agency_id, event_id, session_id, event_employee_id, total_amount, payment_status, terms_version_accepted, terms_accepted_at)
+       VALUES ($1, $2, $3, $4, 0, 'unpaid', 1, now()) RETURNING id`,
+      [a.agencyId, a.eventId, s.body.id, emp.id],
+    );
+    await admin.query(`INSERT INTO travelers (agency_id, registration_id, traveler_type_id, name, base_price_snapshot) VALUES ($1, $2, $3, 'N', 0)`, [a.agencyId, reg.id, adult]);
+    const used = await api(a).put('/pricing', pricing([type({ id: self })])).expect(409);
+    expect(used.body.code).toBe('TRAVELER_TYPE_IN_USE');
+  });
+
+  it('房型依梯次儲存，不同梯次可不同；已售出不能刪除也不能低於已售', async () => {
+    const a = await makeAgency('admin');
+    const s1 = await api(a).post('/sessions', session({ roomTypes: [room(), room({ name: '單人房', capacity: 1, surcharge: 3000, bedQuota: 5 })] })).expect(201);
+    expect(s1.body.roomTypes.map((r: any) => r.name)).toEqual(['三人房', '單人房']);
+    const s2 = await api(a).post('/sessions', session({ name: 'B' })).expect(201);
+    expect(s2.body.roomTypes).toEqual([]);
+
+    // 沒帶房型時不變更
+    const same = await api(a).patch(`/sessions/${s1.body.id}`, session({ capacity: 50 })).expect(200);
+    expect(same.body.roomTypes).toHaveLength(2);
+
+    const dup = await api(a).patch(`/sessions/${s1.body.id}`, session({ roomTypes: [room(), room()] })).expect(409);
+    expect(dup.body.code).toBe('DUPLICATE_NAME');
+    await api(a).patch(`/sessions/${s2.body.id}`, session({ roomTypes: [room({ id: s1.body.roomTypes[0].id })] })).expect(422);
+
+    const [triple, single] = s1.body.roomTypes;
+    await admin.query(`UPDATE session_room_types SET sold_count = 3 WHERE id = $1`, [single.id]);
+    const removed = await api(a).patch(`/sessions/${s1.body.id}`, session({ roomTypes: [room({ id: triple.id })] })).expect(409);
+    expect(removed.body.code).toBe('ROOM_TYPE_IN_USE');
+    const low = await api(a).patch(`/sessions/${s1.body.id}`, session({ roomTypes: [room({ id: triple.id }), room({ id: single.id, name: '單人房', bedQuota: 2 })] })).expect(409);
+    expect(low.body.code).toBe('CAPACITY_BELOW_SOLD');
+
+    const ok = await api(a).patch(`/sessions/${s1.body.id}`, session({ roomTypes: [room({ id: single.id, name: '單人房', bedQuota: 3 })] })).expect(200);
+    expect(ok.body.roomTypes).toMatchObject([{ id: single.id, bedQuota: 3, soldCount: 3 }]);
+    const listed = await api(a).get('/sessions').expect(200);
+    expect(listed.body.find((s: any) => s.id === s2.body.id).roomTypes).toEqual([]);
+  });
+
+  it('名額不能低於已報名加保留中的人數', async () => {
+    const a = await makeAgency('admin');
+    const s = await api(a).post('/sessions', session({ capacity: 10 })).expect(201);
+    const emp = await q1(`INSERT INTO event_employees (agency_id, event_id, employee_no, name) VALUES ($1, $2, 'E1', 'N') RETURNING id`, [a.agencyId, a.eventId]);
+    await admin.query(`INSERT INTO seat_holds (agency_id, event_id, event_employee_id, session_id, quantity, expires_at) VALUES ($1, $2, $3, $4, 3, now() + interval '10 minutes')`,
+      [a.agencyId, a.eventId, emp.id, s.body.id]);
+    const low = await api(a).patch(`/sessions/${s.body.id}`, session({ capacity: 2 })).expect(409);
+    expect(low.body.code).toBe('CAPACITY_BELOW_SOLD');
+    await api(a).patch(`/sessions/${s.body.id}`, session({ capacity: 3 })).expect(200);
+  });
+
+  it('群組的必選、可選項數與志願；志願只用於單選，最多到第三志願', async () => {
+    const a = await makeAgency('admin');
+    const g = await api(a).post('/option-groups', group()).expect(201);
+    await api(a).post('/option-groups', group({ name: 'x', maxSelect: 2 })).expect(422);
+    await api(a).post('/option-groups', group({ name: 'x', preferenceCount: 4 })).expect(422);
+    const dup = await api(a).post('/option-groups', group()).expect(409);
+    expect(dup.body.code).toBe('DUPLICATE_NAME');
+    await api(a).patch(`/option-groups/${g.body.id}`, group({ isRequired: false, maxSelect: 2, preferenceCount: 1 })).expect(204);
+    const list = await api(a).get('/option-groups').expect(200);
+    expect(list.body[0]).toMatchObject({ name: '第二天下午體驗', isRequired: false, maxSelect: 2, preferenceCount: 1, options: [] });
+    const row = await q1(`SELECT min_select FROM option_groups WHERE id = $1`, [g.body.id]);
+    expect(row.min_select).toBe(0);
+  });
+
+  it('選項名額依梯次設定，留空不限；有人選時不能改成不限、不能低於已售、不能刪除', async () => {
+    const a = await makeAgency('admin');
+    const s1 = (await api(a).post('/sessions', session()).expect(201)).body.id as string;
+    const s2 = (await api(a).post('/sessions', session({ name: 'B' })).expect(201)).body.id as string;
+    const g = (await api(a).post('/option-groups', group()).expect(201)).body.id as string;
+    const o = (await api(a).post(`/option-groups/${g}/options`, { name: '獨木舟', price: 1200, quotas: [{ sessionId: s1, capacity: 20 }, { sessionId: s2, capacity: null }] }).expect(201)).body.id as string;
+    const quotas = async () => (await api(a).get('/option-groups').expect(200)).body[0].options[0].quotas;
+    expect(await quotas()).toEqual({ [s1]: { capacity: 20, soldCount: 0 } });
+
+    const opt = (capacity: number | null) => ({ name: '獨木舟', price: 1000, quotas: [{ sessionId: s1, capacity }] });
+    await admin.query(`UPDATE option_session_quotas SET sold_count = 5 WHERE option_id = $1`, [o]);
+    expect((await api(a).patch(`/options/${o}`, opt(4)).expect(409)).body.code).toBe('CAPACITY_BELOW_SOLD');
+    expect((await api(a).patch(`/options/${o}`, opt(null)).expect(409)).body.code).toBe('QUOTA_IN_USE');
+    await api(a).patch(`/options/${o}`, opt(5)).expect(204);
+    await admin.query(`UPDATE option_session_quotas SET sold_count = 0 WHERE option_id = $1`, [o]);
+    await api(a).patch(`/options/${o}`, opt(null)).expect(204);
+    expect(await quotas()).toEqual({});
+
+    const other = await makeAgency('admin');
+    const otherS = (await api(other).post('/sessions', session()).expect(201)).body.id as string;
+    await api(a).patch(`/options/${o}`, { ...opt(1), quotas: [{ sessionId: otherS, capacity: 1 }] }).expect(422);
+    await api(other).del(`/options/${o}`).expect(404);
+
+    const s = await api(a).post('/sessions', session({ name: 'C' })).expect(201);
+    await api(a).patch(`/options/${o}`, { ...opt(9), quotas: [{ sessionId: s.body.id, capacity: 9 }] }).expect(204);
+    const emp = await q1(`INSERT INTO event_employees (agency_id, event_id, employee_no, name) VALUES ($1, $2, 'E1', 'N') RETURNING id`, [a.agencyId, a.eventId]);
+    const hold = await q1(`INSERT INTO seat_holds (agency_id, event_id, event_employee_id, session_id, quantity, expires_at) VALUES ($1, $2, $3, $4, 1, now() + interval '10 minutes') RETURNING id`,
+      [a.agencyId, a.eventId, emp.id, s.body.id]);
+    const quota = await q1(`SELECT id FROM option_session_quotas WHERE option_id = $1`, [o]);
+    await admin.query(`INSERT INTO seat_hold_items (agency_id, hold_id, quota_id, quantity) VALUES ($1, $2, $3, 1)`, [a.agencyId, hold.id, quota.id]);
+    expect((await api(a).del(`/options/${o}`).expect(409)).body.code).toBe('OPTION_IN_USE');
+    expect((await api(a).del(`/option-groups/${g}`).expect(409)).body.code).toBe('OPTION_IN_USE');
+
+    // 保留結束後可以刪除，紀錄一併清除
+    await admin.query(`UPDATE seat_holds SET status = 'released' WHERE id = $1`, [hold.id]);
+    await api(a).del(`/options/${o}`).expect(204);
+    await api(a).del(`/option-groups/${g}`).expect(204);
+  });
+
+  it('營運人員不能設定，房型資料也受租戶隔離', async () => {
+    const a = await makeAgency('operations');
+    await api(a).get('/pricing').expect(403);
+    await api(a).get('/option-groups').expect(403);
+    await api(a).post('/option-groups', group()).expect(403);
+
+    const b = await makeAgency('admin');
+    const c = await makeAgency('admin');
+    await api(b).post('/sessions', session({ roomTypes: [room()] })).expect(201);
+    const rls = await q1(`SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'session_room_types'`);
+    expect(rls).toEqual({ relrowsecurity: true, relforcerowsecurity: true });
+    expect((await api(c).get('/sessions').expect(200)).body).toEqual([]);
+    await api(c).get(`/pricing`).expect(200);
+  });
+});

@@ -31,6 +31,11 @@ const STATUS: Record<ErrorCode, number> = {
   EVENT_NOT_DRAFT: 409,
   EVENT_NOT_PUBLISHED: 409,
   PAGE_MODE_MISMATCH: 409,
+  DUPLICATE_NAME: 409,
+  TRAVELER_TYPE_IN_USE: 409,
+  ROOM_TYPE_IN_USE: 409,
+  OPTION_IN_USE: 409,
+  QUOTA_IN_USE: 409,
 };
 
 /** 回傳錯誤代碼，文字由前端依語系顯示。 */

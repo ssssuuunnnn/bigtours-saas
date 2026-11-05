@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Put, Res } from '@nestjs/common';
-import { agencyLoginRequest, companyInput, createEventRequest, eventBasicRequest, eventScheduleRequest, fieldInput, orderRequest, pageSwitchRequest, pinnedNavRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
+import { agencyLoginRequest, companyInput, createEventRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, pinnedNavRequest, pricingRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
 import type { Response } from 'express';
 import type { ZodType } from 'zod';
 import { AgencyAdminService } from './agency-admin.service.ts';
@@ -178,5 +178,54 @@ export class AgencyController {
   @HttpCode(204)
   async deleteField(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('fieldId') fieldId: string) {
     await this.admin.deleteField(await this.configurer(h), eventId, fieldId);
+  }
+
+  @Get('events/:eventId/pricing')
+  async pricing(@Headers() h: RequestHeaders, @Param('eventId') eventId: string) {
+    return this.admin.getPricing(await this.configurer(h), eventId);
+  }
+
+  @Put('events/:eventId/pricing')
+  async savePricing(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    return this.admin.savePricing(await this.configurer(h), eventId, parse(pricingRequest, body));
+  }
+
+  @Get('events/:eventId/option-groups')
+  async optionGroups(@Headers() h: RequestHeaders, @Param('eventId') eventId: string) {
+    return this.admin.listOptionGroups(await this.configurer(h), eventId);
+  }
+
+  @Post('events/:eventId/option-groups')
+  async createOptionGroup(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    return this.admin.createOptionGroup(await this.configurer(h), eventId, parse(optionGroupInput, body));
+  }
+
+  @Patch('events/:eventId/option-groups/:groupId')
+  @HttpCode(204)
+  async updateOptionGroup(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('groupId') groupId: string, @Body() body: unknown) {
+    await this.admin.updateOptionGroup(await this.configurer(h), eventId, groupId, parse(optionGroupInput, body));
+  }
+
+  @Delete('events/:eventId/option-groups/:groupId')
+  @HttpCode(204)
+  async deleteOptionGroup(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('groupId') groupId: string) {
+    await this.admin.deleteOptionGroup(await this.configurer(h), eventId, groupId);
+  }
+
+  @Post('events/:eventId/option-groups/:groupId/options')
+  async createOption(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('groupId') groupId: string, @Body() body: unknown) {
+    return this.admin.createOption(await this.configurer(h), eventId, groupId, parse(optionInput, body));
+  }
+
+  @Patch('events/:eventId/options/:optionId')
+  @HttpCode(204)
+  async updateOption(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('optionId') optionId: string, @Body() body: unknown) {
+    await this.admin.updateOption(await this.configurer(h), eventId, optionId, parse(optionInput, body));
+  }
+
+  @Delete('events/:eventId/options/:optionId')
+  @HttpCode(204)
+  async deleteOption(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('optionId') optionId: string) {
+    await this.admin.deleteOption(await this.configurer(h), eventId, optionId);
   }
 }

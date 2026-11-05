@@ -82,6 +82,7 @@ export const ERROR_CODES = [
   'UNAUTHENTICATED', 'INVALID_CREDENTIALS', 'PAGE_CLOSED', 'FORBIDDEN_ORIGIN', 'LINK_INVALID', 'INVALID_PASSWORD',
   'INVALID_INPUT', 'CAPACITY_BELOW_SOLD', 'TIER_LIMIT_EXCEEDED', 'SESSION_IN_USE', 'FIELD_LOCKED',
   'FORBIDDEN', 'QUOTA_EMPTY', 'SLUG_TAKEN', 'EVENT_NOT_DRAFT', 'EVENT_NOT_PUBLISHED', 'PAGE_MODE_MISMATCH',
+  'DUPLICATE_NAME', 'TRAVELER_TYPE_IN_USE', 'ROOM_TYPE_IN_USE', 'OPTION_IN_USE', 'QUOTA_IN_USE',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
@@ -121,6 +122,17 @@ const flightNo = z.string().trim().toUpperCase().max(20).nullable().transform((v
 
 export const agencyLoginRequest = z.object({ email: z.string().trim().min(1).max(200), password: z.string().min(1).max(128) });
 
+const money = z.number().int().min(0).max(10_000_000);
+
+/** 房型名額以床位（人）計算；不帶 id 表示新增。 */
+export const roomTypeInput = z.object({
+  id: z.string().uuid().nullable().default(null),
+  name: z.string().trim().min(1).max(50),
+  capacity: z.number().int().min(1).max(20),
+  surcharge: money,
+  bedQuota: z.number().int().min(0).max(5000),
+});
+
 /** 回程日期是抵達日期；航班選填。 */
 export const sessionInput = z.object({
   name: z.string().trim().min(1).max(100),
@@ -131,6 +143,8 @@ export const sessionInput = z.object({
   outboundFlightNo: flightNo.default(null),
   returnFlightNo: flightNo.default(null),
   capacity: z.number().int().min(0).max(5000),
+  /** 不帶表示不變更房型。 */
+  roomTypes: z.array(roomTypeInput).max(20).optional(),
 }).refine((s) => s.returnsOn >= s.departsOn, { path: ['returnsOn'] });
 export type SessionInput = z.infer<typeof sessionInput>;
 
@@ -153,6 +167,41 @@ export const fieldInput = z.object({
   if (hasChoices && f.isSensitive) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['isSensitive'], message: 'choices cannot be sensitive' });
 });
 export type FieldInput = z.infer<typeof fieldInput>;
+
+/** 整份送出；沒有列出的旅客類型會被刪除，順序依陣列。 */
+export const pricingRequest = z.object({
+  types: z.array(z.object({
+    id: z.string().uuid().nullable().default(null),
+    name: z.string().trim().min(1).max(50),
+    basePrice: money,
+    note: z.string().trim().max(200).nullable().transform((v) => v || null),
+    occupiesBed: z.boolean(),
+  })).min(1).max(20),
+  defaultSubsidyAmount: money,
+  defaultDependentLimit: z.number().int().min(0).max(50),
+  allowDependentsOnly: z.boolean(),
+});
+export type PricingInput = z.infer<typeof pricingRequest>;
+
+/** 志願只用於單選的群組；1 表示不開啟，最多到第三志願。 */
+export const optionGroupInput = z.object({
+  name: z.string().trim().min(1).max(100),
+  isRequired: z.boolean(),
+  maxSelect: z.number().int().min(1).max(20),
+  preferenceCount: z.number().int().min(1).max(3),
+}).refine((g) => g.preferenceCount === 1 || g.maxSelect === 1, { path: ['preferenceCount'] });
+export type OptionGroupInput = z.infer<typeof optionGroupInput>;
+
+/** 名額依梯次設定；capacity 為 null 表示不限名額，沒有列出的梯次不變更。 */
+export const optionInput = z.object({
+  name: z.string().trim().min(1).max(100),
+  price: money,
+  quotas: z.array(z.object({
+    sessionId: z.string().uuid(),
+    capacity: z.number().int().min(0).max(5000).nullable(),
+  })).max(100),
+});
+export type OptionInput = z.infer<typeof optionInput>;
 
 export const orderRequest = z.object({ ids: z.array(z.string().uuid()).min(1).max(200) });
 
