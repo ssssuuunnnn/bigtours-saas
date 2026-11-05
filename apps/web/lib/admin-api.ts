@@ -6,8 +6,12 @@ export interface AdminEvent {
   id: string; slug: string; name: string; tierMax: number; hasRegistrations: boolean; status: string; companyName: string;
   days: { title: string; description: string }[]; themeColor: string; supportPhone: string | null; supportHours: string | null;
   pageMode: 'manual' | 'scheduled'; pageIsOpen: boolean; pageOpensAt: string | null; pageClosesAt: string | null;
-  registrationOpensAt: string | null; registrationClosesAt: string | null; pageState: 'open' | 'not_open' | 'closed'; activeHolds: number;
+  registrationOpensAt: string | null; registrationClosesAt: string | null; paymentInstructions: string | null; retentionDays: number; termsFileName: string | null; termsVersion: number;
+  pageState: 'open' | 'not_open' | 'closed'; activeHolds: number;
 }
+export interface ContactValues { id: string | null; name: string; phone: string; scope: string }
+export type PublishCheckKey = 'basic' | 'heroImage' | 'schedule' | 'sessions' | 'types' | 'options' | 'fields' | 'terms' | 'payment' | 'contacts' | 'roster';
+export interface PublishCheck { key: PublishCheckKey; state: 'ok' | 'warn' | 'block' | 'confirm'; data: Record<string, any> }
 export interface QuotaTier { id: string; minTravelers: number; maxTravelers: number; price: number; remaining: number }
 export interface AdminCompany { id: string; name: string; eventCount: number }
 export interface AdminMe { agencyName: string; user: { name: string; role: string }; pinnedNavItems: EventNavKey[] }
@@ -65,6 +69,19 @@ export const adminApi = {
   updateSession: (id: string, sid: string, v: SessionValues) => call<AdminSession>('PATCH', `/events/${id}/sessions/${sid}`, v),
   deleteSession: (id: string, sid: string) => call<void>('DELETE', `/events/${id}/sessions/${sid}`),
   orderSessions: (id: string, ids: string[]) => call<void>('PUT', `/events/${id}/sessions/order`, { ids }),
+  savePaymentTerms: (id: string, v: { paymentInstructions: string | null; retentionDays: number }) => call<void>('PUT', `/events/${id}/payment-terms`, v),
+  uploadTerms: async (id: string, file: File) => {
+    const res = await fetch(`/api/v1/agency/events/${id}/terms?name=${encodeURIComponent(file.name)}`, { method: 'PUT', headers: { 'content-type': 'application/pdf' }, body: file });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new ApiError(res.status, data?.code ?? 'fallback', data?.detail);
+    return data as { termsFileName: string; termsVersion: number };
+  },
+  contacts: (id: string) => call<ContactValues[]>('GET', `/events/${id}/contacts`),
+  saveContacts: (id: string, contacts: ContactValues[]) => call<ContactValues[]>('PUT', `/events/${id}/contacts`, { contacts }),
+  publishCheck: (id: string) => call<{ status: string; checks: PublishCheck[] }>('GET', `/events/${id}/publish-check`),
+  publish: (id: string, confirmFreeSelfFee: boolean) => call<void>('POST', `/events/${id}/publish`, { confirmFreeSelfFee }),
+  orderOptionGroups: (id: string, ids: string[]) => call<void>('PUT', `/events/${id}/option-groups/order`, { ids }),
+  orderOptions: (id: string, gid: string, ids: string[]) => call<void>('PUT', `/events/${id}/option-groups/${gid}/options/order`, { ids }),
   pricing: (id: string) => call<PricingValues>('GET', `/events/${id}/pricing`),
   savePricing: (id: string, v: PricingValues) => call<PricingValues>('PUT', `/events/${id}/pricing`, v),
   optionGroups: (id: string) => call<AdminOptionGroup[]>('GET', `/events/${id}/option-groups`),

@@ -611,3 +611,144 @@ describe('旅客類型、房型與自選行程', () => {
     await api(c).get(`/pricing`).expect(200);
   });
 });
+
+describe('付款說明、條款、服務人員與發布', () => {
+  const PDF = Buffer.from('%PDF-1.4 test');
+  const root = (a: Ag) => ({ get: (p: string) => request(app.getHttpServer()).get(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie) });
+  const upload = (a: Ag, content: Buffer, type = 'application/pdf', name = '條款.pdf') =>
+    request(app.getHttpServer()).put(`/api/v1/agency/events/${a.eventId}/terms`).query({ name })
+      .set('x-forwarded-host', a.host).set('cookie', a.cookie).set('content-type', type).send(content);
+  const contact = (o: object = {}) => ({ id: null, name: '李冠廷', phone: '0912-000-111', scope: '報名與付款問題', ...o });
+  const paymentBody = (o: object = {}) => ({ paymentInstructions: '請匯款', retentionDays: 180, ...o });
+
+  const draft = async (role = 'admin') => {
+    const a = await makeAgency(role);
+    await admin.query(`UPDATE events SET status = 'draft', page_is_open = false WHERE id = $1`, [a.eventId]);
+    return a;
+  };
+  /** 補齊所有必要條件，員工本人團費可指定。 */
+  const ready = async (fee = 9800) => {
+    const a = await draft();
+    await admin.query(`INSERT INTO traveler_types (agency_id, event_id, name, base_price, is_employee_self) VALUES ($1, $2, '員工本人', $3, true)`, [a.agencyId, a.eventId, fee]);
+    await api(a).post('/sessions', session()).expect(201);
+    await api(a).put('/payment-terms', paymentBody()).expect(204);
+    await upload(a, PDF).expect(200);
+    await api(a).put('/contacts', { contacts: [contact()] }).expect(200);
+    return a;
+  };
+  const states = async (a: Ag) => Object.fromEntries((await api(a).get('/publish-check').expect(200)).body.checks.map((c: any) => [c.key, c.state]));
+
+  it('付款說明與保存期限可以儲存', async () => {
+    const a = await draft();
+    await api(a).put('/payment-terms', paymentBody({ retentionDays: 365 })).expect(204);
+    const e = await root(a).get(`/events/${a.eventId}`).expect(200);
+    expect(e.body).toMatchObject({ paymentInstructions: '請匯款', retentionDays: 365, termsFileName: null, termsVersion: 1 });
+    await api(a).put('/payment-terms', paymentBody({ retentionDays: 0 })).expect(422);
+  });
+
+  it('條款只收 PDF 且有大小上限；更換後版本遞增、舊檔保留', async () => {
+    const a = await draft();
+    expect((await upload(a, Buffer.from('not a pdf')).expect(422)).body.code).toBe('INVALID_FILE');
+    expect((await upload(a, PDF, 'text/plain').expect(422)).body.code).toBe('INVALID_FILE');
+    expect((await upload(a, Buffer.concat([PDF, Buffer.alloc(10 * 1024 * 1024)])).expect(413)).body.code).toBe('FILE_TOO_LARGE');
+
+    expect((await upload(a, PDF, undefined, '../../第一版.pdf').expect(200)).body).toEqual({ termsFileName: '....第一版.pdf', termsVersion: 1 });
+    const first = await q1(`SELECT terms_object_key FROM events WHERE id = $1`, [a.eventId]);
+    expect(first.terms_object_key).toMatch(new RegExp(`^${a.agencyId}/events/${a.eventId}/terms/v1-[0-9a-f]+\\.pdf$`));
+    const newer = Buffer.from('%PDF-1.4 newer');
+    expect((await upload(a, newer).expect(200)).body.termsVersion).toBe(2);
+    const got = await api(a).get('/terms').buffer(true).parse((res, cb) => { const c: Buffer[] = []; res.on('data', (d) => c.push(d)); res.on('end', () => cb(null, Buffer.concat(c))); }).expect(200);
+    expect(got.headers['content-type']).toBe('application/pdf');
+    expect(got.headers['x-content-type-options']).toBe('nosniff');
+    expect(got.body.equals(newer)).toBe(true);
+
+    const other = await draft();
+    await root(other).get(`/events/${a.eventId}/terms`).expect(404);
+  });
+
+  it('服務人員整份儲存並依順序；不能套用其他活動的資料', async () => {
+    const a = await draft();
+    const saved = await api(a).put('/contacts', { contacts: [contact(), contact({ name: '吳佩珊' })] }).expect(200);
+    const [first, second] = saved.body;
+    const swapped = await api(a).put('/contacts', { contacts: [contact({ id: second.id, name: '吳佩珊' }), contact({ id: first.id, phone: '02-1234' })] }).expect(200);
+    expect(swapped.body.map((c: any) => [c.id, c.name, c.phone])).toEqual([[second.id, '吳佩珊', '0912-000-111'], [first.id, '李冠廷', '02-1234']]);
+    await api(a).put('/contacts', { contacts: [contact({ phone: '' })] }).expect(422);
+    const other = await draft();
+    await api(other).put('/contacts', { contacts: [contact({ id: first.id })] }).expect(422);
+    await api(a).put('/contacts', { contacts: [] }).expect(200);
+  });
+
+  it('發布前檢查列出必須完成與建議處理的項目，缺少時不能發布', async () => {
+    const a = await draft();
+    await admin.query(`INSERT INTO traveler_types (agency_id, event_id, name, base_price, is_employee_self) VALUES ($1, $2, '員工本人', 100, true)`, [a.agencyId, a.eventId]);
+    expect(await states(a)).toMatchObject({ sessions: 'block', terms: 'block', payment: 'block', contacts: 'block', types: 'ok', heroImage: 'warn', roster: 'warn', fields: 'ok' });
+    const blocked = await api(a).post('/publish', {}).expect(409);
+    expect(blocked.body.code).toBe('PUBLISH_BLOCKED');
+    expect(blocked.body.detail.keys).toEqual(['sessions', 'terms', 'payment', 'contacts']);
+    expect((await q1(`SELECT status FROM events WHERE id = $1`, [a.eventId])).status).toBe('draft');
+  });
+
+  it('必選群組沒有選項不能發布；選填群組沒有選項與床位不足只提醒', async () => {
+    const a = await ready();
+    const g = await api(a).post('/option-groups', { name: '必選', isRequired: true, maxSelect: 1, preferenceCount: 1 }).expect(201);
+    expect((await states(a)).options).toBe('block');
+    await api(a).post(`/option-groups/${g.body.id}/options`, { name: 'A', price: 0, quotas: [] }).expect(201);
+    expect((await states(a)).options).toBe('ok');
+    await api(a).post('/option-groups', { name: '選填', isRequired: false, maxSelect: 1, preferenceCount: 1 }).expect(201);
+    expect((await states(a)).options).toBe('warn');
+    await api(a).post('/sessions', session({ name: 'B', capacity: 40, roomTypes: [{ id: null, name: '二人房', capacity: 2, surcharge: 0, bedQuota: 10 }] })).expect(201);
+    expect((await states(a)).sessions).toBe('warn');
+    await api(a).post('/publish', {}).expect(204);
+  });
+
+  it('條件齊全才能發布，手動模式活動頁維持關閉，不能重複發布', async () => {
+    const a = await ready();
+    await api(a).post('/publish', {}).expect(204);
+    const e = await root(a).get(`/events/${a.eventId}`).expect(200);
+    expect(e.body).toMatchObject({ status: 'published', pageState: 'closed' });
+    expect((await api(a).post('/publish', {}).expect(409)).body.code).toBe('EVENT_NOT_DRAFT');
+  });
+
+  it('員工本人團費為 0 時要明確確認才能發布', async () => {
+    const a = await ready(0);
+    expect((await states(a)).types).toBe('confirm');
+    const r = await api(a).post('/publish', {}).expect(409);
+    expect(r.body.detail.keys).toEqual(['types']);
+    await api(a).post('/publish', { confirmFreeSelfFee: true }).expect(204);
+  });
+
+  it('發布後不能移除必要條件', async () => {
+    const a = await ready();
+    await api(a).post('/publish', {}).expect(204);
+    expect((await api(a).put('/payment-terms', paymentBody({ paymentInstructions: '' })).expect(409)).body.code).toBe('PUBLISH_REQUIREMENT');
+    expect((await api(a).put('/contacts', { contacts: [] }).expect(409)).body.code).toBe('PUBLISH_REQUIREMENT');
+    const only = (await api(a).get('/sessions').expect(200)).body[0];
+    expect((await api(a).del(`/sessions/${only.id}`).expect(409)).body.code).toBe('PUBLISH_REQUIREMENT');
+    const extra = await api(a).post('/sessions', session({ name: 'B' })).expect(201);
+    await api(a).del(`/sessions/${extra.body.id}`).expect(204);
+  });
+
+  it('群組與選項可以調整順序', async () => {
+    const a = await draft();
+    const g1 = (await api(a).post('/option-groups', { name: 'G1', isRequired: false, maxSelect: 1, preferenceCount: 1 }).expect(201)).body.id;
+    const g2 = (await api(a).post('/option-groups', { name: 'G2', isRequired: false, maxSelect: 1, preferenceCount: 1 }).expect(201)).body.id;
+    const o1 = (await api(a).post(`/option-groups/${g1}/options`, { name: 'O1', price: 0, quotas: [] }).expect(201)).body.id;
+    const o2 = (await api(a).post(`/option-groups/${g1}/options`, { name: 'O2', price: 0, quotas: [] }).expect(201)).body.id;
+    await api(a).put('/option-groups/order', { ids: [g2, g1] }).expect(204);
+    await api(a).put(`/option-groups/${g1}/options/order`, { ids: [o2, o1] }).expect(204);
+    const list = (await api(a).get('/option-groups').expect(200)).body;
+    expect(list.map((g: any) => g.name)).toEqual(['G2', 'G1']);
+    expect(list[1].options.map((o: any) => o.name)).toEqual(['O2', 'O1']);
+    await api(a).put(`/option-groups/${g1}/options/order`, { ids: [o1] }).expect(422);
+  });
+
+  it('營運人員不能設定，服務人員受租戶隔離', async () => {
+    const a = await makeAgency('operations');
+    await api(a).get('/contacts').expect(403);
+    await api(a).get('/publish-check').expect(403);
+    await api(a).post('/publish', {}).expect(403);
+    await upload(a, PDF).expect(403);
+    const rls = await q1(`SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'event_service_contacts'`);
+    expect(rls).toEqual({ relrowsecurity: true, relforcerowsecurity: true });
+  });
+});

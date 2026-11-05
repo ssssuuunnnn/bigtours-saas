@@ -1,3 +1,4 @@
+import type { Response } from 'express';
 import { DomainError } from './errors.ts';
 import { SESSION_COOKIE } from './access.service.ts';
 
@@ -30,4 +31,15 @@ export function assertSameOrigin(h: RequestHeaders) {
     // 格式錯誤視為不同來源
   }
   if (originHost !== host) throw new DomainError('FORBIDDEN_ORIGIN');
+}
+
+/** 由瀏覽器分頁開啟 PDF；檔案只給已登入的使用者，不留快取。 */
+export function sendPdf(res: Response, name: string, content: Buffer) {
+  res.set({
+    'content-type': 'application/pdf',
+    'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(name)}`,
+    'x-content-type-options': 'nosniff',
+    'cache-control': 'private, no-store',
+  });
+  res.end(content);
 }

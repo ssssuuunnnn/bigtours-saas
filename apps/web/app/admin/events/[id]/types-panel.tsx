@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { adminApi, type AdminEvent, type PricingValues, type TravelerTypeValues } from '../../../../lib/admin-api';
 import { a } from '../../../../messages/admin';
-import { adminError } from '../../admin-shell';
+import { adminError, MoveButtons, swapped } from '../../admin-shell';
 
 const EMPTY_TYPE: TravelerTypeValues = { id: null, name: '', basePrice: 0, note: null, occupiesBed: true };
 
@@ -43,13 +43,19 @@ export function TypesPanel({ event }: { event: AdminEvent }) {
         <table className="admin-table admin-edit-table">
           <thead>
             <tr>
-              <th scope="col">{a.typeName}</th><th scope="col">{a.typeFee}</th><th scope="col">{a.typeNote}</th>
+              <th scope="col">{a.order}</th><th scope="col">{a.typeName}</th><th scope="col">{a.typeFee}</th><th scope="col">{a.typeNote}</th>
               <th scope="col">{a.typeNoBed}</th><th scope="col">{a.actions}</th>
             </tr>
           </thead>
           <tbody>
             {v.types.map((t, i) => (
               <tr key={t.id ?? `new-${i}`} className={t.isEmployeeSelf ? 'fixed' : undefined}>
+                <td>
+                  {!t.isEmployeeSelf && (
+                    <MoveButtons name={t.name || a.addType} canUp={i > 0 && !v.types[i - 1]!.isEmployeeSelf} canDown={i < v.types.length - 1}
+                      onUp={() => setV({ ...v, types: swapped(v.types, i, i - 1) })} onDown={() => setV({ ...v, types: swapped(v.types, i, i + 1) })} />
+                  )}
+                </td>
                 <td>
                   {t.isEmployeeSelf
                     ? <><strong>{t.name}</strong> <small className="muted">{a.fixed}</small></>

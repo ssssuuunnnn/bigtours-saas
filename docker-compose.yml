@@ -15,6 +15,7 @@ x-app: &app
     DATA_ENCRYPTION_KEY: ZGV2LW9ubHkta2V5LWRvLW5vdC11c2UtaW4tcHJvZCE=
     TOKEN_HASH_KEY: dev-only-token-hash-key
     WEB_BASE_URL: http://{agency}.lvh.me:3000
+    STORAGE_DIR: /data/storage
 
 services:
   postgres:
@@ -35,6 +36,7 @@ services:
     <<: *app
     command: sh -c "pnpm exec tsx db/migrate.ts && SEED_ONLY_IF_EMPTY=1 pnpm exec tsx db/seed.ts"
     volumes:
+      - storage-data:/data/storage
       - ./db:/app/db
       - ./packages/shared/src:/app/packages/shared/src
     depends_on:
@@ -46,6 +48,7 @@ services:
     command: pnpm --filter @bigtours/api exec tsx watch src/main.ts
     ports: ["4000:4000"]
     volumes:
+      - storage-data:/data/storage
       - ./apps/api/src:/app/apps/api/src
       - ./apps/api/test:/app/apps/api/test
       - ./packages/shared/src:/app/packages/shared/src
@@ -71,4 +74,5 @@ services:
     ports: ["1025:1025", "8025:8025"]
 
 volumes:
+  storage-data:
   postgres-data:

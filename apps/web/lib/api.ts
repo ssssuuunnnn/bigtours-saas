@@ -44,7 +44,7 @@ export interface Registration {
 }
 export interface EventState {
   agency: { name: string };
-  event: { name: string; themeColor: string; itinerary: { summary?: string; days?: { title: string; description: string }[] }; openState: 'not_open' | 'open' | 'closed'; registrationOpensAt: string | null; registrationClosesAt: string | null; allowDependentsOnly: boolean };
+  event: { slug: string; name: string; hasTerms: boolean; paymentInstructions: string | null; themeColor: string; itinerary: { summary?: string; days?: { title: string; description: string }[] }; openState: 'not_open' | 'open' | 'closed'; registrationOpensAt: string | null; registrationClosesAt: string | null; allowDependentsOnly: boolean };
   employee: { name: string; subsidyAmount: number; dependentLimit: number };
   travelerTypes: TravelerType[];
   optionGroups: OptionGroup[];

@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { StorageService } from './storage.service.ts';
 import {
   calculateFees,
   maskValue,
@@ -47,9 +48,18 @@ export class RegistrationService {
   constructor(
     @Inject(DatabaseService) private readonly db: DatabaseService,
     @Inject(EncryptionService) private readonly encryption: EncryptionService,
+    @Inject(StorageService) private readonly storage: StorageService,
   ) {}
 
   // ===== 查詢 =====
+
+  /** 條款只給已登入的員工，一律開啟最新版。 */
+  async readTerms(ctx: EmployeeContext) {
+    const { rows } = await this.db.withTenant(ctx.agency.id, (tx) =>
+      tx.query(`SELECT terms_object_key, terms_file_name FROM events WHERE id = $1`, [ctx.event.id]));
+    if (!rows[0]?.terms_object_key) throw new DomainError('NOT_FOUND');
+    return { name: rows[0].terms_file_name as string, content: await this.storage.get(rows[0].terms_object_key) };
+  }
 
   async getState(ctx: EmployeeContext) {
     return this.db.withTenant(ctx.agency.id, async (tx) => {
@@ -69,6 +79,8 @@ export class RegistrationService {
           registrationClosesAt: ctx.event.registrationClosesAt,
           allowDependentsOnly: ctx.event.allowDependentsOnly,
           termsVersion: ctx.event.termsVersion,
+          hasTerms: ctx.event.hasTerms,
+          paymentInstructions: ctx.event.paymentInstructions,
           isOpen: this.openState(ctx) === 'open',
           openState: this.openState(ctx),
         },

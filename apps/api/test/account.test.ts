@@ -7,11 +7,13 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AccountService } from '../src/account.service.ts';
 import { AppModule } from '../src/app.module.ts';
+import { StorageService } from '../src/storage.service.ts';
 
 const PASSWORD = 'abcd1234';
 let app: INestApplication;
 let admin: pg.Client;
 let accounts: AccountService;
+let storage: StorageService;
 let tierId: string;
 let knownHash: string;
 
@@ -68,6 +70,7 @@ beforeAll(async () => {
   await app.init();
   await app.listen(0);
   accounts = app.get(AccountService);
+  storage = app.get(StorageService);
 });
 
 afterAll(async () => {
@@ -231,6 +234,25 @@ describe('登入', () => {
 describe('活動頁開關與報名期間', () => {
   const hold = (e: Ev, cookie: string) =>
     on(e, http().post(`${base}/holds`)).set('cookie', cookie).send({ sessionId: e.sessionId, travelers: [{ key: randomUUID(), travelerTypeId: e.selfType, optionIds: [] }] });
+
+  it('條款與付款說明只給已登入的員工，沒有條款時回傳找不到', async () => {
+    const e = await makeEvent();
+    await makeEmployee(e);
+    const cookie = sessionCookie(await login(e, 'E001', PASSWORD).expect(204));
+    await on(e, http().get(`${base}/terms`)).expect(401);
+    await on(e, http().get(`${base}/terms`)).set('cookie', cookie).expect(404);
+    expect((await state(e, cookie).expect(200)).body.event).toMatchObject({ hasTerms: false, paymentInstructions: null });
+
+    const key = `${e.agencyId}/${randomUUID()}.pdf`;
+    await storage.put(key, Buffer.from('%PDF-1.4 terms'));
+    await q1(`UPDATE events SET terms_object_key = $2, terms_file_name = '條款.pdf', payment_instructions = '請匯款' WHERE id = $1`, [e.eventId, key]);
+    const r = await on(e, http().get(`${base}/terms`)).set('cookie', cookie).buffer(true)
+      .parse((res, cb) => { const c: Buffer[] = []; res.on('data', (d) => c.push(d)); res.on('end', () => cb(null, Buffer.concat(c))); }).expect(200);
+    expect(r.headers['content-type']).toBe('application/pdf');
+    expect(r.headers['cache-control']).toBe('private, no-store');
+    expect(r.body.toString()).toBe('%PDF-1.4 terms');
+    expect((await state(e, cookie).expect(200)).body.event).toMatchObject({ hasTerms: true, paymentInstructions: '請匯款' });
+  });
 
   it('登入頁不需登入即可取得報名期間與活動頁狀態', async () => {
     const e = await makeEvent();

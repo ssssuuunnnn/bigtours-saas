@@ -186,6 +186,71 @@ export const a = {
   extra: (n: number) => `+$${n.toLocaleString('en-US')}`,
   unlimited: '不限',
   quotaBlankHint: '留空表示不限名額。',
+  // 付款說明與條款
+  paymentTitle: '付款說明',
+  paymentHint: '顯示於報名成功頁、我的報名與報名成功 Email。',
+  paymentPlaceholder: '例如：請於 2/5（五）前匯款至○○銀行，並在備註填寫員工姓名。',
+  termsTitle: '報名與個資條款',
+  termsHint: '員工送出報名前必須勾選同意。條款應說明員工須取得眷屬同意。PDF，最多 10 MB。',
+  termsMissing: '尚未上傳條款，活動無法發布。',
+  termsCurrent: (name: string, version: number) => `目前版本 ${version}：${name}`,
+  termsView: '查看',
+  termsUpload: '上傳 PDF',
+  termsReplace: '更換 PDF',
+  termsUploading: '上傳中',
+  termsUploaded: '條款已上傳。',
+  termsReplaceConfirm: '這個活動已有報名。更換後新版本只適用之後送出的報名，已同意舊版的紀錄會保留。確定要更換嗎？',
+  retentionTitle: '個資保存期限',
+  retentionBefore: '活動結束後保存',
+  retentionAfter: '天，到期自動刪除或去識別化',
+  // 服務人員
+  contactsHint: '至少 1 位。顯示在員工登入後的活動首頁與我的報名，順序與這裡相同。',
+  addContact: '新增服務人員',
+  noContacts: '還沒有服務人員，活動無法發布。',
+  contactName: '姓名',
+  contactPhone: '電話',
+  contactScope: '服務範圍',
+  contactFieldLabel: (name: string, label: string) => `${name || '新服務人員'}${label}`,
+  contactsNote: '這裡的資料不會產生後台帳號。員工登入後才看得到，請確認服務人員同意公開這支電話。',
+  // 發布前檢查
+  publishUrl: (url: string) => `報名網址：${url}`,
+  publishStates: { ok: '已完成', warn: '建議處理', block: '必須完成', confirm: '請確認' } as Record<string, string>,
+  publishNames: {
+    basic: '基本資料', heroImage: '登入頁背景圖片', schedule: '開放時間', sessions: '梯次與名額', types: '旅客類型與團費',
+    options: '自選行程', fields: '旅客資料欄位', terms: '報名與個資條款', payment: '付款說明', contacts: '服務人員', roster: '員工名單',
+  } as Record<string, string>,
+  publishDetail: (key: string, state: string, d: Record<string, any>): string => {
+    switch (key) {
+      case 'basic': return d.days > 0 ? `已填寫活動名稱與 ${d.days} 天行程` : '已填寫活動名稱，尚未填寫行程';
+      case 'heroImage': return state === 'ok' ? '已上傳' : '尚未上傳，將顯示預設圖片';
+      case 'schedule': return d.hasPeriod ? `報名期間已設定；活動頁${d.pageMode === 'manual' ? '由旅行社手動開關' : '依時間自動開關'}` : '尚未設定完整的報名期間，活動頁開啟後可能立即開放報名或沒有截止時間';
+      case 'sessions':
+        if (d.count === 0) return '至少要有 1 個梯次';
+        if (d.capacity === 0) return `${d.count} 個梯次的名額都是 0`;
+        return d.shortBeds > 0 ? `${d.count} 個梯次，名額合計 ${d.capacity} 人；${d.shortBeds} 個梯次的可售床位少於名額` : `${d.count} 個梯次，名額合計 ${d.capacity} 人`;
+      case 'types': return state === 'confirm' ? '員工本人團費是 $0，請確認這個活動員工本人確實免費' : `${d.count} 種類型，含員工本人`;
+      case 'options':
+        if (d.requiredEmpty > 0) return `${d.requiredEmpty} 個必選群組沒有選項，員工將無法完成報名`;
+        if (d.optionalEmpty > 0) return `${d.optionalEmpty} 個選填群組沒有選項`;
+        return d.count > 0 ? `${d.count} 個群組` : '沒有自選行程';
+      case 'fields': return `姓名與 ${d.count} 個自訂欄位`;
+      case 'terms': return state === 'ok' ? `已上傳版本 ${d.version}` : '尚未上傳';
+      case 'payment': return state === 'ok' ? '已填寫' : '尚未填寫';
+      case 'contacts': return d.count > 0 ? `${d.count} 位` : '至少要有 1 位';
+      case 'roster': return d.count > 0 ? `${d.count} 人` : '尚未匯入，可在發布後維護';
+      default: return '';
+    }
+  },
+  goSetting: '前往設定',
+  publishBlockedCount: (n: number) => `還有 ${n} 項必須完成才能發布。`,
+  publishReady: '必要項目都已完成，可以發布。',
+  publishAfter: '發布後活動頁才可能開啟；手動模式預設關閉，要到「開放時間」開啟。',
+  confirmFreeFee: '我確認這個活動員工本人團費為 $0',
+  publishAction: '發布活動',
+  publishConfirmTitle: '確定要發布這個活動嗎？',
+  publishConfirmBody: '發布後不能取消發布，也不能修改活動代碼或刪除活動。',
+  publishedNote: '活動已發布。',
+  publishedOpenHint: '要讓員工進入，請到「開放時間」確認活動頁的開啟方式。',
   // 欄位
   fieldsHint: '每位旅客填寫時依這個順序顯示。姓名固定必填，不能移除。',
   lockedHint: '這個活動已有報名：欄位不能刪除，也不能改型態或敏感設定。',
@@ -221,6 +286,10 @@ export const a = {
     ROOM_TYPE_IN_USE: '這個房型已有旅客選擇，不能刪除。',
     OPTION_IN_USE: '這個選項已有旅客選擇或保留中，不能刪除。',
     QUOTA_IN_USE: '這個選項已有旅客選擇或保留中，不能改成不限名額；可以把名額調高。',
+    PUBLISH_BLOCKED: '還有必須完成的項目，請先處理後再發布。',
+    PUBLISH_REQUIREMENT: '活動已發布，這是發布的必要條件，不能移除。',
+    INVALID_FILE: '請上傳 PDF 檔案。',
+    FILE_TOO_LARGE: '檔案不能超過 10 MB。',
     fallback: '操作失敗，請再試一次。',
   } as Record<string, string>,
 };

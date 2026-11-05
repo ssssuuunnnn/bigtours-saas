@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { adminApi, type AdminEvent, type AdminOption, type AdminOptionGroup, type AdminSession, type OptionGroupValues } from '../../../../lib/admin-api';
 import { a } from '../../../../messages/admin';
-import { adminError } from '../../admin-shell';
+import { adminError, MoveButtons, swapped } from '../../admin-shell';
 
 const EMPTY_GROUP: OptionGroupValues = { name: '', isRequired: false, maxSelect: 1, preferenceCount: 1 };
 
@@ -32,6 +32,19 @@ export function OptionsPanel({ event }: { event: AdminEvent }) {
     await adminApi.deleteOption(event.id, o.id).then(load).catch((e) => setError(adminError(e)));
   };
 
+  const moveGroup = async (i: number, j: number) => {
+    setError(null);
+    const next = swapped(groups, i, j);
+    setGroups(next);
+    await adminApi.orderOptionGroups(event.id, next.map((g) => g.id)).catch((e) => { setError(adminError(e)); return load(); });
+  };
+  const moveOption = async (g: AdminOptionGroup, i: number, j: number) => {
+    setError(null);
+    const options = swapped(g.options, i, j);
+    setGroups(groups.map((x) => (x.id === g.id ? { ...x, options } : x)));
+    await adminApi.orderOptions(event.id, g.id, options.map((o) => o.id)).catch((e) => { setError(adminError(e)); return load(); });
+  };
+
   return (
     <section className="admin-panel">
       <div className="admin-panel-head">
@@ -42,14 +55,17 @@ export function OptionsPanel({ event }: { event: AdminEvent }) {
       {error && <p className="error" role="alert">{error}</p>}
       {editing?.kind === 'group' && !editing.group && <GroupForm eventId={event.id} group={null} onCancel={() => setEditing(null)} onSaved={saved} />}
       {groups.length === 0 && <p className="muted">{a.noGroups}</p>}
-      {groups.map((g) => (
+      {groups.map((g, gi) => (
         <section key={g.id} className="admin-group" aria-label={g.name}>
           <div className="admin-group-head">
             <div>
               <h2>{g.name}</h2>
               <p>{a.groupRule(g.isRequired, g.maxSelect, g.preferenceCount)}</p>
             </div>
-            <button type="button" className="link" onClick={() => setEditing({ kind: 'group', group: g })}>{a.editGroup}</button>
+            <div className="admin-group-tools">
+              <MoveButtons name={g.name} canUp={gi > 0} canDown={gi < groups.length - 1} onUp={() => moveGroup(gi, gi - 1)} onDown={() => moveGroup(gi, gi + 1)} />
+              <button type="button" className="link" onClick={() => setEditing({ kind: 'group', group: g })}>{a.editGroup}</button>
+            </div>
           </div>
           {editing?.kind === 'group' && editing.group?.id === g.id && <GroupForm eventId={event.id} group={g} onCancel={() => setEditing(null)} onSaved={saved} />}
           {g.options.length === 0 ? <p className="muted">{a.noOptions}</p> : (
@@ -57,14 +73,15 @@ export function OptionsPanel({ event }: { event: AdminEvent }) {
               <table className="admin-table">
                 <thead>
                   <tr>
-                    <th scope="col">{a.optionName}</th><th scope="col">{a.optionPrice}</th>
+                    <th scope="col">{a.order}</th><th scope="col">{a.optionName}</th><th scope="col">{a.optionPrice}</th>
                     {sessions.map((s) => <th key={s.id} scope="col">{s.name}</th>)}
                     <th scope="col">{a.actions}</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {g.options.map((o) => (
+                  {g.options.map((o, oi) => (
                     <tr key={o.id}>
+                      <td><MoveButtons name={o.name} canUp={oi > 0} canDown={oi < g.options.length - 1} onUp={() => moveOption(g, oi, oi - 1)} onDown={() => moveOption(g, oi, oi + 1)} /></td>
                       <td><strong>{o.name}</strong></td>
                       <td>{o.price === 0 ? a.noExtra : a.extra(o.price)}</td>
                       {sessions.map((s) => {

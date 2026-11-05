@@ -87,7 +87,7 @@ export function MoveButtons({ name, canUp, canDown, onUp, onDown }: { name: stri
 }
 
 /** 交換相鄰兩項後的 ID 順序。 */
-export const swapped = <T extends { id: string }>(list: T[], i: number, j: number) => {
+export const swapped = <T,>(list: T[], i: number, j: number) => {
   const next = [...list];
   [next[i], next[j]] = [next[j]!, next[i]!];
   return next;

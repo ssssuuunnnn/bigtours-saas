@@ -89,6 +89,8 @@ export const t = {
   roomN: (n: number) => `第 ${n} 間`,
   coworker: (n: number) => `第 ${n} 間希望同房的同事（選填）`,
   terms: '我已閱讀並同意報名與個人資料條款，代填的眷屬資料也已取得本人同意。',
+  termsLink: '查看報名與個人資料條款',
+  paymentInstructions: '付款說明',
   termsRequired: '請先勾選同意條款',
   submit: '送出報名',
   submitting: '送出中',
