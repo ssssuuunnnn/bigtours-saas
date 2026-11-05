@@ -13,11 +13,12 @@ import { RegistrationService } from './registration.service.ts';
 import { StorageService } from './storage.service.ts';
 
 const pdfBody = raw({ type: 'application/pdf', limit: '10mb' });
+const imageBody = raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: '5mb' });
 
 /** 超過上限時回傳明確的錯誤代碼，而不是通用的錯誤。 */
-function parsePdf(req: Request, res: Response, next: NextFunction) {
-  pdfBody(req, res, (err?: { status?: number }) => next(err?.status === 413 ? new DomainError('FILE_TOO_LARGE') : err));
-}
+const parseFile = (parser: typeof pdfBody) => (req: Request, res: Response, next: NextFunction) => {
+  parser(req, res, (err?: { status?: number }) => next(err?.status === 413 ? new DomainError('FILE_TOO_LARGE') : err));
+};
 
 @Module({
   controllers: [AccountController, AgencyController, PublicController],
@@ -25,6 +26,10 @@ function parsePdf(req: Request, res: Response, next: NextFunction) {
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(parsePdf).forRoutes({ path: 'api/v1/agency/events/:eventId/terms', method: RequestMethod.PUT });
+    consumer.apply(parseFile(pdfBody)).forRoutes(
+      { path: 'api/v1/agency/events/:eventId/terms', method: RequestMethod.PUT },
+      { path: 'api/v1/agency/events/:eventId/options/:optionId/pdf', method: RequestMethod.PUT },
+    );
+    consumer.apply(parseFile(imageBody)).forRoutes({ path: 'api/v1/agency/events/:eventId/images/:kind', method: RequestMethod.PUT });
   }
 }

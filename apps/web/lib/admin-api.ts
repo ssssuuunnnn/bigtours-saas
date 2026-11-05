@@ -7,6 +7,7 @@ export interface AdminEvent {
   days: { title: string; description: string }[]; themeColor: string; supportPhone: string | null; supportHours: string | null;
   pageMode: 'manual' | 'scheduled'; pageIsOpen: boolean; pageOpensAt: string | null; pageClosesAt: string | null;
   registrationOpensAt: string | null; registrationClosesAt: string | null; paymentInstructions: string | null; retentionDays: number; termsFileName: string | null; termsVersion: number;
+  images: { login: string | null; loginMobile: string | null; home: string | null };
   pageState: 'open' | 'not_open' | 'closed'; activeHolds: number;
 }
 export interface ContactValues { id: string | null; name: string; phone: string; scope: string }
@@ -32,7 +33,7 @@ export interface TravelerTypeValues { id: string | null; name: string; basePrice
 export interface PricingValues { types: TravelerTypeValues[]; defaultSubsidyAmount: number; defaultDependentLimit: number; allowDependentsOnly: boolean }
 export interface OptionGroupValues { name: string; isRequired: boolean; maxSelect: number; preferenceCount: number }
 export interface OptionValues { name: string; price: number; quotas: { sessionId: string; capacity: number | null }[] }
-export interface AdminOption { id: string; name: string; price: number; quotas: Record<string, { capacity: number; soldCount: number }> }
+export interface AdminOption { id: string; name: string; price: number; pdfFileName: string | null; quotas: Record<string, { capacity: number; soldCount: number }> }
 export interface AdminOptionGroup extends OptionGroupValues { id: string; options: AdminOption[] }
 export interface FieldValues { label: string; type: string; choices: string[] | null; isRequired: boolean; isSensitive: boolean }
 export interface AdminField extends FieldValues { id: string }
@@ -44,6 +45,16 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     body: body ? JSON.stringify(body) : undefined,
   });
   if (res.status === 204) return undefined as T;
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new ApiError(res.status, data?.code ?? 'fallback', data?.detail);
+  return data as T;
+}
+
+export type ImageKind = 'login' | 'login-mobile' | 'home';
+
+/** 檔案以原始內容送出，不走 JSON。 */
+async function upload<T>(path: string, file: File, contentType: string): Promise<T> {
+  const res = await fetch(`/api/v1/agency${path}`, { method: 'PUT', headers: { 'content-type': contentType }, body: file });
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new ApiError(res.status, data?.code ?? 'fallback', data?.detail);
   return data as T;
@@ -70,12 +81,12 @@ export const adminApi = {
   deleteSession: (id: string, sid: string) => call<void>('DELETE', `/events/${id}/sessions/${sid}`),
   orderSessions: (id: string, ids: string[]) => call<void>('PUT', `/events/${id}/sessions/order`, { ids }),
   savePaymentTerms: (id: string, v: { paymentInstructions: string | null; retentionDays: number }) => call<void>('PUT', `/events/${id}/payment-terms`, v),
-  uploadTerms: async (id: string, file: File) => {
-    const res = await fetch(`/api/v1/agency/events/${id}/terms?name=${encodeURIComponent(file.name)}`, { method: 'PUT', headers: { 'content-type': 'application/pdf' }, body: file });
-    const data = await res.json().catch(() => null);
-    if (!res.ok) throw new ApiError(res.status, data?.code ?? 'fallback', data?.detail);
-    return data as { termsFileName: string; termsVersion: number };
-  },
+  uploadTerms: (id: string, file: File) => upload<{ termsFileName: string; termsVersion: number }>(`/events/${id}/terms?name=${encodeURIComponent(file.name)}`, file, 'application/pdf'),
+  uploadImage: (id: string, kind: ImageKind, file: File) => upload<{ ok: boolean }>(`/events/${id}/images/${kind}`, file, file.type),
+  deleteImage: (id: string, kind: ImageKind) => call<void>('DELETE', `/events/${id}/images/${kind}`),
+  uploadOptionPdf: (id: string, oid: string, file: File) => upload<{ pdfFileName: string }>(`/events/${id}/options/${oid}/pdf?name=${encodeURIComponent(file.name)}`, file, 'application/pdf'),
+  deleteOptionPdf: (id: string, oid: string) => call<void>('DELETE', `/events/${id}/options/${oid}/pdf`),
+  copyEvent: (id: string, v: { companyId: string; name: string; slug: string; pricingTierId: string }) => call<{ id: string }>('POST', `/events/${id}/copy`, v),
   contacts: (id: string) => call<ContactValues[]>('GET', `/events/${id}/contacts`),
   saveContacts: (id: string, contacts: ContactValues[]) => call<ContactValues[]>('PUT', `/events/${id}/contacts`, { contacts }),
   publishCheck: (id: string) => call<{ status: string; checks: PublishCheck[] }>('GET', `/events/${id}/publish-check`),

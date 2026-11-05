@@ -67,7 +67,7 @@ function LoginView({ slug, landing, onLoggedIn, onPageClosed }: { slug: string; 
 
   const { event, agency } = landing;
   return (
-    <div style={brandStyle(event.themeColor)}>
+    <div style={brandStyle(event.themeColor)} className={event.images.login ? 'login-shell' : undefined}>
       <header className="masthead">
         <p className="agency">{agency.name}</p>
         <h1>{event.name}</h1>
@@ -76,6 +76,13 @@ function LoginView({ slug, landing, onLoggedIn, onPageClosed }: { slug: string; 
           <div><dt>{t.registrationCloses}</dt><dd>{formatDateTime(event.registrationClosesAt) || t.notSet}</dd></div>
         </dl>
       </header>
+      <div className={event.images.login ? 'login-scene' : undefined}>
+      {event.images.login && (
+        <picture className="login-bg">
+          {event.images.loginMobile && <source media="(max-width: 640px)" srcSet={event.images.loginMobile} />}
+          <img src={event.images.login} alt="" />
+        </picture>
+      )}
       <main className="page">
         <form className="block auth-form" onSubmit={submit}>
           <h2>{t.loginTitle}</h2>
@@ -93,6 +100,7 @@ function LoginView({ slug, landing, onLoggedIn, onPageClosed }: { slug: string; 
           <p className="muted">{t.loginHelp}</p>
         </form>
       </main>
+      </div>
     </div>
   );
 }

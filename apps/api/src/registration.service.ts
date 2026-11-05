@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { StorageService } from './storage.service.ts';
+import { publicImages, StorageService } from './storage.service.ts';
 import {
   calculateFees,
   maskValue,
@@ -21,7 +21,7 @@ type Selection = HoldRequest['travelers'];
 interface EventConfig {
   types: Map<string, { id: string; name: string; basePrice: number; isEmployeeSelf: boolean }>;
   groups: Map<string, { id: string; name: string; isRequired: boolean; minSelect: number; maxSelect: number; options: string[] }>;
-  options: Map<string, { id: string; groupId: string; name: string; price: number }>;
+  options: Map<string, { id: string; groupId: string; name: string; price: number; hasPdf: boolean }>;
   fields: {
     id: string;
     key: string;
@@ -43,6 +43,8 @@ function rethrowUniqueViolation(constraint: string, code: ErrorCode) {
   };
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 @Injectable()
 export class RegistrationService {
   constructor(
@@ -52,6 +54,17 @@ export class RegistrationService {
   ) {}
 
   // ===== 查詢 =====
+
+  /** 行程 PDF 只給已登入的員工，一律開啟最新版。 */
+  async readOptionPdf(ctx: EmployeeContext, optionId: string) {
+    if (!UUID.test(optionId)) throw new DomainError('NOT_FOUND');
+    const { rows } = await this.db.withTenant(ctx.agency.id, (tx) => tx.query(
+      `SELECT o.pdf_object_key, o.pdf_file_name FROM options o JOIN option_groups g ON g.id = o.group_id WHERE o.id = $1 AND g.event_id = $2`,
+      [optionId, ctx.event.id],
+    ));
+    if (!rows[0]?.pdf_object_key) throw new DomainError('NOT_FOUND');
+    return { name: rows[0].pdf_file_name as string, content: await this.storage.get(rows[0].pdf_object_key) };
+  }
 
   /** 條款只給已登入的員工，一律開啟最新版。 */
   async readTerms(ctx: EmployeeContext) {
@@ -81,6 +94,7 @@ export class RegistrationService {
           termsVersion: ctx.event.termsVersion,
           hasTerms: ctx.event.hasTerms,
           paymentInstructions: ctx.event.paymentInstructions,
+          images: publicImages(ctx.event.slug, ctx.event.images),
           isOpen: this.openState(ctx) === 'open',
           openState: this.openState(ctx),
         },
@@ -550,7 +564,7 @@ export class RegistrationService {
       [eventId],
     );
     const options = await tx.query(
-      `SELECT o.id, o.group_id, o.name, o.price FROM options o JOIN option_groups g ON g.id = o.group_id
+      `SELECT o.id, o.group_id, o.name, o.price, o.pdf_object_key IS NOT NULL AS has_pdf FROM options o JOIN option_groups g ON g.id = o.group_id
         WHERE g.event_id = $1 ORDER BY o.sort_order, o.name`,
       [eventId],
     );
@@ -568,7 +582,7 @@ export class RegistrationService {
           { id: r.id, name: r.name, isRequired: r.is_required, minSelect: r.min_select, maxSelect: r.max_select, options: [] as string[] },
         ]),
       ),
-      options: new Map(options.rows.map((r) => [r.id, { id: r.id, groupId: r.group_id, name: r.name, price: r.price }])),
+      options: new Map(options.rows.map((r) => [r.id, { id: r.id, groupId: r.group_id, name: r.name, price: r.price, hasPdf: r.has_pdf }])),
       fields: fields.rows.map((r) => ({
         id: r.id,
         key: r.field_key,
@@ -665,7 +679,9 @@ export class RegistrationService {
         fieldValues: { ...t.field_values, ...t.sensitive_masks },
         requestedRoomNo: t.requested_room_no,
         options: t.options.map((o: { optionId: string; price: number }) => ({
+          optionId: o.optionId,
           name: config.options.get(o.optionId)?.name ?? '',
+          hasPdf: config.options.get(o.optionId)?.hasPdf ?? false,
           price: o.price,
         })),
       })),

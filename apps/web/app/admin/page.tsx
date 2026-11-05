@@ -35,7 +35,7 @@ export default function EventList() {
       {events.length === 0 ? <p className="muted">{a.noEvents}</p> : (
         <div className="admin-table-wrap">
           <table className="admin-table">
-            <thead><tr><th>{a.eventName}</th><th>{a.company}</th><th>{a.eventStatus}</th><th>{a.registrationPeriod}</th><th>{a.travelersOfTier}</th></tr></thead>
+            <thead><tr><th>{a.eventName}</th><th>{a.company}</th><th>{a.eventStatus}</th><th>{a.registrationPeriod}</th><th>{a.travelersOfTier}</th>{canConfigure && <th>{a.actions}</th>}</tr></thead>
             <tbody>
               {events.map((e) => (
                 <tr key={e.id}>
@@ -44,6 +44,7 @@ export default function EventList() {
                   <td>{a.status[e.status] ?? e.status}</td>
                   <td>{e.registrationOpensAt ? `${shortDate(e.registrationOpensAt)} – ${shortDate(e.registrationClosesAt)}` : a.notSet}</td>
                   <td>{e.travelerCount.toLocaleString()}／{e.tierMax.toLocaleString()}</td>
+                  {canConfigure && <td><Link href={`/admin/events/new?from=${e.id}`} aria-label={a.copyEventNamed(e.name)}>{a.copy}</Link></td>}
                 </tr>
               ))}
             </tbody>

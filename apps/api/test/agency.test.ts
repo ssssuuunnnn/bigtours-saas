@@ -752,3 +752,153 @@ describe('付款說明、條款、服務人員與發布', () => {
     expect(rls).toEqual({ relrowsecurity: true, relforcerowsecurity: true });
   });
 });
+
+describe('前台圖片、行程 PDF 與複製活動', () => {
+  const JPG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('jpeg')]);
+  const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('png')]);
+  const WEBP = Buffer.from('RIFF0000WEBPVP8 ');
+  const PDF = Buffer.from('%PDF-1.4 itinerary');
+  const binary = (req: request.Test) => req.buffer(true).parse((res, cb) => { const c: Buffer[] = []; res.on('data', (d) => c.push(d)); res.on('end', () => cb(null, Buffer.concat(c))); });
+  const put = (a: Ag, path: string, content: Buffer, type: string) => request(app.getHttpServer()).put(`/api/v1/agency/events/${a.eventId}${path}`)
+    .set('x-forwarded-host', a.host).set('cookie', a.cookie).set('content-type', type).send(content);
+  const grant = (a: Ag) => admin.query(`INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason) VALUES ($1, $2, 5, 'grant')`, [a.agencyId, tierId]);
+  const pub = (a: Ag, path: string) => request(app.getHttpServer()).get(`/api/v1/public/events/evt${path}`).set('x-forwarded-host', a.host);
+  const agencyGet = (a: Ag, path: string) => request(app.getHttpServer()).get(`/api/v1/agency${path}`).set('x-forwarded-host', a.host).set('cookie', a.cookie);
+  const session1 = async (a: Ag) => (await api(a).post('/sessions', session()).expect(201)).body.id as string;
+  const option = async (a: Ag, name = '獨木舟') => {
+    const g = (await api(a).post('/option-groups', { name: `${name}群組`, isRequired: false, maxSelect: 1, preferenceCount: 3 }).expect(201)).body.id as string;
+    return { groupId: g, optionId: (await api(a).post(`/option-groups/${g}/options`, { name, price: 500, quotas: [] }).expect(201)).body.id as string };
+  };
+
+  it('圖片依內容判斷格式、有大小上限；後台與前台都讀得到，更換後網址改變', async () => {
+    const a = await makeAgency('admin');
+    await admin.query(`UPDATE events SET status = 'published' WHERE id = $1`, [a.eventId]);
+    expect((await put(a, '/images/login', Buffer.from('not image'), 'image/jpeg').expect(422)).body.code).toBe('INVALID_FILE');
+    expect((await put(a, '/images/login', Buffer.from('<svg></svg>'), 'image/svg+xml').expect(422)).body.code).toBe('INVALID_FILE');
+    expect((await put(a, '/images/login', Buffer.concat([JPG, Buffer.alloc(5 * 1024 * 1024)]), 'image/jpeg').expect(413)).body.code).toBe('FILE_TOO_LARGE');
+    await put(a, '/images/nope', JPG, 'image/jpeg').expect(404);
+
+    let landing = (await pub(a, '/landing').expect(200)).body.event.images;
+    expect(landing).toEqual({ login: null, loginMobile: null, home: null });
+    await pub(a, '/images/login').expect(404);
+
+    await put(a, '/images/login', PNG, 'image/png').expect(200);
+    landing = (await pub(a, '/landing').expect(200)).body.event.images;
+    expect(landing.login).toMatch(/^\/api\/v1\/public\/events\/evt\/images\/login\?v=/);
+    expect(landing.home).toBe(landing.login);
+    const img = await binary(pub(a, '/images/login')).expect(200);
+    expect(img.headers['content-type']).toBe('image/png');
+    expect(img.headers['x-content-type-options']).toBe('nosniff');
+    expect(img.body.equals(PNG)).toBe(true);
+
+    await put(a, '/images/home', WEBP, 'image/webp').expect(200);
+    const changed = (await pub(a, '/landing').expect(200)).body.event.images;
+    expect(changed.home).toContain('/images/home');
+    expect((await binary(pub(a, '/images/home')).expect(200)).headers['content-type']).toBe('image/webp');
+    await put(a, '/images/login', JPG, 'image/jpeg').expect(200);
+    expect((await pub(a, '/landing').expect(200)).body.event.images.login).not.toBe(landing.login);
+
+    const detail = (await agencyGet(a, `/events/${a.eventId}`).expect(200)).body;
+    expect(detail.images.login).toContain(`/api/v1/agency/events/${a.eventId}/images/login`);
+    expect((await binary(agencyGet(a, `/events/${a.eventId}/images/login`)).expect(200)).headers['cache-control']).toBe('private, no-store');
+
+    await api(a).del('/images/home').expect(204);
+    await pub(a, '/images/home').expect(404);
+    const check = (await api(a).get('/publish-check').expect(200)).body.checks.find((c: any) => c.key === 'heroImage');
+    expect(check.state).toBe('ok');
+  });
+
+  it('草稿活動的圖片不對外公開，其他旅行社也讀不到', async () => {
+    const a = await makeAgency('admin');
+    await admin.query(`UPDATE events SET status = 'draft' WHERE id = $1`, [a.eventId]);
+    await put(a, '/images/login', JPG, 'image/jpeg').expect(200);
+    await pub(a, '/images/login').expect(404);
+    await agencyGet(a, `/events/${a.eventId}/images/login`).expect(200);
+    const other = await makeAgency('admin');
+    await agencyGet(other, `/events/${a.eventId}/images/login`).expect(404);
+    const ops = await makeAgency('operations');
+    await put(ops, '/images/login', JPG, 'image/jpeg').expect(403);
+  });
+
+  it('行程 PDF 選填，每個選項一份；只收 PDF，不能跨活動存取', async () => {
+    const a = await makeAgency('admin');
+    const { optionId } = await option(a);
+    expect((await put(a, `/options/${optionId}/pdf`, Buffer.from('nope'), 'application/pdf').expect(422)).body.code).toBe('INVALID_FILE');
+    expect((await put(a, `/options/${optionId}/pdf`, Buffer.concat([PDF, Buffer.alloc(10 * 1024 * 1024)]), 'application/pdf').expect(413)).body.code).toBe('FILE_TOO_LARGE');
+    await agencyGet(a, `/events/${a.eventId}/options/${optionId}/pdf`).expect(404);
+    expect((await put(a, `/options/${optionId}/pdf?name=${encodeURIComponent('行程.pdf')}`, PDF, 'application/pdf').expect(200)).body).toEqual({ pdfFileName: '行程.pdf' });
+    expect((await api(a).get('/option-groups').expect(200)).body[0].options[0].pdfFileName).toBe('行程.pdf');
+    expect((await binary(agencyGet(a, `/events/${a.eventId}/options/${optionId}/pdf`)).expect(200)).body.equals(PDF)).toBe(true);
+    const other = await makeAgency('admin');
+    await put(other, `/options/${optionId}/pdf`, PDF, 'application/pdf').expect(404);
+    await api(a).del(`/options/${optionId}/pdf`).expect(204);
+    expect((await api(a).get('/option-groups').expect(200)).body[0].options[0].pdfFileName).toBeNull();
+  });
+
+  it('複製活動帶入設定、不帶梯次與名單，並扣額度', async () => {
+    const a = await makeAgency('admin');
+    await admin.query(`UPDATE events SET theme_color = '#1F3A8A', itinerary = '{"days":[{"title":"D1","description":""}]}', default_subsidy_amount = 5000, payment_instructions = '請匯款', registration_opens_at = now(), registration_closes_at = now() + interval '1 day' WHERE id = $1`, [a.eventId]);
+    await admin.query(`INSERT INTO traveler_types (agency_id, event_id, name, base_price, is_employee_self, sort_order) VALUES ($1, $2, '員工本人', 9800, true, 1), ($1, $2, '嬰兒', 500, false, 2)`, [a.agencyId, a.eventId]);
+    await admin.query(`UPDATE traveler_types SET occupies_bed = false, note = '未滿 2 歲' WHERE event_id = $1 AND name = '嬰兒'`, [a.eventId]);
+    await api(a).post('/fields', field()).expect(201);
+    await put(a, '/images/login', JPG, 'image/jpeg').expect(200);
+    await put(a, '/terms?name=terms.pdf', PDF, 'application/pdf').expect(200);
+    await put(a, '/terms?name=terms2.pdf', PDF, 'application/pdf').expect(200);
+    await api(a).put('/contacts', { contacts: [{ id: null, name: '李冠廷', phone: '0912', scope: '報名' }] }).expect(200);
+    const s = await session1(a);
+    await api(a).patch(`/sessions/${s}`, session({ roomTypes: [{ id: null, name: '二人房', capacity: 2, surcharge: 0, bedQuota: 2 }] })).expect(200);
+    const { optionId } = await option(a);
+    await api(a).patch(`/options/${optionId}`, { name: '獨木舟', price: 500, quotas: [{ sessionId: s, capacity: 5 }] }).expect(204);
+    await put(a, `/options/${optionId}/pdf?name=x.pdf`, PDF, 'application/pdf').expect(200);
+    await q1(`INSERT INTO event_employees (agency_id, event_id, employee_no, name) VALUES ($1, $2, 'E1', 'N') RETURNING id`, [a.agencyId, a.eventId]);
+
+    await grant(a);
+    const before = await q1(`SELECT sum(change)::int AS n FROM agency_quota_ledger WHERE agency_id = $1 AND pricing_tier_id = $2`, [a.agencyId, tierId]);
+    const companyId = (await q1(`SELECT company_id FROM events WHERE id = $1`, [a.eventId])).company_id;
+    const r = await api(a).post('/copy', { companyId, name: '複製活動', slug: `copy-${Date.now()}`, pricingTierId: tierId }).expect(201);
+    const after = await q1(`SELECT sum(change)::int AS n FROM agency_quota_ledger WHERE agency_id = $1 AND pricing_tier_id = $2`, [a.agencyId, tierId]);
+    expect(after.n).toBe(before.n - 1);
+
+    const c: Ag = { ...a, eventId: r.body.id };
+    const e = (await agencyGet(c, `/events/${c.eventId}`).expect(200)).body;
+    expect(e).toMatchObject({ name: '複製活動', status: 'draft', pageState: 'closed', themeColor: '#1F3A8A', paymentInstructions: '請匯款', registrationOpensAt: null, termsFileName: 'terms2.pdf', termsVersion: 1 });
+    expect(e.days).toHaveLength(1);
+    expect(e.images.login).toContain(c.eventId);
+    await agencyGet(c, `/events/${c.eventId}/images/login`).expect(200);
+    await agencyGet(c, `/events/${c.eventId}/terms`).expect(200);
+
+    const pricing = (await api(c).get('/pricing').expect(200)).body;
+    expect(pricing.defaultSubsidyAmount).toBe(5000);
+    expect(pricing.types.map((t: any) => [t.name, t.basePrice, t.isEmployeeSelf, t.occupiesBed, t.note])).toEqual([['員工本人', 9800, true, true, null], ['嬰兒', 500, false, false, '未滿 2 歲']]);
+    expect((await api(c).get('/sessions').expect(200)).body).toEqual([]);
+    expect((await api(c).get('/contacts').expect(200)).body).toHaveLength(1);
+    expect((await api(c).get('/fields').expect(200)).body).toHaveLength(1);
+    const groups = (await api(c).get('/option-groups').expect(200)).body;
+    expect(groups[0]).toMatchObject({ preferenceCount: 3, options: [{ name: '獨木舟', price: 500, pdfFileName: 'x.pdf', quotas: {} }] });
+    expect(groups[0].options[0].id).not.toBe(optionId);
+    await agencyGet(c, `/events/${c.eventId}/options/${groups[0].options[0].id}/pdf`).expect(200);
+    expect((await q1(`SELECT count(*)::int AS n FROM event_employees WHERE event_id = $1`, [c.eventId])).n).toBe(0);
+
+    // 改複製的活動不影響原活動
+    await api(c).patch(`/options/${groups[0].options[0].id}`, { name: '改名', price: 1, quotas: [] }).expect(204);
+    expect((await api(a).get('/option-groups').expect(200)).body[0].options[0].name).toBe('獨木舟');
+    await agencyGet(a, `/events/${a.eventId}/options/${optionId}/pdf`).expect(200);
+  });
+
+  it('複製活動檢查額度、代碼、權限，不能複製其他旅行社的活動', async () => {
+    const a = await makeAgency('admin');
+    const companyId = (await q1(`SELECT company_id FROM events WHERE id = $1`, [a.eventId])).company_id;
+    const body = (slug: string) => ({ companyId, name: 'X', slug, pricingTierId: tierId });
+    await grant(a);
+    const taken = await api(a).post('/copy', body('evt')).expect(409);
+    expect(taken.body.code).toBe('SLUG_TAKEN');
+    const other = await makeAgency('admin');
+    const otherCompany = (await q1(`SELECT company_id FROM events WHERE id = $1`, [other.eventId])).company_id;
+    await request(app.getHttpServer()).post(`/api/v1/agency/events/${a.eventId}/copy`).set('x-forwarded-host', other.host).set('cookie', other.cookie)
+      .send({ companyId: otherCompany, name: 'X', slug: `steal-${Date.now()}`, pricingTierId: tierId }).expect(404);
+    const ops = await makeAgency('operations');
+    await api(ops).post('/copy', body('nope-1')).expect(403);
+    await admin.query(`DELETE FROM agency_quota_ledger WHERE agency_id = $1`, [a.agencyId]);
+    expect((await api(a).post('/copy', body(`q-${Date.now()}`)).expect(409)).body.code).toBe('QUOTA_EMPTY');
+  });
+});

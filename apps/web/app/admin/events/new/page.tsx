@@ -2,13 +2,19 @@
 
 import { can } from '@bigtours/shared';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useEffect, useState } from 'react';
 import { adminApi, type AdminCompany, type QuotaTier } from '../../../../lib/admin-api';
 import { a } from '../../../../messages/admin';
 import { adminError, useAdminMe } from '../../admin-shell';
 
-export default function NewEvent() {
+export default function NewEventPage() {
+  return <Suspense><NewEvent /></Suspense>;
+}
+
+/** 網址帶 from 時是複製該活動。 */
+function NewEvent() {
+  const from = useSearchParams().get('from');
   const me = useAdminMe();
   const router = useRouter();
   const allowed = can(me.user.role, 'configureEvents');
@@ -29,7 +35,8 @@ export default function NewEvent() {
       setCompanyId(c[0]?.id ?? '');
       setTierId(q.find((t) => t.remaining > 0)?.id ?? '');
     }).catch((e) => setError(adminError(e)));
-  }, [allowed]);
+    if (from) adminApi.event(from).then((e) => setName(e.name)).catch((e) => setError(adminError(e)));
+  }, [allowed, from]);
 
   if (!allowed) return <main className="admin-main"><p role="alert" className="error">{a.forbidden}</p></main>;
   if (!companies) return <main className="admin-main" aria-busy="true">{error ? <p role="alert" className="error">{error}</p> : <p>{a.loading}</p>}</main>;
@@ -40,7 +47,8 @@ export default function NewEvent() {
     setError(null);
     setBusy(true);
     try {
-      const { id } = await adminApi.createEvent({ companyId, name, slug, pricingTierId: tierId });
+      const values = { companyId, name, slug, pricingTierId: tierId };
+      const { id } = await (from ? adminApi.copyEvent(from, values) : adminApi.createEvent(values));
       router.push(`/admin/events/${id}/basic`);
     } catch (err) {
       setError(adminError(err));
@@ -50,7 +58,8 @@ export default function NewEvent() {
 
   return (
     <main className="admin-main">
-      <h1>{a.createEvent}</h1>
+      <h1>{from ? a.copyEventTitle : a.createEvent}</h1>
+      {from && <div className="admin-note"><p>{a.copyCarried}</p><p>{a.copyNotCarried}</p></div>}
       {companies.length === 0 ? (
         <p className="admin-note">{a.needCompany} <Link href="/admin/companies">{a.agencySections.companies}</Link></p>
       ) : (
@@ -81,7 +90,7 @@ export default function NewEvent() {
           </fieldset>
           {tier && <p className="admin-note span-3">{a.quotaDeduct(a.tierRange(tier.minTravelers, tier.maxTravelers))}</p>}
           <div className="admin-form-actions span-3">
-            <button type="submit" className="primary" disabled={busy || !tierId}>{a.createAndContinue}</button>
+            <button type="submit" className="primary" disabled={busy || !tierId}>{from ? a.copyAndContinue : a.createAndContinue}</button>
             <Link className="ghost-link" href="/admin">{a.cancel}</Link>
           </div>
         </form>

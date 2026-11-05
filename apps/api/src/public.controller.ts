@@ -37,6 +37,12 @@ export class PublicController {
     sendPdf(res, file.name, file.content);
   }
 
+  @Get('options/:optionId/pdf')
+  async optionPdf(@Headers() h: Record<string, string>, @Param('slug') slug: string, @Param('optionId') optionId: string, @Res() res: Response) {
+    const file = await this.registrations.readOptionPdf(await this.ctx(h, slug), optionId);
+    sendPdf(res, file.name, file.content);
+  }
+
   @Get('availability')
   async availability(@Headers() h: Record<string, string>, @Param('slug') slug: string) {
     return this.registrations.getAvailability(await this.ctx(h, slug));

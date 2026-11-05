@@ -1,7 +1,7 @@
 'use client';
 
 import { calculateFees } from '@bigtours/shared';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, createClient, type EventState, type Field, type Registration, type SessionAvailability, type Traveler } from '../../lib/api';
 import { formatDateTime, money, t } from '../../messages/zh-TW';
 import { brandStyle } from '../../lib/brand';
@@ -189,6 +189,7 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
         {masthead}
         <Done
           paymentInstructions={state.event.paymentInstructions}
+          slug={state.event.slug}
           registration={registration}
           session={availability.find((s) => s.id === registration.sessionId)}
           fields={state.fields}
@@ -312,6 +313,7 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
   return (
     <div style={brand}>
       {masthead}
+      {state.event.images.home && <img className="home-banner" src={state.event.images.home} alt="" />}
       <main className="page has-bar">
         {restored && <p className="notice">{t.draftRestored}</p>}
         <Itinerary state={state} />
@@ -446,7 +448,8 @@ function TravelerPicks({ index, traveler, state, session, canApplyToAll, onChang
             const checked = traveler.optionIds.includes(option.id);
             const blocked = !checked && !!quota && quota.status !== 'available';
             return (
-              <label key={option.id} className={`choice${checked ? ' on' : ''}${blocked ? ' off' : ''}`}>
+              <Fragment key={option.id}>
+              <label className={`choice${checked ? ' on' : ''}${blocked ? ' off' : ''}`}>
                 <input type={group.maxSelect === 1 ? 'radio' : 'checkbox'} name={`${traveler.key}-${group.id}`} checked={checked} disabled={blocked} onChange={() => toggle(group.id, group.maxSelect, option.id)} />
                 <span>{option.name}</span>
                 <span className="choice-side">
@@ -454,6 +457,8 @@ function TravelerPicks({ index, traveler, state, session, canApplyToAll, onChang
                   <b>{option.price ? t.plusPrice(money(option.price)) : t.included}</b>
                 </span>
               </label>
+              {option.hasPdf && <a className="option-pdf" href={`/api/v1/public/events/${state.event.slug}/options/${option.id}/pdf`} target="_blank" rel="noopener" aria-label={`${option.name}：${t.optionPdfLink}`}>{t.optionPdfLink}</a>}
+              </Fragment>
             );
           })}
         </fieldset>
@@ -554,7 +559,7 @@ function FeeBar({ fees, error, note, children }: { fees: { total: number; subsid
   );
 }
 
-function Done({ registration: r, session, fields, paymentInstructions, onCancel }: { registration: Registration; paymentInstructions: string | null; session?: SessionAvailability; fields: Field[]; onCancel: () => Promise<void> }) {
+function Done({ registration: r, session, fields, paymentInstructions, slug: slug, onCancel }: { registration: Registration; paymentInstructions: string | null; slug: string; session?: SessionAvailability; fields: Field[]; onCancel: () => Promise<void> }) {
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requested = r.status === 'cancel_requested';
@@ -585,7 +590,7 @@ function Done({ registration: r, session, fields, paymentInstructions, onCancel 
               const v = x.fieldValues[f.key];
               return <div key={f.key}><dt>{f.label}</dt><dd>{Array.isArray(v) ? v.join('、') : String(v)}</dd></div>;
             })}
-            {x.options.map((o) => <div key={o.name}><dt>{o.name}</dt><dd>{o.price ? money(o.price) : t.included}</dd></div>)}
+            {x.options.map((o) => <div key={o.name}><dt>{o.name}{o.hasPdf && <> <a className="option-pdf" href={`/api/v1/public/events/${slug}/options/${o.optionId}/pdf`} target="_blank" rel="noopener" aria-label={`${o.name}：${t.optionPdfLink}`}>{t.optionPdfLink}</a></>}</dt><dd>{o.price ? money(o.price) : t.included}</dd></div>)}
             {x.requestedRoomNo && <div><dt>{t.rooms}</dt><dd>{t.roomRequest(x.requestedRoomNo)}</dd></div>}
           </dl>
         </section>

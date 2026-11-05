@@ -17,7 +17,8 @@ export interface SessionAvailability {
   status: 'available' | 'held' | 'sold_out';
   options: { optionId: string; remaining: number; status: 'available' | 'held' | 'sold_out' }[];
 }
-export interface Option { id: string; groupId: string; name: string; price: number }
+export interface Option { id: string; groupId: string; name: string; price: number; hasPdf: boolean }
+export interface EventFrontImages { login: string | null; loginMobile: string | null; home: string | null }
 export interface OptionGroup { id: string; name: string; isRequired: boolean; minSelect: number; maxSelect: number; options: Option[] }
 export interface TravelerType { id: string; name: string; basePrice: number; isEmployeeSelf: boolean }
 export interface Field { key: string; label: string; type: string; choices: string[] | null; isRequired: boolean; isSensitive: boolean }
@@ -40,11 +41,11 @@ export interface Registration {
   subsidyApplied: number;
   selfPayAmount: number;
   paymentStatus: string;
-  travelers: { name: string; travelerTypeName: string; basePrice: number; fieldValues: Record<string, any>; requestedRoomNo: number | null; options: { name: string; price: number }[] }[];
+  travelers: { name: string; travelerTypeName: string; basePrice: number; fieldValues: Record<string, any>; requestedRoomNo: number | null; options: { optionId: string; name: string; hasPdf: boolean; price: number }[] }[];
 }
 export interface EventState {
   agency: { name: string };
-  event: { slug: string; name: string; hasTerms: boolean; paymentInstructions: string | null; themeColor: string; itinerary: { summary?: string; days?: { title: string; description: string }[] }; openState: 'not_open' | 'open' | 'closed'; registrationOpensAt: string | null; registrationClosesAt: string | null; allowDependentsOnly: boolean };
+  event: { slug: string; name: string; hasTerms: boolean; paymentInstructions: string | null; images: EventFrontImages; themeColor: string; itinerary: { summary?: string; days?: { title: string; description: string }[] }; openState: 'not_open' | 'open' | 'closed'; registrationOpensAt: string | null; registrationClosesAt: string | null; allowDependentsOnly: boolean };
   employee: { name: string; subsidyAmount: number; dependentLimit: number };
   travelerTypes: TravelerType[];
   optionGroups: OptionGroup[];
@@ -58,7 +59,7 @@ export interface EventState {
 
 export interface Landing {
   agency: { name: string };
-  event: { slug: string; name: string; themeColor: string; registrationOpensAt: string | null; registrationClosesAt: string | null; pageState: 'open' | 'not_open' | 'closed'; pageOpensAt: string | null };
+  event: { slug: string; name: string; themeColor: string; registrationOpensAt: string | null; registrationClosesAt: string | null; pageState: 'open' | 'not_open' | 'closed'; pageOpensAt: string | null; images: EventFrontImages; };
 }
 export interface PasswordLink {
   agency: { name: string };

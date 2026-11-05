@@ -43,3 +43,9 @@ export function sendPdf(res: Response, name: string, content: Buffer) {
   });
   res.end(content);
 }
+
+/** 前台圖片在登入前就要顯示，可以快取；網址帶版本，更換後會是新網址。 */
+export function sendImage(res: Response, contentType: string, content: Buffer, cache = 'public, max-age=86400') {
+  res.set({ 'content-type': contentType, 'x-content-type-options': 'nosniff', 'cache-control': cache });
+  res.end(content);
+}

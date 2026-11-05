@@ -3,6 +3,7 @@ import { pageState, type PageState } from '@bigtours/shared';
 import { DatabaseService } from './database.service.ts';
 import { EncryptionService } from './encryption.service.ts';
 import { DomainError } from './errors.ts';
+import type { EventImages } from './storage.service.ts';
 
 export const SESSION_COOKIE = 'bt_session';
 
@@ -28,6 +29,7 @@ export interface EventInfo {
   termsVersion: number;
   hasTerms: boolean;
   paymentInstructions: string | null;
+  images: EventImages;
   pageState: PageState;
   pageOpensAt: Date | null;
 }
@@ -71,7 +73,7 @@ export class AccessService {
     const r = await this.db.withTenant(agencyId, async (tx) => {
       const { rows } = await tx.query(
         `SELECT id, slug, name, itinerary, status, registration_opens_at, registration_closes_at,
-                default_subsidy_amount, default_dependent_limit, allow_dependents_only, terms_version, terms_object_key, payment_instructions,
+                default_subsidy_amount, default_dependent_limit, allow_dependents_only, terms_version, terms_object_key, payment_instructions, hero_object_key, login_mobile_object_key, home_image_object_key,
                 page_mode, page_is_open, page_opens_at, page_closes_at, theme_color
            FROM events WHERE slug = $1 AND status IN ('published', 'closed')`,
         [slug],
@@ -94,6 +96,7 @@ export class AccessService {
       termsVersion: r.terms_version,
       hasTerms: r.terms_object_key !== null,
       paymentInstructions: r.payment_instructions,
+      images: { login: r.hero_object_key, 'login-mobile': r.login_mobile_object_key, home: r.home_image_object_key },
       pageState: pageState({ mode: r.page_mode, isOpen: r.page_is_open, opensAt: r.page_opens_at, closesAt: r.page_closes_at }),
       pageOpensAt: r.page_mode === 'scheduled' ? r.page_opens_at : null,
     };

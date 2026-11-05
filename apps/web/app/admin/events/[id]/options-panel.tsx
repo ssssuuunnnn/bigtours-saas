@@ -32,6 +32,18 @@ export function OptionsPanel({ event }: { event: AdminEvent }) {
     await adminApi.deleteOption(event.id, o.id).then(load).catch((e) => setError(adminError(e)));
   };
 
+  const uploadPdf = async (o: AdminOption, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setError(null);
+    if (file.size > 10 * 1024 * 1024) { setError(a.errors.FILE_TOO_LARGE!); return; }
+    await adminApi.uploadOptionPdf(event.id, o.id, file).then(load).catch((err) => setError(adminError(err)));
+  };
+  const removePdf = async (o: AdminOption) => {
+    setError(null);
+    await adminApi.deleteOptionPdf(event.id, o.id).then(load).catch((err) => setError(adminError(err)));
+  };
   const moveGroup = async (i: number, j: number) => {
     setError(null);
     const next = swapped(groups, i, j);
@@ -73,7 +85,7 @@ export function OptionsPanel({ event }: { event: AdminEvent }) {
               <table className="admin-table">
                 <thead>
                   <tr>
-                    <th scope="col">{a.order}</th><th scope="col">{a.optionName}</th><th scope="col">{a.optionPrice}</th>
+                    <th scope="col">{a.order}</th><th scope="col">{a.optionName}</th><th scope="col">{a.optionPdf}</th><th scope="col">{a.optionPrice}</th>
                     {sessions.map((s) => <th key={s.id} scope="col">{s.name}</th>)}
                     <th scope="col">{a.actions}</th>
                   </tr>
@@ -83,6 +95,16 @@ export function OptionsPanel({ event }: { event: AdminEvent }) {
                     <tr key={o.id}>
                       <td><MoveButtons name={o.name} canUp={oi > 0} canDown={oi < g.options.length - 1} onUp={() => moveOption(g, oi, oi - 1)} onDown={() => moveOption(g, oi, oi + 1)} /></td>
                       <td><strong>{o.name}</strong></td>
+                      <td>
+                        {o.pdfFileName
+                          ? <a href={`/api/v1/agency/events/${event.id}/options/${o.id}/pdf`} target="_blank" rel="noopener">{o.pdfFileName}</a>
+                          : <span className="muted">{a.optionPdfNone}</span>}
+                        <div className="admin-actions admin-file-row">
+                          <input id={`pdf-${o.id}`} className="admin-file-input" type="file" accept="application/pdf,.pdf" aria-label={o.pdfFileName ? a.optionPdfReplace(o.name) : a.optionPdfUpload(o.name)} onChange={(e) => uploadPdf(o, e)} />
+                          <label htmlFor={`pdf-${o.id}`} className="link">{o.pdfFileName ? a.replace : a.upload}</label>
+                          {o.pdfFileName && <button type="button" className="link" aria-label={a.optionPdfRemove(o.name)} onClick={() => removePdf(o)}>{a.remove}</button>}
+                        </div>
+                      </td>
                       <td>{o.price === 0 ? a.noExtra : a.extra(o.price)}</td>
                       {sessions.map((s) => {
                         const q = o.quotas[s.id];

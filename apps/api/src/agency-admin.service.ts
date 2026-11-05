@@ -6,7 +6,7 @@ import { AccessService } from './access.service.ts';
 import { DatabaseService, type Tx } from './database.service.ts';
 import { EncryptionService } from './encryption.service.ts';
 import { DomainError } from './errors.ts';
-import { StorageService } from './storage.service.ts';
+import { agencyImages, imageContentType, imageExtension, isImageKind, StorageService, type ImageKind } from './storage.service.ts';
 
 const SESSION_HOURS = 12;
 const MAX_FAILED_LOGINS = 5;
@@ -61,6 +61,10 @@ const fieldRow = (r: any) => ({
   isSensitive: r.is_sensitive,
 });
 const FIELD_COLUMNS = 'id, label, field_type, choices, is_required, is_sensitive';
+
+type NewEventInput = { companyId: string; name: string; slug: string; pricingTierId: string };
+
+const IMAGE_COLUMN: Record<ImageKind, string> = { login: 'hero_object_key', 'login-mobile': 'login_mobile_object_key', home: 'home_image_object_key' };
 
 @Injectable()
 export class AgencyAdminService {
@@ -169,7 +173,7 @@ export class AgencyAdminService {
       const { rows } = await tx.query(
         `SELECT e.status, e.itinerary, e.theme_color, e.support_phone, e.support_hours, e.page_mode, e.page_is_open, e.page_opens_at, e.page_closes_at,
                 e.registration_opens_at, e.registration_closes_at, e.payment_instructions, e.retention_days,
-                e.terms_file_name, e.terms_version, c.name AS company_name,
+                e.terms_file_name, e.terms_version, e.hero_object_key, e.login_mobile_object_key, e.home_image_object_key, c.name AS company_name,
                 (SELECT count(*)::int FROM seat_holds h WHERE h.event_id = e.id AND h.status = 'active' AND h.expires_at > now()) AS active_holds
            FROM events e JOIN companies c ON c.id = e.company_id WHERE e.id = $1`,
         [eventId],
@@ -184,6 +188,7 @@ export class AgencyAdminService {
         pageState: this.currentPageState(r), activeHolds: r.active_holds,
         paymentInstructions: r.payment_instructions, retentionDays: r.retention_days,
         termsFileName: r.terms_file_name, termsVersion: r.terms_version,
+        images: agencyImages(eventId, { login: r.hero_object_key, 'login-mobile': r.login_mobile_object_key, home: r.home_image_object_key }),
       };
     });
   }
@@ -225,35 +230,85 @@ export class AgencyAdminService {
 
   // ===== 活動 =====
 
-  async createEvent(ctx: AgencyUserContext, input: { companyId: string; name: string; slug: string; pricingTierId: string }) {
+  async createEvent(ctx: AgencyUserContext, input: NewEventInput) {
     return this.uniqueSlug(() => this.db.withTenant(ctx.agencyId, async (tx) => {
-      // 同一旅行社、同一級距依序扣額度，避免同時建立時超扣。
-      await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`quota:${ctx.agencyId}:${input.pricingTierId}`]);
-      const { rows: tiers } = await tx.query(
-        `SELECT COALESCE((SELECT sum(l.change)::int FROM agency_quota_ledger l WHERE l.pricing_tier_id = t.id), 0) AS remaining
-           FROM pricing_tiers t WHERE t.id = $1 AND t.is_active`,
-        [input.pricingTierId],
-      );
-      if (!tiers[0]) throw new DomainError('NOT_FOUND');
-      if (tiers[0].remaining < 1) throw new DomainError('QUOTA_EMPTY');
-      const { rows: companies } = await tx.query(`SELECT id FROM companies WHERE id = $1 AND status = 'active'`, [input.companyId]);
-      if (!companies[0]) throw new DomainError('NOT_FOUND');
-      // 手動模式下，活動頁預設關閉，發布後由旅行社開啟。
-      const { rows } = await tx.query(
-        `INSERT INTO events (agency_id, company_id, slug, name, status, pricing_tier_id, page_mode, page_is_open, created_by)
-         VALUES ($1, $2, $3, $4, 'draft', $5, 'manual', false, $6) RETURNING id`,
-        [ctx.agencyId, input.companyId, input.slug, input.name, input.pricingTierId, ctx.user.id],
-      );
+      const id = await this.insertDraftEvent(tx, ctx, input);
       await tx.query(
         `INSERT INTO traveler_types (agency_id, event_id, name, base_price, is_employee_self) VALUES ($1, $2, '員工本人', 0, true)`,
-        [ctx.agencyId, rows[0].id],
+        [ctx.agencyId, id],
+      );
+      return { id };
+    }));
+  }
+
+  /** 新活動一律是草稿，不帶員工名單、報名、開放時間與梯次；檔案共用，不會被刪除。 */
+  async copyEvent(ctx: AgencyUserContext, sourceId: string, input: NewEventInput) {
+    return this.uniqueSlug(() => this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, sourceId, false);
+      const id = await this.insertDraftEvent(tx, ctx, input);
+      await tx.query(
+        `UPDATE events t SET itinerary = s.itinerary, theme_color = s.theme_color, support_phone = s.support_phone, support_hours = s.support_hours,
+                hero_object_key = s.hero_object_key, login_mobile_object_key = s.login_mobile_object_key, home_image_object_key = s.home_image_object_key,
+                default_subsidy_amount = s.default_subsidy_amount, default_dependent_limit = s.default_dependent_limit, allow_dependents_only = s.allow_dependents_only,
+                payment_instructions = s.payment_instructions, terms_object_key = s.terms_object_key, terms_file_name = s.terms_file_name, retention_days = s.retention_days
+           FROM events s WHERE t.id = $1 AND s.id = $2`,
+        [id, sourceId],
       );
       await tx.query(
-        `INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason, event_id, created_by) VALUES ($1, $2, -1, 'event_created', $3, $4)`,
-        [ctx.agencyId, input.pricingTierId, rows[0].id, ctx.user.id],
+        `INSERT INTO traveler_types (agency_id, event_id, name, base_price, is_employee_self, note, occupies_bed, sort_order)
+         SELECT agency_id, $1, name, base_price, is_employee_self, note, occupies_bed, sort_order FROM traveler_types WHERE event_id = $2`,
+        [id, sourceId],
       );
-      return { id: rows[0].id };
+      await tx.query(
+        `INSERT INTO event_fields (agency_id, event_id, field_key, label, field_type, choices, validation, is_required, is_sensitive, sort_order)
+         SELECT agency_id, $1, field_key, label, field_type, choices, validation, is_required, is_sensitive, sort_order FROM event_fields WHERE event_id = $2`,
+        [id, sourceId],
+      );
+      await tx.query(
+        `INSERT INTO event_service_contacts (agency_id, event_id, name, phone, scope, sort_order)
+         SELECT agency_id, $1, name, phone, scope, sort_order FROM event_service_contacts WHERE event_id = $2`,
+        [id, sourceId],
+      );
+      const { rows: groups } = await tx.query(`SELECT id FROM option_groups WHERE event_id = $1`, [sourceId]);
+      for (const g of groups) {
+        const { rows } = await tx.query(
+          `INSERT INTO option_groups (agency_id, event_id, name, is_required, min_select, max_select, is_room_type, preference_count, sort_order)
+           SELECT agency_id, $1, name, is_required, min_select, max_select, is_room_type, preference_count, sort_order FROM option_groups WHERE id = $2 RETURNING id`,
+          [id, g.id],
+        );
+        await tx.query(
+          `INSERT INTO options (agency_id, group_id, name, description, price, sort_order, pdf_object_key, pdf_file_name)
+           SELECT agency_id, $1, name, description, price, sort_order, pdf_object_key, pdf_file_name FROM options WHERE group_id = $2`,
+          [rows[0].id, g.id],
+        );
+      }
+      return { id };
     }));
+  }
+
+  private async insertDraftEvent(tx: Tx, ctx: AgencyUserContext, input: NewEventInput) {
+    // 同一旅行社、同一級距依序扣額度，避免同時建立時超扣。
+    await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`quota:${ctx.agencyId}:${input.pricingTierId}`]);
+    const { rows: tiers } = await tx.query(
+      `SELECT COALESCE((SELECT sum(l.change)::int FROM agency_quota_ledger l WHERE l.pricing_tier_id = t.id), 0) AS remaining
+         FROM pricing_tiers t WHERE t.id = $1 AND t.is_active`,
+      [input.pricingTierId],
+    );
+    if (!tiers[0]) throw new DomainError('NOT_FOUND');
+    if (tiers[0].remaining < 1) throw new DomainError('QUOTA_EMPTY');
+    const { rows: companies } = await tx.query(`SELECT id FROM companies WHERE id = $1 AND status = 'active'`, [input.companyId]);
+    if (!companies[0]) throw new DomainError('NOT_FOUND');
+    // 手動模式下，活動頁預設關閉，發布後由旅行社開啟。
+    const { rows } = await tx.query(
+      `INSERT INTO events (agency_id, company_id, slug, name, status, pricing_tier_id, page_mode, page_is_open, created_by)
+       VALUES ($1, $2, $3, $4, 'draft', $5, 'manual', false, $6) RETURNING id`,
+      [ctx.agencyId, input.companyId, input.slug, input.name, input.pricingTierId, ctx.user.id],
+    );
+    await tx.query(
+      `INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason, event_id, created_by) VALUES ($1, $2, -1, 'event_created', $3, $4)`,
+      [ctx.agencyId, input.pricingTierId, rows[0].id, ctx.user.id],
+    );
+    return rows[0].id as string;
   }
 
   /** 只有未發布的活動可以刪除，額度退回；代碼釋出給新活動使用。 */
@@ -509,7 +564,7 @@ export class AgencyAdminService {
         [eventId],
       );
       const { rows: options } = await tx.query(
-        `SELECT o.id, o.group_id, o.name, o.price FROM options o JOIN option_groups g ON g.id = o.group_id
+        `SELECT o.id, o.group_id, o.name, o.price, o.pdf_file_name FROM options o JOIN option_groups g ON g.id = o.group_id
           WHERE g.event_id = $1 ORDER BY o.sort_order, o.name`,
         [eventId],
       );
@@ -528,6 +583,7 @@ export class AgencyAdminService {
           id: o.id,
           name: o.name,
           price: o.price,
+          pdfFileName: o.pdf_file_name,
           quotas: Object.fromEntries(quotas.filter((q) => q.option_id === o.id)
             .map((q) => [q.session_id, { capacity: q.capacity, soldCount: q.sold_count }])),
         })),
@@ -743,6 +799,80 @@ export class AgencyAdminService {
     });
     if (!r.terms_object_key) throw new DomainError('NOT_FOUND');
     return { name: r.terms_file_name as string, content: await this.storage.get(r.terms_object_key) };
+  }
+
+  // ===== 前台圖片 =====
+
+  /** 舊檔不刪除：複製出去的活動可能共用同一個檔案。 */
+  uploadImage(ctx: AgencyUserContext, eventId: string, kind: string, content: unknown) {
+    const column = this.imageColumn(kind);
+    const ext = Buffer.isBuffer(content) ? imageExtension(content) : null;
+    if (!ext) throw new DomainError('INVALID_FILE');
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, true);
+      const key = `${ctx.agencyId}/events/${eventId}/images/${kind}-${randomBytes(6).toString('hex')}.${ext}`;
+      await this.storage.put(key, content as Buffer);
+      await tx.query(`UPDATE events SET ${column} = $2, updated_at = now() WHERE id = $1`, [eventId, key]);
+      return { ok: true };
+    });
+  }
+
+  async readImage(ctx: AgencyUserContext, eventId: string, kind: string) {
+    const column = this.imageColumn(kind);
+    const key = await this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, false);
+      const { rows } = await tx.query(`SELECT ${column} AS key FROM events WHERE id = $1`, [eventId]);
+      return rows[0].key as string | null;
+    });
+    if (!key) throw new DomainError('NOT_FOUND');
+    return { contentType: imageContentType(key), content: await this.storage.get(key) };
+  }
+
+  async deleteImage(ctx: AgencyUserContext, eventId: string, kind: string) {
+    const column = this.imageColumn(kind);
+    await this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, true);
+      await tx.query(`UPDATE events SET ${column} = NULL, updated_at = now() WHERE id = $1`, [eventId]);
+    });
+  }
+
+  private imageColumn(kind: string) {
+    if (!isImageKind(kind)) throw new DomainError('NOT_FOUND');
+    return IMAGE_COLUMN[kind];
+  }
+
+  // ===== 行程 PDF =====
+
+  uploadOptionPdf(ctx: AgencyUserContext, eventId: string, optionId: string, name: string, content: unknown) {
+    if (!Buffer.isBuffer(content) || content.subarray(0, 5).toString('latin1') !== '%PDF-') throw new DomainError('INVALID_FILE');
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, true);
+      await this.optionGroupId(tx, eventId, optionId);
+      const key = `${ctx.agencyId}/events/${eventId}/options/${optionId}-${randomBytes(6).toString('hex')}.pdf`;
+      const fileName = name.replace(/[\\/\p{Cc}]/gu, '').trim().slice(-200) || 'itinerary.pdf';
+      await this.storage.put(key, content);
+      await tx.query(`UPDATE options SET pdf_object_key = $2, pdf_file_name = $3 WHERE id = $1`, [optionId, key, fileName]);
+      return { pdfFileName: fileName };
+    });
+  }
+
+  async readOptionPdf(ctx: AgencyUserContext, eventId: string, optionId: string) {
+    const r = await this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, false);
+      await this.optionGroupId(tx, eventId, optionId);
+      const { rows } = await tx.query(`SELECT pdf_object_key, pdf_file_name FROM options WHERE id = $1`, [optionId]);
+      return rows[0];
+    });
+    if (!r.pdf_object_key) throw new DomainError('NOT_FOUND');
+    return { name: r.pdf_file_name as string, content: await this.storage.get(r.pdf_object_key) };
+  }
+
+  async deleteOptionPdf(ctx: AgencyUserContext, eventId: string, optionId: string) {
+    await this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, true);
+      await this.optionGroupId(tx, eventId, optionId);
+      await tx.query(`UPDATE options SET pdf_object_key = NULL, pdf_file_name = NULL WHERE id = $1`, [optionId]);
+    });
   }
 
   // ===== 服務人員 =====

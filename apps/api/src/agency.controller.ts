@@ -4,7 +4,7 @@ import type { Request, Response } from 'express';
 import type { ZodType } from 'zod';
 import { AgencyAdminService } from './agency-admin.service.ts';
 import { DomainError } from './errors.ts';
-import { assertSameOrigin, cookieValue, requestHost, sendPdf, type RequestHeaders } from './http.ts';
+import { assertSameOrigin, cookieValue, requestHost, sendImage, sendPdf, type RequestHeaders } from './http.ts';
 
 const COOKIE = 'bt_agency_session';
 const cookieOptions = () => ({
@@ -256,6 +256,45 @@ export class AgencyController {
   async downloadTerms(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Res() res: Response) {
     const file = await this.admin.readTerms(await this.configurer(h), eventId);
     sendPdf(res, file.name, file.content);
+  }
+
+  @Post('events/:eventId/copy')
+  async copyEvent(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    return this.admin.copyEvent(await this.configurer(h), eventId, parse(createEventRequest, body));
+  }
+
+  @Put('events/:eventId/images/:kind')
+  async uploadImage(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('kind') kind: string, @Req() req: Request) {
+    return this.admin.uploadImage(await this.configurer(h), eventId, kind, req.body);
+  }
+
+  @Get('events/:eventId/images/:kind')
+  async image(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('kind') kind: string, @Res() res: Response) {
+    const file = await this.admin.readImage(await this.configurer(h), eventId, kind);
+    sendImage(res, file.contentType, file.content, 'private, no-store');
+  }
+
+  @Delete('events/:eventId/images/:kind')
+  @HttpCode(204)
+  async deleteImage(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('kind') kind: string) {
+    await this.admin.deleteImage(await this.configurer(h), eventId, kind);
+  }
+
+  @Put('events/:eventId/options/:optionId/pdf')
+  async uploadOptionPdf(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('optionId') optionId: string, @Query('name') name: unknown, @Req() req: Request) {
+    return this.admin.uploadOptionPdf(await this.configurer(h), eventId, optionId, typeof name === 'string' ? name : '', req.body);
+  }
+
+  @Get('events/:eventId/options/:optionId/pdf')
+  async optionPdf(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('optionId') optionId: string, @Res() res: Response) {
+    const file = await this.admin.readOptionPdf(await this.configurer(h), eventId, optionId);
+    sendPdf(res, file.name, file.content);
+  }
+
+  @Delete('events/:eventId/options/:optionId/pdf')
+  @HttpCode(204)
+  async deleteOptionPdf(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('optionId') optionId: string) {
+    await this.admin.deleteOptionPdf(await this.configurer(h), eventId, optionId);
   }
 
   @Get('events/:eventId/contacts')
