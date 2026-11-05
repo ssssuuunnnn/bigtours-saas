@@ -11,13 +11,13 @@ export interface AgencyInfo {
   code: string;
   name: string;
   logoObjectKey: string | null;
-  primaryColor: string | null;
 }
 
 export interface EventInfo {
   id: string;
   slug: string;
   name: string;
+  themeColor: string;
   itinerary: unknown;
   status: string;
   registrationOpensAt: Date | null;
@@ -57,12 +57,12 @@ export class AccessService {
   async findAgency(host: string | undefined): Promise<AgencyInfo> {
     const code = this.agencyCodeFromHost(host);
     const { rows } = await this.db.pool.query(
-      `SELECT id, code, name, logo_object_key, primary_color FROM agencies WHERE code = $1 AND status = 'active'`,
+      `SELECT id, code, name, logo_object_key FROM agencies WHERE code = $1 AND status = 'active'`,
       [code],
     );
     const a = rows[0];
     if (!a) throw new DomainError('NOT_FOUND');
-    return { id: a.id, code: a.code, name: a.name, logoObjectKey: a.logo_object_key, primaryColor: a.primary_color };
+    return { id: a.id, code: a.code, name: a.name, logoObjectKey: a.logo_object_key };
   }
 
   async findEvent(agencyId: string, slug: string): Promise<EventInfo> {
@@ -70,7 +70,7 @@ export class AccessService {
       const { rows } = await tx.query(
         `SELECT id, slug, name, itinerary, status, registration_opens_at, registration_closes_at,
                 default_subsidy_amount, default_dependent_limit, allow_dependents_only, terms_version,
-                page_mode, page_is_open, page_opens_at, page_closes_at
+                page_mode, page_is_open, page_opens_at, page_closes_at, theme_color
            FROM events WHERE slug = $1 AND status IN ('published', 'closed')`,
         [slug],
       );
@@ -81,6 +81,7 @@ export class AccessService {
       id: r.id,
       slug: r.slug,
       name: r.name,
+      themeColor: r.theme_color,
       itinerary: r.itinerary,
       status: r.status,
       registrationOpensAt: r.registration_opens_at,

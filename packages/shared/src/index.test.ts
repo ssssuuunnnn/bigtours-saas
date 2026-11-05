@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AGENCY_ROLES, calculateFees, can, isValidPassword, maskValue, pageState, pinnedNavRequest, seatStatus } from './index.ts';
+import { AGENCY_ROLES, calculateFees, can, createEventRequest, eventScheduleRequest, isValidPassword, maskValue, pageState, pinnedNavRequest, readableOn, seatStatus } from './index.ts';
 import { decrypt, encrypt, hashPassword, loadKey, verifyPassword } from './crypto.ts';
 
 describe('calculateFees', () => {
@@ -98,5 +98,29 @@ describe('釘選選單', () => {
   it('拒絕未知項目與重複項目', () => {
     expect(pinnedNavRequest.safeParse({ items: ['nope'] }).success).toBe(false);
     expect(pinnedNavRequest.safeParse({ items: ['rooms', 'rooms'] }).success).toBe(false);
+  });
+});
+
+describe('活動設定', () => {
+  const id = '11111111-1111-4111-8111-111111111111';
+  const event = (slug: string) => ({ companyId: id, pricingTierId: id, name: 'E', slug });
+  it('活動代碼轉小寫，且不能用保留字或特殊符號', () => {
+    expect(createEventRequest.parse(event('Tokyo-2027')).slug).toBe('tokyo-2027');
+    expect(createEventRequest.safeParse(event('admin')).success).toBe(false);
+    expect(createEventRequest.safeParse(event('a b')).success).toBe(false);
+  });
+  const schedule = (o: object) => ({ pageMode: 'manual', pageOpensAt: null, pageClosesAt: null, registrationOpensAt: null, registrationClosesAt: null, ...o });
+  const t1 = '2027-01-04T01:00:00.000Z', t2 = '2027-01-29T10:00:00.000Z';
+  it('自動開關必須有開始與結束時間', () => {
+    expect(eventScheduleRequest.safeParse(schedule({ pageMode: 'scheduled' })).success).toBe(false);
+    expect(eventScheduleRequest.safeParse(schedule({ pageMode: 'scheduled', pageOpensAt: t1, pageClosesAt: t2 })).success).toBe(true);
+  });
+  it('結束時間要晚於開始時間', () => {
+    expect(eventScheduleRequest.safeParse(schedule({ registrationOpensAt: t2, registrationClosesAt: t1 })).success).toBe(false);
+    expect(eventScheduleRequest.safeParse(schedule({ pageOpensAt: t2, pageClosesAt: t1 })).success).toBe(false);
+  });
+  it('主色上的文字顏色會依深淺調整', () => {
+    expect(readableOn('#0E6B72')).toBe('#FFFFFF');
+    expect(readableOn('#F2B705')).toBe('#15202B');
   });
 });

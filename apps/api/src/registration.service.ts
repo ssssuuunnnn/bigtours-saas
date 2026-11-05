@@ -59,10 +59,11 @@ export class RegistrationService {
       const registration = await this.loadRegistration(tx, ctx.employee.id, config);
       const draft = await this.loadDraft(tx, ctx.employee.id, config);
       return {
-        agency: { name: ctx.agency.name, primaryColor: ctx.agency.primaryColor },
+        agency: { name: ctx.agency.name },
         event: {
           slug: ctx.event.slug,
           name: ctx.event.name,
+          themeColor: ctx.event.themeColor,
           itinerary: ctx.event.itinerary,
           registrationOpensAt: ctx.event.registrationOpensAt,
           registrationClosesAt: ctx.event.registrationClosesAt,

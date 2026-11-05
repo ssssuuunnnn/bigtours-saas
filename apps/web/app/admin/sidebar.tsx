@@ -12,7 +12,7 @@ const COLLAPSE_KEY = 'bt_admin_nav_collapsed';
 
 export function Sidebar({ me, onPinned, onLogout }: { me: AdminMe; onPinned: (items: EventNavKey[]) => void; onLogout: () => void }) {
   const pathname = usePathname();
-  const match = pathname.match(/^\/admin\/events\/([^/]+)(?:\/([^/]+))?/);
+  const match = pathname === '/admin/events/new' ? null : pathname.match(/^\/admin\/events\/([^/]+)(?:\/([^/]+))?/);
   return (
     <aside className="admin-side">
       <Link href="/admin" className="admin-brand">{me.agencyName}<span>{a.title}</span></Link>

@@ -27,7 +27,7 @@ try {
     }
     await client.query('DELETE FROM agencies WHERE id = $1', [old.id]);
   }
-  const agency = (await one(`INSERT INTO agencies (code, name, primary_color) VALUES ($1, '示範旅行社', '#0f766e') RETURNING id`, [code])).id;
+  const agency = (await one(`INSERT INTO agencies (code, name) VALUES ($1, '示範旅行社') RETURNING id`, [code])).id;
   const company = (await one(`INSERT INTO companies (agency_id, name) VALUES ($1, '艾克米科技') RETURNING id`, [agency])).id;
 
   let tier = await one('SELECT id FROM pricing_tiers WHERE min_travelers = 200 AND max_travelers = 1000');
@@ -39,6 +39,9 @@ try {
     }
     tier = await one('SELECT id FROM pricing_tiers WHERE min_travelers = 200 AND max_travelers = 1000');
   }
+
+  await client.query(`INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason, note)
+                      SELECT $1, id, 3, 'grant', '示範額度' FROM pricing_tiers WHERE is_active AND max_travelers <= 1500`, [agency]);
 
   const event = (await one(
     `INSERT INTO events (agency_id, company_id, slug, name, status, pricing_tier_id, default_subsidy_amount, default_dependent_limit, ends_on,

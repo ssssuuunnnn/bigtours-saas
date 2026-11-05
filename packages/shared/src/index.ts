@@ -81,7 +81,7 @@ export const ERROR_CODES = [
   'HOLD_MISMATCH', 'SESSION_FULL', 'OPTION_FULL', 'INVALID_SELECTION', 'INVALID_DETAILS', 'NOT_CANCELLABLE',
   'UNAUTHENTICATED', 'INVALID_CREDENTIALS', 'PAGE_CLOSED', 'FORBIDDEN_ORIGIN', 'LINK_INVALID', 'INVALID_PASSWORD',
   'INVALID_INPUT', 'CAPACITY_BELOW_SOLD', 'TIER_LIMIT_EXCEEDED', 'SESSION_IN_USE', 'FIELD_LOCKED',
-  'FORBIDDEN',
+  'FORBIDDEN', 'QUOTA_EMPTY', 'SLUG_TAKEN', 'EVENT_NOT_DRAFT', 'EVENT_NOT_PUBLISHED', 'PAGE_MODE_MISMATCH',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
@@ -155,6 +155,54 @@ export const fieldInput = z.object({
 export type FieldInput = z.infer<typeof fieldInput>;
 
 export const orderRequest = z.object({ ids: z.array(z.string().uuid()).min(1).max(200) });
+
+// ===== 活動設定 =====
+
+const eventSlug = z.string().trim().toLowerCase().min(2).max(50).regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/).refine((v) => v !== 'admin');
+const eventName = z.string().trim().min(1).max(100);
+const optionalText = (max: number) => z.string().trim().max(max).nullable().transform((v) => v || null);
+const isoDateTime = z.string().datetime({ offset: true }).nullable();
+
+export const companyInput = z.object({ name: z.string().trim().min(1).max(100) });
+
+export const createEventRequest = z.object({
+  companyId: z.string().uuid(),
+  name: eventName,
+  slug: eventSlug,
+  pricingTierId: z.string().uuid(),
+});
+
+export const eventBasicRequest = z.object({
+  name: eventName,
+  slug: eventSlug,
+  days: z.array(z.object({ title: z.string().trim().min(1).max(50), description: z.string().trim().max(500) })).max(30),
+  themeColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
+  supportPhone: optionalText(30),
+  supportHours: optionalText(100),
+});
+export type EventBasicInput = z.infer<typeof eventBasicRequest>;
+
+export const eventScheduleRequest = z.object({
+  pageMode: z.enum(['manual', 'scheduled']),
+  pageOpensAt: isoDateTime,
+  pageClosesAt: isoDateTime,
+  registrationOpensAt: isoDateTime,
+  registrationClosesAt: isoDateTime,
+}).superRefine((v, ctx) => {
+  const after = (a: string | null, b: string | null) => !a || !b || Date.parse(b) > Date.parse(a);
+  if (v.pageMode === 'scheduled' && (!v.pageOpensAt || !v.pageClosesAt)) ctx.addIssue({ code: 'custom', path: ['pageOpensAt'], message: 'required' });
+  if (!after(v.pageOpensAt, v.pageClosesAt)) ctx.addIssue({ code: 'custom', path: ['pageClosesAt'], message: 'order' });
+  if (!after(v.registrationOpensAt, v.registrationClosesAt)) ctx.addIssue({ code: 'custom', path: ['registrationClosesAt'], message: 'order' });
+});
+export type EventScheduleInput = z.infer<typeof eventScheduleRequest>;
+
+export const pageSwitchRequest = z.object({ open: z.boolean() });
+
+/** 主色上的文字顏色：淺色配深字，深色配白字。 */
+export function readableOn(hex: string) {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)) as [number, number, number];
+  return 0.299 * r + 0.587 * g + 0.114 * b > 150 ? '#15202B' : '#FFFFFF';
+}
 
 // ===== 旅行社人員權限 =====
 

@@ -4,6 +4,7 @@ import { isValidPassword } from '@bigtours/shared';
 import { useEffect, useMemo, useState } from 'react';
 import { ApiError, createClient, type PasswordLink } from '../../../../lib/api';
 import { t } from '../../../../messages/zh-TW';
+import { brandStyle } from '../../../../lib/brand';
 
 export function SetPasswordFlow({ slug, token }: { slug: string; token: string }) {
   const api = useMemo(() => createClient(slug), [slug]);
@@ -36,7 +37,7 @@ export function SetPasswordFlow({ slug, token }: { slug: string; token: string }
     );
   }
 
-  const brand = { '--brand': link.agency.primaryColor ?? '#0f766e' } as React.CSSProperties;
+  const brand = brandStyle(link.event.themeColor);
   if (employeeNo) return <div style={brand}><PasswordDone slug={slug} agency={link.agency.name} employeeNo={employeeNo} /></div>;
 
   const ruleBroken = checked && !isValidPassword(password);

@@ -43,8 +43,8 @@ export interface Registration {
   travelers: { name: string; travelerTypeName: string; basePrice: number; fieldValues: Record<string, any>; requestedRoomNo: number | null; options: { name: string; price: number }[] }[];
 }
 export interface EventState {
-  agency: { name: string; primaryColor: string | null };
-  event: { name: string; itinerary: { summary?: string; days?: { title: string; description: string }[] }; openState: 'not_open' | 'open' | 'closed'; registrationOpensAt: string | null; registrationClosesAt: string | null; allowDependentsOnly: boolean };
+  agency: { name: string };
+  event: { name: string; themeColor: string; itinerary: { summary?: string; days?: { title: string; description: string }[] }; openState: 'not_open' | 'open' | 'closed'; registrationOpensAt: string | null; registrationClosesAt: string | null; allowDependentsOnly: boolean };
   employee: { name: string; subsidyAmount: number; dependentLimit: number };
   travelerTypes: TravelerType[];
   optionGroups: OptionGroup[];
@@ -57,12 +57,12 @@ export interface EventState {
 }
 
 export interface Landing {
-  agency: { name: string; primaryColor: string | null };
-  event: { slug: string; name: string; registrationOpensAt: string | null; registrationClosesAt: string | null; pageState: 'open' | 'not_open' | 'closed'; pageOpensAt: string | null };
+  agency: { name: string };
+  event: { slug: string; name: string; themeColor: string; registrationOpensAt: string | null; registrationClosesAt: string | null; pageState: 'open' | 'not_open' | 'closed'; pageOpensAt: string | null };
 }
 export interface PasswordLink {
-  agency: { name: string; primaryColor: string | null };
-  event: { name: string };
+  agency: { name: string };
+  event: { name: string; themeColor: string };
   employee: { name: string };
 }
 

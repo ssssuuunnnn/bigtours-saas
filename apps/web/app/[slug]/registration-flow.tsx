@@ -4,6 +4,7 @@ import { calculateFees } from '@bigtours/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, createClient, type EventState, type Field, type Registration, type SessionAvailability, type Traveler } from '../../lib/api';
 import { formatDateTime, money, t } from '../../messages/zh-TW';
+import { brandStyle } from '../../lib/brand';
 
 /** crypto.randomUUID 只能在 HTTPS 使用；本機以 http://*.lvh.me 開發時改用 getRandomValues。 */
 function uuid(): string {
@@ -111,7 +112,7 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
   if (fatal) return <main className="center-note"><p role="alert">{t.loadFailed}</p></main>;
   if (!state || !fees) return <main className="center-note" aria-busy="true"><p>{t.loading}</p></main>;
 
-  const brand = { '--brand': state.agency.primaryColor ?? '#0f766e' } as React.CSSProperties;
+  const brand = brandStyle(state.event.themeColor);
   const selfTypeIds = new Set(state.travelerTypes.filter((x) => x.isEmployeeSelf).map((x) => x.id));
   const dependents = travelers.filter((x) => !selfTypeIds.has(x.travelerTypeId)).length;
   const dependentLeft = state.employee.dependentLimit - dependents;

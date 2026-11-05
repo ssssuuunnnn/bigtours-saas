@@ -28,4 +28,4 @@ export const usesFullEventNav = (role: string) => can(role, 'configureEvents');
 export const canSeeEventSection = (role: string, section: EventNavKey) =>
   usesFullEventNav(role) || OPERATIONS_NAV.includes(section);
 
-export const defaultEventSection = (role: string): EventNavKey => (usesFullEventNav(role) ? 'sessions' : 'overview');
+export const defaultEventSection = (role: string): EventNavKey => (usesFullEventNav(role) ? 'basic' : 'overview');

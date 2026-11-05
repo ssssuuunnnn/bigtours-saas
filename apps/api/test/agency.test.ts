@@ -304,3 +304,152 @@ describe('角色權限', () => {
     await pin(await makeAgency('operations'), ['rooms']).expect(403);
   });
 });
+
+describe('活動設定', () => {
+  const http = () => request(app.getHttpServer());
+  const root = (a: Ag) => ({
+    get: (p: string) => http().get(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie),
+    post: (p: string, b: object) => http().post(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie).send(b),
+    del: (p: string) => http().delete(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie),
+  });
+  const grant = (a: Ag, n: number) => admin.query(`INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason) VALUES ($1, $2, $3, 'grant')`, [a.agencyId, tierId, n]);
+  const remaining = async (a: Ag) => (await root(a).get('/quota').expect(200)).body.find((t: any) => t.id === tierId).remaining as number;
+  const companyId = async (a: Ag) => (await root(a).get('/companies').expect(200)).body[0].id as string;
+  const create = async (a: Ag, slug = 'new-event') => root(a).post('/events', { companyId: await companyId(a), name: '新活動', slug, pricingTierId: tierId });
+  const basic = (o: object = {}) => ({ name: '花東三日遊', slug: 'evt', days: [{ title: '第 1 天', description: '花蓮' }], themeColor: '#1F3A8A', supportPhone: '0800-000-000', supportHours: null, ...o });
+  const schedule = (o: object = {}) => ({ pageMode: 'manual', pageOpensAt: null, pageClosesAt: null, registrationOpensAt: null, registrationClosesAt: null, ...o });
+
+  it('建立活動會扣一場額度，預設為草稿且活動頁關閉', async () => {
+    const a = await makeAgency();
+    await grant(a, 2);
+    const res = await create(a);
+    expect(res.status).toBe(201);
+    expect(await remaining(a)).toBe(1);
+    const detail = (await root(a).get(`/events/${res.body.id}`).expect(200)).body;
+    expect(detail).toMatchObject({ status: 'draft', pageMode: 'manual', pageIsOpen: false, pageState: 'closed', themeColor: '#0E6B72' });
+  });
+
+  it('額度用完時不能建立活動', async () => {
+    const a = await makeAgency();
+    const res = await create(a);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('QUOTA_EMPTY');
+  });
+
+  it('同時建立活動不會超扣額度', async () => {
+    const a = await makeAgency();
+    await grant(a, 2);
+    const company = await companyId(a);
+    const results = await Promise.all([1, 2, 3, 4, 5].map((i) => root(a).post('/events', { companyId: company, name: 'E', slug: `race-${i}`, pricingTierId: tierId })));
+    expect(results.filter((r) => r.status === 201)).toHaveLength(2);
+    expect(results.filter((r) => r.body.code === 'QUOTA_EMPTY')).toHaveLength(3);
+    expect(await remaining(a)).toBe(0);
+  });
+
+  it('活動代碼重複時回傳明確錯誤且不扣額度', async () => {
+    const a = await makeAgency();
+    await grant(a, 2);
+    const res = await create(a, 'evt');
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('SLUG_TAKEN');
+    expect(await remaining(a)).toBe(2);
+  });
+
+  it('不能使用其他旅行社的企業建立活動', async () => {
+    const a = await makeAgency();
+    const other = await makeAgency();
+    await grant(a, 1);
+    const company = await companyId(other);
+    await root(a).post('/events', { companyId: company, name: 'E', slug: 'x-1', pricingTierId: tierId }).expect(404);
+  });
+
+  it('草稿刪除後額度退回，代碼可重新使用；已發布的活動不能刪除', async () => {
+    const a = await makeAgency();
+    await grant(a, 1);
+    const { body } = await create(a, 'again');
+    expect(await remaining(a)).toBe(0);
+    await root(a).del(`/events/${body.id}`).expect(204);
+    expect(await remaining(a)).toBe(1);
+    expect((await root(a).get('/events')).body.map((e: any) => e.id)).not.toContain(body.id);
+    expect((await create(a, 'again')).status).toBe(201);
+    const res = await root(a).del(`/events/${a.eventId}`).expect(409);
+    expect(res.body.code).toBe('EVENT_NOT_DRAFT');
+  });
+
+  it('可以修改基本資料，前台改用活動主色', async () => {
+    const a = await makeAgency();
+    await api(a).put('/basic', basic()).expect(204);
+    const detail = (await api(a).get('').expect(200)).body;
+    expect(detail).toMatchObject({ name: '花東三日遊', themeColor: '#1F3A8A', supportPhone: '0800-000-000', supportHours: null });
+    expect(detail.days).toHaveLength(1);
+    const landing = await http().get('/api/v1/public/events/evt/landing').set('x-forwarded-host', a.host);
+    expect(landing.body.event.themeColor).toBe('#1F3A8A');
+  });
+
+  it('修改基本資料保留行程摘要', async () => {
+    const a = await makeAgency();
+    await admin.query(`UPDATE events SET itinerary = '{"summary":"S"}' WHERE id = $1`, [a.eventId]);
+    await api(a).put('/basic', basic()).expect(204);
+    expect((await q1(`SELECT itinerary FROM events WHERE id = $1`, [a.eventId])).itinerary.summary).toBe('S');
+  });
+
+  it('發布後不能改活動代碼，色碼必須正確', async () => {
+    const a = await makeAgency();
+    const res = await api(a).put('/basic', basic({ slug: 'other' })).expect(409);
+    expect(res.body.code).toBe('EVENT_NOT_DRAFT');
+    await api(a).put('/basic', basic({ themeColor: 'blue' })).expect(422);
+  });
+
+  it('自動模式下依時間開關，手動開關會被拒絕', async () => {
+    const a = await makeAgency();
+    const future = new Date(Date.now() + 86400000).toISOString(), later = new Date(Date.now() + 2 * 86400000).toISOString();
+    await api(a).put('/schedule', schedule({ pageMode: 'scheduled', pageOpensAt: future, pageClosesAt: later })).expect(204);
+    expect((await api(a).get('').expect(200)).body.pageState).toBe('not_open');
+    const res = await api(a).put('/page', { open: true }).expect(409);
+    expect(res.body.code).toBe('PAGE_MODE_MISMATCH');
+  });
+
+  it('從自動切回手動時維持目前狀態', async () => {
+    const a = await makeAgency();
+    const future = new Date(Date.now() + 86400000).toISOString(), later = new Date(Date.now() + 2 * 86400000).toISOString();
+    await api(a).put('/schedule', schedule({ pageMode: 'scheduled', pageOpensAt: future, pageClosesAt: later })).expect(204);
+    await api(a).put('/schedule', schedule()).expect(204);
+    expect((await api(a).get('')).body).toMatchObject({ pageMode: 'manual', pageIsOpen: false, pageState: 'closed' });
+  });
+
+  it('手動開關活動頁；草稿不能開啟', async () => {
+    const a = await makeAgency();
+    await api(a).put('/page', { open: false }).expect(204);
+    expect((await api(a).get('')).body.pageState).toBe('closed');
+    await api(a).put('/page', { open: true }).expect(204);
+    expect((await api(a).get('')).body.pageState).toBe('open');
+    await grant(a, 1);
+    const { body } = await create(a, 'draft-1');
+    const res = await http().put(`/api/v1/agency/events/${body.id}/page`).set('x-forwarded-host', a.host).set('cookie', a.cookie).send({ open: true }).expect(409);
+    expect(res.body.code).toBe('EVENT_NOT_PUBLISHED');
+  });
+
+  it('設定時間順序錯誤會被拒絕', async () => {
+    const a = await makeAgency();
+    await api(a).put('/schedule', schedule({ registrationOpensAt: '2027-02-01T00:00:00Z', registrationClosesAt: '2027-01-01T00:00:00Z' })).expect(422);
+  });
+
+  it('企業客戶可以新增，並彼此隔離', async () => {
+    const a = await makeAgency();
+    const other = await makeAgency();
+    await root(a).post('/companies', { name: '永晟科技' }).expect(201);
+    expect((await root(a).get('/companies')).body.map((c: any) => c.name)).toContain('永晟科技');
+    expect((await root(other).get('/companies')).body.map((c: any) => c.name)).not.toContain('永晟科技');
+  });
+
+  it('營運人員不能建立或修改活動', async () => {
+    const a = await makeAgency('operations');
+    await root(a).get('/quota').expect(403);
+    await root(a).get('/companies').expect(403);
+    await root(a).post('/events', {}).expect(403);
+    await api(a).put('/basic', basic()).expect(403);
+    await api(a).put('/schedule', schedule()).expect(403);
+    await api(a).put('/page', { open: true }).expect(403);
+    await root(a).del(`/events/${a.eventId}`).expect(403);
+  });
+});
