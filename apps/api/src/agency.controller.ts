@@ -1,9 +1,10 @@
 import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Put, Query, Req, Res } from '@nestjs/common';
-import { agencyLoginRequest, companyInput, contactsRequest, createEventRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
+import { agencyLoginRequest, accountEmailRequest, companyInput, contactsRequest, createEventRequest, employeeInput, rosterCopyRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
 import type { Request, Response } from 'express';
 import type { ZodType } from 'zod';
 import { AgencyAdminService } from './agency-admin.service.ts';
 import { DomainError } from './errors.ts';
+import { RosterService } from './roster.service.ts';
 import { assertSameOrigin, cookieValue, requestHost, sendImage, sendPdf, type RequestHeaders } from './http.ts';
 
 const COOKIE = 'bt_agency_session';
@@ -23,7 +24,10 @@ function parse<T>(schema: ZodType<T, any, any>, body: unknown): T {
 /** 旅行社後台：旅行社由網址判定，資料由 RLS 隔離，操作權限依角色檢查。 */
 @Controller('api/v1/agency')
 export class AgencyController {
-  constructor(@Inject(AgencyAdminService) private readonly admin: AgencyAdminService) {}
+  constructor(
+    @Inject(AgencyAdminService) private readonly admin: AgencyAdminService,
+    @Inject(RosterService) private readonly roster: RosterService,
+  ) {}
 
   private ctx(h: RequestHeaders) {
     assertSameOrigin(h);
@@ -295,6 +299,63 @@ export class AgencyController {
   @HttpCode(204)
   async deleteOptionPdf(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('optionId') optionId: string) {
     await this.admin.deleteOptionPdf(await this.configurer(h), eventId, optionId);
+  }
+
+  @Get('events/:eventId/employees')
+  async employees(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Query() q: Record<string, unknown>) {
+    const text = (v: unknown) => (typeof v === 'string' ? v : undefined);
+    return this.roster.list(await this.configurer(h), eventId, { search: text(q.search), account: text(q.account), registration: text(q.registration), page: Number(q.page) || 1 });
+  }
+
+  @Post('events/:eventId/employees')
+  async createEmployee(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    return this.roster.create(await this.configurer(h), eventId, parse(employeeInput, body));
+  }
+
+  @Post('events/:eventId/employees/import/preview')
+  @HttpCode(200)
+  async previewImport(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Req() req: Request) {
+    return this.roster.previewImport(await this.configurer(h), eventId, req.body);
+  }
+
+  @Post('events/:eventId/employees/import')
+  @HttpCode(200)
+  async importEmployees(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Req() req: Request) {
+    return this.roster.import(await this.configurer(h), eventId, req.body);
+  }
+
+  @Get('events/:eventId/employees/copy-sources')
+  async rosterSources(@Headers() h: RequestHeaders, @Param('eventId') eventId: string) {
+    return this.roster.copySources(await this.configurer(h), eventId);
+  }
+
+  @Post('events/:eventId/employees/copy')
+  @HttpCode(200)
+  async copyRoster(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    return this.roster.copyFrom(await this.configurer(h), eventId, parse(rosterCopyRequest, body).fromEventId);
+  }
+
+  @Post('events/:eventId/employees/account-emails')
+  @HttpCode(202)
+  async accountEmails(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    return this.roster.sendAccountEmails(await this.configurer(h), eventId, parse(accountEmailRequest, body));
+  }
+
+  @Patch('events/:eventId/employees/:employeeId')
+  @HttpCode(204)
+  async updateEmployee(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('employeeId') employeeId: string, @Body() body: unknown) {
+    await this.roster.update(await this.configurer(h), eventId, employeeId, parse(employeeInput, body));
+  }
+
+  @Delete('events/:eventId/employees/:employeeId')
+  @HttpCode(204)
+  async removeEmployee(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('employeeId') employeeId: string) {
+    await this.roster.remove(await this.configurer(h), eventId, employeeId);
+  }
+
+  @Post('events/:eventId/employees/:employeeId/password-link')
+  async passwordLink(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('employeeId') employeeId: string) {
+    return this.roster.issueLink(await this.configurer(h), eventId, employeeId);
   }
 
   @Get('events/:eventId/contacts')

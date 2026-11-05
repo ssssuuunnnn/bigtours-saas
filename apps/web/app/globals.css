@@ -23,7 +23,7 @@ body {
   font: 400 16px/1.65 'PingFang TC', 'Noto Sans TC', 'Microsoft JhengHei', system-ui, sans-serif;
 }
 h1, h2, h3, p { margin: 0; }
-button, input, select { font: inherit; color: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; }
 :focus-visible { outline: 3px solid var(--flap); outline-offset: 2px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .muted { color: var(--ink-soft); font-size: 14px; font-weight: 400; }
@@ -76,7 +76,7 @@ button, input, select { font: inherit; color: inherit; }
 .traveler-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
 .traveler-head h3 { font-size: 16px; margin-right: auto; }
 .price { font-size: 15px; }
-select, textarea, input[type='text'], input[type='password'], input[type='email'], input[type='date'], input[type='time'], input[type='number'], input[type='datetime-local'], input[type='tel'] {
+select, textarea, input[type='text'], input[type='password'], input[type='email'], input[type='date'], input[type='time'], input[type='number'], input[type='datetime-local'], input[type='tel'], input[type='search'] {
   min-height: 44px; padding: 8px 10px; border: 1px solid var(--ink-soft); border-radius: 4px; background: var(--paper); width: 100%;
 }
 .traveler-head select { width: auto; max-width: 100%; }
@@ -255,6 +255,26 @@ a.primary-link { display: flex; align-items: center; justify-content: center; mi
 .login-scene .page { position: relative; }
 .home-banner { display: block; width: 100%; max-height: 240px; object-fit: cover; }
 .option-pdf { display: inline-block; margin: 4px 0 8px; font-size: 14px; color: var(--brand-text); min-height: 24px; }
+.admin-roster-tools { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 12px; }
+.admin-roster-tools .field { flex: 1 1 160px; }
+.admin-roster-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; min-height: 44px; }
+.admin-account { font-weight: 500; white-space: nowrap; }
+.admin-account.good { color: #116149; }
+.admin-account.wait { color: #7A4B00; }
+.admin-account.bad { color: #B42318; }
+.admin-account.idle { color: var(--ink-soft); }
+.admin-pager { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+.admin-import-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.admin-import-cards div { padding: 12px 16px; background: var(--paper); border-radius: 4px; }
+.admin-import-cards span { display: block; font-size: 14px; color: var(--ink-soft); }
+.admin-import-cards strong { font-size: 22px; }
+.admin-import-cards .bad strong { color: #B42318; }
+.admin-link-url { display: flex; gap: 8px; }
+.admin-link-url input { flex: 1; min-width: 0; }
+.admin-link-notes { margin: 0; padding-left: 20px; display: grid; gap: 4px; font-size: 14px; }
+.admin-file-button { display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; border: 2px solid var(--ink); border-radius: 4px; font-weight: 700; cursor: pointer; }
+.admin-file-input:focus-visible + .admin-file-button { outline: 3px solid var(--brand); outline-offset: 2px; }
+.admin-row-input { width: 20px; height: 20px; accent-color: var(--brand); display: block; }
 .admin-actions { white-space: nowrap; }
 .admin-actions button { margin-right: 10px; }
 .move { display: inline-flex; gap: 4px; }

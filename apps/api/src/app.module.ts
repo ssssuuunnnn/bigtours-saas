@@ -10,9 +10,12 @@ import { EncryptionService } from './encryption.service.ts';
 import { PublicController } from './public.controller.ts';
 import { DomainError } from './errors.ts';
 import { RegistrationService } from './registration.service.ts';
+import { MailService } from './mail.service.ts';
+import { RosterService } from './roster.service.ts';
 import { StorageService } from './storage.service.ts';
 
 const pdfBody = raw({ type: 'application/pdf', limit: '10mb' });
+const csvBody = raw({ type: 'text/csv', limit: '5mb' });
 const imageBody = raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: '5mb' });
 
 /** 超過上限時回傳明確的錯誤代碼，而不是通用的錯誤。 */
@@ -22,13 +25,17 @@ const parseFile = (parser: typeof pdfBody) => (req: Request, res: Response, next
 
 @Module({
   controllers: [AccountController, AgencyController, PublicController],
-  providers: [DatabaseService, EncryptionService, AccessService, AccountService, AgencyAdminService, RegistrationService, StorageService],
+  providers: [DatabaseService, EncryptionService, AccessService, AccountService, AgencyAdminService, RegistrationService, StorageService, MailService, RosterService],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
     consumer.apply(parseFile(pdfBody)).forRoutes(
       { path: 'api/v1/agency/events/:eventId/terms', method: RequestMethod.PUT },
       { path: 'api/v1/agency/events/:eventId/options/:optionId/pdf', method: RequestMethod.PUT },
+    );
+    consumer.apply(parseFile(csvBody)).forRoutes(
+      { path: 'api/v1/agency/events/:eventId/employees/import', method: RequestMethod.POST },
+      { path: 'api/v1/agency/events/:eventId/employees/import/preview', method: RequestMethod.POST },
     );
     consumer.apply(parseFile(imageBody)).forRoutes({ path: 'api/v1/agency/events/:eventId/images/:kind', method: RequestMethod.PUT });
   }

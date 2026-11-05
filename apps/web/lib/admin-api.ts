@@ -10,6 +10,17 @@ export interface AdminEvent {
   images: { login: string | null; loginMobile: string | null; home: string | null };
   pageState: 'open' | 'not_open' | 'closed'; activeHolds: number;
 }
+export type AccountState = 'activated' | 'sending' | 'link_issued' | 'failed' | 'sent' | 'expired' | 'no_email' | 'none';
+export interface EmployeeValues { employeeNo: string; name: string; email: string | null; department: string | null; subsidyAmount: number | null; dependentLimit: number | null }
+export interface AdminEmployee extends EmployeeValues { id: string; accountState: AccountState; registered: boolean; activated: boolean }
+export interface RosterPage {
+  rows: AdminEmployee[]; total: number; page: number; pageSize: number; rosterTotal: number;
+  summary: Record<AccountState, number>;
+  defaults: { subsidyAmount: number; dependentLimit: number };
+}
+export interface ImportIssue { row: number; employeeNo: string; name: string; code: string; value?: string; firstRow?: number }
+export interface ImportPreview { newCount: number; updateCount: number; errorCount: number; duplicateCount: number; issues: ImportIssue[]; issuesTruncated: boolean }
+export interface PasswordLink { token: string; slug: string; expiresAt: string; notified: boolean; issuedBy: string }
 export interface ContactValues { id: string | null; name: string; phone: string; scope: string }
 export type PublishCheckKey = 'basic' | 'heroImage' | 'schedule' | 'sessions' | 'types' | 'options' | 'fields' | 'terms' | 'payment' | 'contacts' | 'roster';
 export interface PublishCheck { key: PublishCheckKey; state: 'ok' | 'warn' | 'block' | 'confirm'; data: Record<string, any> }
@@ -53,8 +64,8 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 export type ImageKind = 'login' | 'login-mobile' | 'home';
 
 /** 檔案以原始內容送出，不走 JSON。 */
-async function upload<T>(path: string, file: File, contentType: string): Promise<T> {
-  const res = await fetch(`/api/v1/agency${path}`, { method: 'PUT', headers: { 'content-type': contentType }, body: file });
+async function upload<T>(path: string, file: File, contentType: string, method = 'PUT'): Promise<T> {
+  const res = await fetch(`/api/v1/agency${path}`, { method, headers: { 'content-type': contentType }, body: file });
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new ApiError(res.status, data?.code ?? 'fallback', data?.detail);
   return data as T;
@@ -87,6 +98,19 @@ export const adminApi = {
   uploadOptionPdf: (id: string, oid: string, file: File) => upload<{ pdfFileName: string }>(`/events/${id}/options/${oid}/pdf?name=${encodeURIComponent(file.name)}`, file, 'application/pdf'),
   deleteOptionPdf: (id: string, oid: string) => call<void>('DELETE', `/events/${id}/options/${oid}/pdf`),
   copyEvent: (id: string, v: { companyId: string; name: string; slug: string; pricingTierId: string }) => call<{ id: string }>('POST', `/events/${id}/copy`, v),
+  employees: (id: string, q: { search?: string; account?: string; registration?: string; page?: number }) => {
+    const params = new URLSearchParams(Object.entries(q).flatMap(([k, v]) => (v ? [[k, String(v)]] : [])));
+    return call<RosterPage>('GET', `/events/${id}/employees?${params}`);
+  },
+  createEmployee: (id: string, v: EmployeeValues) => call<{ id: string }>('POST', `/events/${id}/employees`, v),
+  updateEmployee: (id: string, eid: string, v: EmployeeValues) => call<void>('PATCH', `/events/${id}/employees/${eid}`, v),
+  removeEmployee: (id: string, eid: string) => call<void>('DELETE', `/events/${id}/employees/${eid}`),
+  previewImport: (id: string, file: File) => upload<ImportPreview>(`/events/${id}/employees/import/preview`, file, 'text/csv', 'POST'),
+  importEmployees: (id: string, file: File) => upload<{ created: number; updated: number; errorCount: number; duplicateCount: number }>(`/events/${id}/employees/import`, file, 'text/csv', 'POST'),
+  rosterSources: (id: string) => call<{ id: string; name: string; employees: number }[]>('GET', `/events/${id}/employees/copy-sources`),
+  copyRoster: (id: string, fromEventId: string) => call<{ added: number; skipped: number }>('POST', `/events/${id}/employees/copy`, { fromEventId }),
+  sendAccountEmails: (id: string, body: { employeeIds: string[] } | { allPending: true }) => call<{ queued: number; skipped: number }>('POST', `/events/${id}/employees/account-emails`, body),
+  passwordLink: (id: string, eid: string) => call<PasswordLink>('POST', `/events/${id}/employees/${eid}/password-link`, {}),
   contacts: (id: string) => call<ContactValues[]>('GET', `/events/${id}/contacts`),
   saveContacts: (id: string, contacts: ContactValues[]) => call<ContactValues[]>('PUT', `/events/${id}/contacts`, { contacts }),
   publishCheck: (id: string) => call<{ status: string; checks: PublishCheck[] }>('GET', `/events/${id}/publish-check`),
