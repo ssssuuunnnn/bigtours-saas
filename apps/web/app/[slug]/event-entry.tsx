@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ApiError, createClient, type Landing } from '../../lib/api';
 import { formatDateTime, t } from '../../messages/zh-TW';
 import { RegistrationFlow } from './registration-flow';
+import { brandStyle } from '../../lib/brand';
 
 type View = 'loading' | 'not_found' | 'failed' | 'flow' | 'login' | 'page_closed';
 
@@ -66,7 +67,7 @@ function LoginView({ slug, landing, onLoggedIn, onPageClosed }: { slug: string; 
 
   const { event, agency } = landing;
   return (
-    <div style={{ '--brand': agency.primaryColor ?? '#0f766e' } as React.CSSProperties}>
+    <div style={brandStyle(event.themeColor)}>
       <header className="masthead">
         <p className="agency">{agency.name}</p>
         <h1>{event.name}</h1>

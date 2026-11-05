@@ -1,8 +1,15 @@
 import type { EventNavKey } from '@bigtours/shared';
 import { ApiError } from './api';
 
-export interface AdminEventSummary { id: string; slug: string; name: string; status: string; companyName: string }
-export interface AdminEvent { id: string; slug: string; name: string; tierMax: number; hasRegistrations: boolean }
+export interface AdminEventSummary { id: string; slug: string; name: string; status: string; companyName: string; registrationOpensAt: string | null; registrationClosesAt: string | null; tierMax: number; travelerCount: number }
+export interface AdminEvent {
+  id: string; slug: string; name: string; tierMax: number; hasRegistrations: boolean; status: string; companyName: string;
+  days: { title: string; description: string }[]; themeColor: string; supportPhone: string | null; supportHours: string | null;
+  pageMode: 'manual' | 'scheduled'; pageIsOpen: boolean; pageOpensAt: string | null; pageClosesAt: string | null;
+  registrationOpensAt: string | null; registrationClosesAt: string | null; pageState: 'open' | 'not_open' | 'closed'; activeHolds: number;
+}
+export interface QuotaTier { id: string; minTravelers: number; maxTravelers: number; price: number; remaining: number }
+export interface AdminCompany { id: string; name: string; eventCount: number }
 export interface AdminMe { agencyName: string; user: { name: string; role: string }; pinnedNavItems: EventNavKey[] }
 export interface SessionValues {
   name: string;
@@ -37,6 +44,14 @@ export const adminApi = {
   setPinnedNav: (items: EventNavKey[]) => call<void>('PUT', '/me/pinned-nav', { items }),
   events: () => call<AdminEventSummary[]>('GET', '/events'),
   event: (id: string) => call<AdminEvent>('GET', `/events/${id}`),
+  quota: () => call<QuotaTier[]>('GET', '/quota'),
+  companies: () => call<AdminCompany[]>('GET', '/companies'),
+  createCompany: (name: string) => call<AdminCompany>('POST', '/companies', { name }),
+  createEvent: (v: { companyId: string; name: string; slug: string; pricingTierId: string }) => call<{ id: string }>('POST', '/events', v),
+  deleteEvent: (id: string) => call<void>('DELETE', `/events/${id}`),
+  updateBasic: (id: string, v: Pick<AdminEvent, 'name' | 'slug' | 'days' | 'themeColor' | 'supportPhone' | 'supportHours'>) => call<void>('PUT', `/events/${id}/basic`, v),
+  updateSchedule: (id: string, v: Pick<AdminEvent, 'pageMode' | 'pageOpensAt' | 'pageClosesAt' | 'registrationOpensAt' | 'registrationClosesAt'>) => call<void>('PUT', `/events/${id}/schedule`, v),
+  setPageOpen: (id: string, open: boolean) => call<void>('PUT', `/events/${id}/page`, { open }),
   sessions: (id: string) => call<AdminSession[]>('GET', `/events/${id}/sessions`),
   createSession: (id: string, v: SessionValues) => call<AdminSession>('POST', `/events/${id}/sessions`, v),
   updateSession: (id: string, sid: string, v: SessionValues) => call<AdminSession>('PATCH', `/events/${id}/sessions/${sid}`, v),

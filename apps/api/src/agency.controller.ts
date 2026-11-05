@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Put, Res } from '@nestjs/common';
-import { agencyLoginRequest, fieldInput, orderRequest, pinnedNavRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
+import { agencyLoginRequest, companyInput, createEventRequest, eventBasicRequest, eventScheduleRequest, fieldInput, orderRequest, pageSwitchRequest, pinnedNavRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
 import type { Response } from 'express';
 import type { ZodType } from 'zod';
 import { AgencyAdminService } from './agency-admin.service.ts';
@@ -79,6 +79,50 @@ export class AgencyController {
   @Get('events/:eventId')
   async event(@Headers() h: RequestHeaders, @Param('eventId') eventId: string) {
     return this.admin.getEvent(await this.ctx(h), eventId);
+  }
+
+  @Get('quota')
+  async quota(@Headers() h: RequestHeaders) {
+    return this.admin.quota(await this.configurer(h));
+  }
+
+  @Get('companies')
+  async companies(@Headers() h: RequestHeaders) {
+    return this.admin.listCompanies(await this.configurer(h));
+  }
+
+  @Post('companies')
+  async createCompany(@Headers() h: RequestHeaders, @Body() body: unknown) {
+    return this.admin.createCompany(await this.configurer(h), parse(companyInput, body).name);
+  }
+
+  @Post('events')
+  async createEvent(@Headers() h: RequestHeaders, @Body() body: unknown) {
+    return this.admin.createEvent(await this.configurer(h), parse(createEventRequest, body));
+  }
+
+  @Delete('events/:eventId')
+  @HttpCode(204)
+  async deleteEvent(@Headers() h: RequestHeaders, @Param('eventId') eventId: string) {
+    await this.admin.deleteEvent(await this.configurer(h), eventId);
+  }
+
+  @Put('events/:eventId/basic')
+  @HttpCode(204)
+  async updateBasic(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    await this.admin.updateBasic(await this.configurer(h), eventId, parse(eventBasicRequest, body));
+  }
+
+  @Put('events/:eventId/schedule')
+  @HttpCode(204)
+  async updateSchedule(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    await this.admin.updateSchedule(await this.configurer(h), eventId, parse(eventScheduleRequest, body));
+  }
+
+  @Put('events/:eventId/page')
+  @HttpCode(204)
+  async setPage(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    await this.admin.setPageOpen(await this.configurer(h), eventId, parse(pageSwitchRequest, body).open);
   }
 
   @Get('events/:eventId/sessions')

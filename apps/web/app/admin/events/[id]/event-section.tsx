@@ -1,22 +1,25 @@
 'use client';
 
 import type { EventNavKey } from '@bigtours/shared';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { adminApi, type AdminEvent } from '../../../../lib/admin-api';
 import { canSeeEventSection } from '../../../../lib/admin-nav';
 import { a } from '../../../../messages/admin';
 import { useAdminMe } from '../../admin-shell';
+import { BasicPanel } from './basic-panel';
 import { FieldsPanel } from './fields-panel';
+import { SchedulePanel } from './schedule-panel';
 import { SessionsPanel } from './sessions-panel';
+
+const BUILT: EventNavKey[] = ['basic', 'schedule', 'sessions', 'fields'];
 
 export function EventSection({ id, section }: { id: string; section: EventNavKey }) {
   const me = useAdminMe();
   const allowed = canSeeEventSection(me.user.role, section);
   const [event, setEvent] = useState<AdminEvent | null>(null);
   const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    if (allowed) adminApi.event(id).then(setEvent).catch(() => setFailed(true));
-  }, [id, allowed]);
+  const load = useCallback(() => { adminApi.event(id).then(setEvent).catch(() => setFailed(true)); }, [id]);
+  useEffect(() => { if (allowed) load(); }, [allowed, load]);
 
   if (!allowed) return <main className="admin-main"><p role="alert" className="error">{a.forbidden}</p></main>;
   if (failed) return <main className="admin-main"><p role="alert" className="error">{a.loadFailed}</p></main>;
@@ -24,9 +27,11 @@ export function EventSection({ id, section }: { id: string; section: EventNavKey
   return (
     <main className="admin-main">
       <h1>{a.eventSections[section]}</h1>
+      {section === 'basic' && <BasicPanel key={event.slug} event={event} onSaved={load} />}
+      {section === 'schedule' && <SchedulePanel event={event} onSaved={load} />}
       {section === 'sessions' && <SessionsPanel event={event} />}
       {section === 'fields' && <FieldsPanel event={event} />}
-      {section !== 'sessions' && section !== 'fields' && <p className="muted">{a.comingSoon}</p>}
+      {!BUILT.includes(section) && <p className="muted">{a.comingSoon}</p>}
     </main>
   );
 }

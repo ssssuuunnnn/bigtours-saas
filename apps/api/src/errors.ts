@@ -26,6 +26,11 @@ const STATUS: Record<ErrorCode, number> = {
   SESSION_IN_USE: 409,
   FIELD_LOCKED: 409,
   FORBIDDEN: 403,
+  QUOTA_EMPTY: 409,
+  SLUG_TAKEN: 409,
+  EVENT_NOT_DRAFT: 409,
+  EVENT_NOT_PUBLISHED: 409,
+  PAGE_MODE_MISMATCH: 409,
 };
 
 /** 回傳錯誤代碼，文字由前端依語系顯示。 */

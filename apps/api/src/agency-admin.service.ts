@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { can, type AgencyPermission, type EventNavKey, type FieldInput, type SessionInput } from '@bigtours/shared';
+import { can, pageState, type AgencyPermission, type EventBasicInput, type EventNavKey, type EventScheduleInput, type FieldInput, type SessionInput } from '@bigtours/shared';
 import { generateToken, hashPassword, verifyPassword } from '@bigtours/shared/crypto';
 import { randomBytes } from 'node:crypto';
 import { AccessService } from './access.service.ts';
@@ -130,19 +130,164 @@ export class AgencyAdminService {
   listEvents(ctx: AgencyUserContext) {
     return this.db.withTenant(ctx.agencyId, async (tx) => {
       const { rows } = await tx.query(
-        `SELECT e.id, e.slug, e.name, e.status, c.name AS company_name
-           FROM events e JOIN companies c ON c.id = e.company_id
+        `SELECT e.id, e.slug, e.name, e.status, e.registration_opens_at, e.registration_closes_at, c.name AS company_name, t.max_travelers,
+                (SELECT count(*)::int FROM travelers tr JOIN registrations r ON r.id = tr.registration_id
+                  WHERE r.event_id = e.id AND r.status <> 'cancelled') AS traveler_count
+           FROM events e JOIN companies c ON c.id = e.company_id JOIN pricing_tiers t ON t.id = e.pricing_tier_id
           WHERE e.status <> 'archived' ORDER BY e.created_at DESC`,
       );
-      return rows.map((r) => ({ id: r.id, slug: r.slug, name: r.name, status: r.status, companyName: r.company_name }));
+      return rows.map((r) => ({
+        id: r.id, slug: r.slug, name: r.name, status: r.status, companyName: r.company_name,
+        registrationOpensAt: r.registration_opens_at, registrationClosesAt: r.registration_closes_at,
+        tierMax: r.max_travelers, travelerCount: r.traveler_count,
+      }));
     });
   }
 
   getEvent(ctx: AgencyUserContext, eventId: string) {
     return this.db.withTenant(ctx.agencyId, async (tx) => {
       const event = await this.lockEvent(tx, eventId, false);
-      return { id: event.id, slug: event.slug, name: event.name, tierMax: event.max_travelers, hasRegistrations: await this.hasRegistrations(tx, eventId) };
+      const { rows } = await tx.query(
+        `SELECT e.status, e.itinerary, e.theme_color, e.support_phone, e.support_hours, e.page_mode, e.page_is_open, e.page_opens_at, e.page_closes_at,
+                e.registration_opens_at, e.registration_closes_at, c.name AS company_name,
+                (SELECT count(*)::int FROM seat_holds h WHERE h.event_id = e.id AND h.status = 'active' AND h.expires_at > now()) AS active_holds
+           FROM events e JOIN companies c ON c.id = e.company_id WHERE e.id = $1`,
+        [eventId],
+      );
+      const r = rows[0];
+      return {
+        id: event.id, slug: event.slug, name: event.name, tierMax: event.max_travelers, hasRegistrations: await this.hasRegistrations(tx, eventId),
+        status: r.status, companyName: r.company_name, days: r.itinerary?.days ?? [], themeColor: r.theme_color,
+        supportPhone: r.support_phone, supportHours: r.support_hours,
+        pageMode: r.page_mode, pageIsOpen: r.page_is_open, pageOpensAt: r.page_opens_at, pageClosesAt: r.page_closes_at,
+        registrationOpensAt: r.registration_opens_at, registrationClosesAt: r.registration_closes_at,
+        pageState: this.currentPageState(r), activeHolds: r.active_holds,
+      };
     });
+  }
+
+  private currentPageState(r: any) {
+    if (r.status === 'draft') return 'closed';
+    return pageState({ mode: r.page_mode, isOpen: r.page_is_open, opensAt: r.page_opens_at, closesAt: r.page_closes_at });
+  }
+
+  // ===== 額度與企業客戶 =====
+
+  quota(ctx: AgencyUserContext) {
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      const { rows } = await tx.query(
+        `SELECT t.id, t.min_travelers, t.max_travelers, t.price_amount,
+                COALESCE((SELECT sum(l.change)::int FROM agency_quota_ledger l WHERE l.pricing_tier_id = t.id), 0) AS remaining
+           FROM pricing_tiers t WHERE t.is_active ORDER BY t.min_travelers`,
+      );
+      return rows.map((r) => ({ id: r.id, minTravelers: r.min_travelers, maxTravelers: r.max_travelers, price: r.price_amount, remaining: r.remaining }));
+    });
+  }
+
+  listCompanies(ctx: AgencyUserContext) {
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      const { rows } = await tx.query(
+        `SELECT c.id, c.name, (SELECT count(*)::int FROM events e WHERE e.company_id = c.id AND e.status <> 'archived') AS event_count
+           FROM companies c WHERE c.status = 'active' ORDER BY c.created_at`,
+      );
+      return rows.map((r) => ({ id: r.id, name: r.name, eventCount: r.event_count }));
+    });
+  }
+
+  createCompany(ctx: AgencyUserContext, name: string) {
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      const { rows } = await tx.query(`INSERT INTO companies (agency_id, name) VALUES ($1, $2) RETURNING id, name`, [ctx.agencyId, name]);
+      return { id: rows[0].id, name: rows[0].name, eventCount: 0 };
+    });
+  }
+
+  // ===== 活動 =====
+
+  async createEvent(ctx: AgencyUserContext, input: { companyId: string; name: string; slug: string; pricingTierId: string }) {
+    return this.uniqueSlug(() => this.db.withTenant(ctx.agencyId, async (tx) => {
+      // 同一旅行社、同一級距依序扣額度，避免同時建立時超扣。
+      await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`quota:${ctx.agencyId}:${input.pricingTierId}`]);
+      const { rows: tiers } = await tx.query(
+        `SELECT COALESCE((SELECT sum(l.change)::int FROM agency_quota_ledger l WHERE l.pricing_tier_id = t.id), 0) AS remaining
+           FROM pricing_tiers t WHERE t.id = $1 AND t.is_active`,
+        [input.pricingTierId],
+      );
+      if (!tiers[0]) throw new DomainError('NOT_FOUND');
+      if (tiers[0].remaining < 1) throw new DomainError('QUOTA_EMPTY');
+      const { rows: companies } = await tx.query(`SELECT id FROM companies WHERE id = $1 AND status = 'active'`, [input.companyId]);
+      if (!companies[0]) throw new DomainError('NOT_FOUND');
+      // 手動模式下，活動頁預設關閉，發布後由旅行社開啟。
+      const { rows } = await tx.query(
+        `INSERT INTO events (agency_id, company_id, slug, name, status, pricing_tier_id, page_mode, page_is_open, created_by)
+         VALUES ($1, $2, $3, $4, 'draft', $5, 'manual', false, $6) RETURNING id`,
+        [ctx.agencyId, input.companyId, input.slug, input.name, input.pricingTierId, ctx.user.id],
+      );
+      await tx.query(
+        `INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason, event_id, created_by) VALUES ($1, $2, -1, 'event_created', $3, $4)`,
+        [ctx.agencyId, input.pricingTierId, rows[0].id, ctx.user.id],
+      );
+      return { id: rows[0].id };
+    }));
+  }
+
+  /** 只有未發布的活動可以刪除，額度退回；代碼釋出給新活動使用。 */
+  deleteEvent(ctx: AgencyUserContext, eventId: string) {
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, true);
+      const { rows } = await tx.query(`SELECT status, pricing_tier_id FROM events WHERE id = $1`, [eventId]);
+      if (rows[0].status !== 'draft') throw new DomainError('EVENT_NOT_DRAFT');
+      await tx.query(`UPDATE events SET status = 'archived', slug = $2, updated_at = now() WHERE id = $1`, [eventId, `deleted-${eventId}`]);
+      await tx.query(
+        `INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason, event_id, created_by) VALUES ($1, $2, 1, 'event_deleted', $3, $4)`,
+        [ctx.agencyId, rows[0].pricing_tier_id, eventId, ctx.user.id],
+      );
+    });
+  }
+
+  updateBasic(ctx: AgencyUserContext, eventId: string, input: EventBasicInput) {
+    return this.uniqueSlug(() => this.db.withTenant(ctx.agencyId, async (tx) => {
+      const event = await this.lockEvent(tx, eventId, true);
+      const { rows } = await tx.query(`SELECT status FROM events WHERE id = $1`, [eventId]);
+      if (input.slug !== event.slug && rows[0].status !== 'draft') throw new DomainError('EVENT_NOT_DRAFT');
+      await tx.query(
+        `UPDATE events SET name = $2, slug = $3, itinerary = itinerary || jsonb_build_object('days', $4::jsonb),
+                theme_color = $5, support_phone = $6, support_hours = $7, updated_at = now() WHERE id = $1`,
+        [eventId, input.name, input.slug, JSON.stringify(input.days), input.themeColor, input.supportPhone, input.supportHours],
+      );
+    }));
+  }
+
+  updateSchedule(ctx: AgencyUserContext, eventId: string, input: EventScheduleInput) {
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, true);
+      const { rows } = await tx.query(`SELECT status, page_mode, page_is_open, page_opens_at, page_closes_at FROM events WHERE id = $1`, [eventId]);
+      // 切回手動時維持目前的開關狀態，不會突然開啟或關閉。
+      const isOpen = input.pageMode === 'manual' && rows[0].page_mode === 'scheduled' ? this.currentPageState(rows[0]) === 'open' : rows[0].page_is_open;
+      await tx.query(
+        `UPDATE events SET page_mode = $2, page_is_open = $3, page_opens_at = $4, page_closes_at = $5,
+                registration_opens_at = $6, registration_closes_at = $7, updated_at = now() WHERE id = $1`,
+        [eventId, input.pageMode, isOpen, input.pageOpensAt, input.pageClosesAt, input.registrationOpensAt, input.registrationClosesAt],
+      );
+    });
+  }
+
+  setPageOpen(ctx: AgencyUserContext, eventId: string, open: boolean) {
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, true);
+      const { rows } = await tx.query(`SELECT status, page_mode FROM events WHERE id = $1`, [eventId]);
+      if (rows[0].page_mode !== 'manual') throw new DomainError('PAGE_MODE_MISMATCH');
+      if (open && rows[0].status === 'draft') throw new DomainError('EVENT_NOT_PUBLISHED');
+      await tx.query(`UPDATE events SET page_is_open = $2, updated_at = now() WHERE id = $1`, [eventId, open]);
+    });
+  }
+
+  private async uniqueSlug<T>(run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (e: any) {
+      if (e?.code === '23505' && e?.constraint === 'events_agency_id_slug_key') throw new DomainError('SLUG_TAKEN');
+      throw e;
+    }
   }
 
   // ===== 梯次 =====

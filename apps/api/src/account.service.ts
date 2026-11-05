@@ -28,10 +28,11 @@ export class AccountService {
     const agency = await this.access.findAgency(host);
     const event = await this.access.findEvent(agency.id, slug);
     return {
-      agency: { name: agency.name, primaryColor: agency.primaryColor },
+      agency: { name: agency.name },
       event: {
         slug: event.slug,
         name: event.name,
+        themeColor: event.themeColor,
         registrationOpensAt: event.registrationOpensAt,
         registrationClosesAt: event.registrationClosesAt,
         pageState: event.pageState,
@@ -99,8 +100,8 @@ export class AccountService {
     const event = await this.access.findEvent(agency.id, slug);
     const employee = await this.findLinkEmployee(agency.id, event.id, token);
     return {
-      agency: { name: agency.name, primaryColor: agency.primaryColor },
-      event: { name: event.name },
+      agency: { name: agency.name },
+      event: { name: event.name, themeColor: event.themeColor },
       employee: { name: employee.name },
     };
   }
