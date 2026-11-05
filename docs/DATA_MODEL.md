@@ -17,7 +17,7 @@
 | 帳號 | `employee_password_links`、`employee_sessions`、`agency_user_sessions` | 設定密碼連結、員工與旅行社人員的登入狀態 |
 | 報名 | `seat_holds`、`seat_hold_items` | 15 分鐘的名額保留與選項保留 |
 | | `registration_drafts` | 倒數結束後保留的已填內容（加密） |
-| | `registrations`、`travelers`、`traveler_options` | 報名、費用與付款狀態、旅客、每位旅客的選項 |
+| | `registrations`、`travelers`、`traveler_options`、`traveler_option_preferences` | 報名、費用與付款狀態、旅客、每位旅客的選項、第二與第三志願（不佔名額） |
 | 分房 | `room_preferences`、`rooms`、`room_assignments` | 員工填寫的意願、旅行社確認的最終分房 |
 | 稽核與工作 | `registration_revisions`、`audit_logs` | 報名修改前後內容、查看與匯出個資等操作紀錄 |
 | | `email_templates`、`email_messages` | 旅行社調整的範本、寄信狀態 |
