@@ -10,7 +10,8 @@
 | | `pricing_tiers`、`agency_quota_ledger` | 收費級距；開通、扣除、退回額度的流水帳 |
 | 旅行社與企業 | `agency_users`、`companies`、`company_contacts` | 旅行社人員（管理員、活動操作員、營運人員，含釘選的選單項目）、企業客戶（含前台顯示的名稱與 Logo）、企業窗口 |
 | 活動設定 | `events`、`event_sessions` | 活動、梯次與名額 |
-| | `traveler_types` | 旅客類型與團費 |
+| | `traveler_types` | 旅客類型、團費、備註與是否佔床 |
+| | `session_room_types` | 各梯次的房型、可住人數、每人加價與可售床位 |
 | | `option_groups`、`options`、`option_session_quotas` | 選項群組、選項、各梯次的選項名額 |
 | | `event_fields` | 自訂欄位定義 |
 | 名單 | `event_employees` | 活動員工名單、補助金額、眷屬上限、登入密碼雜湊 |
@@ -58,7 +59,7 @@ agencies
 
 ### 3.2 費用與快照
 
-- 報名時將團費存入 `travelers.base_price_snapshot`、選項價格存入 `traveler_options.price_snapshot`、補助額度存入 `registrations.subsidy_amount`。
+- 報名時將團費存入 `travelers.base_price_snapshot`、房型與加價存入 `travelers`、選項價格存入 `traveler_options.price_snapshot`、補助額度存入 `registrations.subsidy_amount`。
 - `registrations.self_pay_amount` 由資料庫計算：`GREATEST(total_amount - subsidy_amount, 0)`。
 - 建立報名時，自付金額為 $0 的 `payment_status` 設為 `not_required`，其餘設為 `unpaid`。
 
@@ -71,7 +72,7 @@ agencies
 
 ### 3.4 員工帳號與登入
 
-- `events.theme_color` 為 NULL 時沿用旅行社的預設主色。
+- `events.theme_color` 必填，建立活動時預設為系統預設色；複製活動時帶入原活動的主色。
 - 帳號為 `event_employees.employee_no`，屬於活動名單，不跨活動共用；`password_hash` 為 NULL 表示尚未設定密碼。
 - `employee_password_links` 只存雜湊。每位員工同時只有一個可用連結，由唯一索引保證；重新產生時先撤銷舊連結。
 - 使用連結時以同一筆更新確認並標記 `used_at`，同時送出也只會成功一次；設定完成後撤銷該員工所有登入狀態。
