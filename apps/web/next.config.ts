@@ -11,8 +11,8 @@ const config: NextConfig = {
   async headers() {
     return [
       {
-        // 專屬連結放在網址中，Referer 只送網域，不含路徑；也不可被搜尋引擎收錄
-        source: '/:slug/e/:token',
+        // 設定密碼連結放在網址中，Referer 只送網域，不含路徑；也不可被搜尋引擎收錄
+        source: '/:slug/set-password/:token',
         headers: [
           { key: 'Referrer-Policy', value: 'strict-origin' },
           { key: 'X-Robots-Tag', value: 'noindex, nofollow' },

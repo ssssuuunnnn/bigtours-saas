@@ -2,8 +2,8 @@
 
 import { calculateFees } from '@bigtours/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ApiError, createClient, type EventState, type Field, type Registration, type SessionAvailability, type Traveler } from '../../../../lib/api';
-import { money, t } from '../../../../messages/zh-TW';
+import { ApiError, createClient, type EventState, type Field, type Registration, type SessionAvailability, type Traveler } from '../../lib/api';
+import { formatDateTime, money, t } from '../../messages/zh-TW';
 
 /** crypto.randomUUID 只能在 HTTPS 使用；本機以 http://*.lvh.me 開發時改用 getRandomValues。 */
 function uuid(): string {
@@ -26,11 +26,13 @@ const newTraveler = (typeId: string, optionIds: string[]): Traveler => ({
 const errorText = (e: unknown) => t.errors[e instanceof ApiError ? e.code : 'fallback'] ?? t.errors.fallback!;
 const selectionOf = (x: Traveler) => ({ key: x.key, travelerTypeId: x.travelerTypeId, optionIds: x.optionIds });
 const shortDate = (d: string | null) => (d ? `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}` : '');
+/** 例如 3/12（五）。日期沒有時區，以 UTC 計算星期避免差一天。 */
+const dateWithWeekday = (d: string) => `${shortDate(d)}（${'日一二三四五六'[new Date(`${d}T00:00:00Z`).getUTCDay()]}）`;
 
-export function RegistrationFlow({ slug, token }: { slug: string; token: string }) {
-  const api = useMemo(() => createClient(slug, token), [slug, token]);
+export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: string; onSignedOut: () => void; onPageClosed: () => void }) {
+  const api = useMemo(() => createClient(slug), [slug]);
   const [state, setState] = useState<EventState | null>(null);
-  const [fatal, setFatal] = useState<'invalid' | 'failed' | null>(null);
+  const [fatal, setFatal] = useState<'failed' | null>(null);
   const [availability, setAvailability] = useState<SessionAvailability[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [travelers, setTravelers] = useState<Traveler[]>([]);
@@ -68,8 +70,12 @@ export function RegistrationFlow({ slug, token }: { slug: string; token: string 
         if (s.draft?.travelers.length) setStep('fill');
         else api.releaseHold().catch(() => undefined).then(() => setExpiresAt(null));
       }
-    }).catch((e) => setFatal(e instanceof ApiError && e.status === 404 ? 'invalid' : 'failed'));
-  }, [api]);
+    }).catch((e) => {
+      if (e instanceof ApiError && e.code === 'UNAUTHENTICATED') onSignedOut();
+      else if (e instanceof ApiError && e.code === 'PAGE_CLOSED') onPageClosed();
+      else setFatal('failed');
+    });
+  }, [api, onSignedOut, onPageClosed]);
 
   // 即時剩餘名額：實際判斷仍以保留當下為準
   useEffect(() => {
@@ -102,7 +108,6 @@ export function RegistrationFlow({ slug, token }: { slug: string; token: string 
     );
   }, [state, travelers]);
 
-  if (fatal === 'invalid') return <main className="center-note"><h1>{t.invalidLink}</h1><p>{t.invalidLinkHint}</p></main>;
   if (fatal) return <main className="center-note"><p role="alert">{t.loadFailed}</p></main>;
   if (!state || !fees) return <main className="center-note" aria-busy="true"><p>{t.loading}</p></main>;
 
@@ -112,6 +117,9 @@ export function RegistrationFlow({ slug, token }: { slug: string; token: string 
   const dependentLeft = state.employee.dependentLimit - dependents;
   const firstDependentType = state.travelerTypes.find((x) => !x.isEmployeeSelf);
   const session = availability.find((s) => s.id === sessionId) ?? null;
+
+  const logout = () => api.logout().catch(() => undefined).then(onSignedOut);
+  const masthead = <Masthead state={state} onLogout={logout} />;
 
   const refreshAvailability = () => api.availability().then(setAvailability).catch(() => undefined);
 
@@ -177,7 +185,7 @@ export function RegistrationFlow({ slug, token }: { slug: string; token: string 
   if (registration) {
     return (
       <div style={brand}>
-        <Masthead state={state} />
+        {masthead}
         <Done
           registration={registration}
           session={availability.find((s) => s.id === registration.sessionId)}
@@ -218,7 +226,7 @@ export function RegistrationFlow({ slug, token }: { slug: string; token: string 
   if (step === 'expired') {
     return (
       <div style={brand}>
-        <Masthead state={state} />
+        {masthead}
         <main className="page">
           <section className="block expired" role="alert">
             <h2>{t.expiredTitle}</h2>
@@ -300,12 +308,13 @@ export function RegistrationFlow({ slug, token }: { slug: string; token: string 
   const open = state.event.openState === 'open';
   return (
     <div style={brand}>
-      <Masthead state={state} />
+      {masthead}
       <main className="page has-bar">
         {restored && <p className="notice">{t.draftRestored}</p>}
         <Itinerary state={state} />
-        <Board sessions={availability} selected={sessionId} onSelect={(id) => { setSessionId(id); setError(null); }} disabled={!open} />
-        {!open && <p className="notice">{state.event.openState === 'closed' ? t.closed : t.notOpen}</p>}
+        <Board sessions={availability} selected={sessionId} onSelect={(id) => { setSessionId(id); setError(null); }} disabled={!open} hideSeats={state.event.openState === 'not_open'} />
+        {!open && <p className="notice">{state.event.openState === 'closed' ? t.closed : t.notOpenUntil(formatDateTime(state.event.registrationOpensAt))}</p>}
+        {!open && <section className="block"><h2>{t.records}</h2><p className="muted">{t.noRecords}</p></section>}
         {open && picker}
       </main>
       {open && (
@@ -331,7 +340,7 @@ function draftBody(travelers: Traveler[], rooms: Record<number, string>) {
   };
 }
 
-function Masthead({ state }: { state: EventState }) {
+function Masthead({ state, onLogout }: { state: EventState; onLogout: () => void }) {
   return (
     <header className="masthead">
       <p className="agency">{state.agency.name}</p>
@@ -339,6 +348,7 @@ function Masthead({ state }: { state: EventState }) {
       <p className="who">
         {t.greeting(state.employee.name)}
         {state.employee.subsidyAmount > 0 && <span>{t.subsidy(money(state.employee.subsidyAmount))}</span>}
+        <button type="button" className="logout" onClick={onLogout}>{t.logout}</button>
       </p>
     </header>
   );
@@ -361,7 +371,7 @@ function Itinerary({ state }: { state: EventState }) {
 }
 
 /** 出發看板：這個頁面唯一的重點視覺。 */
-function Board({ sessions, selected, onSelect, disabled }: { sessions: SessionAvailability[]; selected: string | null; onSelect: (id: string) => void; disabled: boolean }) {
+function Board({ sessions, selected, onSelect, disabled, hideSeats }: { sessions: SessionAvailability[]; selected: string | null; onSelect: (id: string) => void; disabled: boolean; hideSeats: boolean }) {
   return (
     <section className="board" aria-label={t.departures}>
       <h2>{t.departures}</h2>
@@ -369,16 +379,27 @@ function Board({ sessions, selected, onSelect, disabled }: { sessions: SessionAv
         const blocked = disabled || s.status !== 'available';
         return (
           <button key={s.id} type="button" className="board-row" aria-pressed={selected === s.id} disabled={blocked} onClick={() => onSelect(s.id)}>
-            <span className="board-date">{shortDate(s.departsOn)}<small>{s.returnsOn ? `－${shortDate(s.returnsOn)}` : ''}</small></span>
             <span className="board-name">{s.name}</span>
-            <span className={`board-seats ${s.status}`}>
-              {s.status === 'available' ? t.remaining(s.remaining) : s.status === 'held' ? t.heldOut : t.soldOut}
+            <span className="board-legs">
+              <Leg label={t.outbound} date={s.departsOn} time={s.departureTime ? t.departAt(s.departureTime) : null} flight={s.outboundFlightNo} />
+              <Leg label={t.inbound} date={s.returnsOn} time={s.returnArrivalTime ? t.arriveAt(s.returnArrivalTime) : null} flight={s.returnFlightNo} />
             </span>
+            {!hideSeats && (
+              <span className={`board-seats ${s.status}`}>
+                {s.status === 'available' ? t.remaining(s.remaining) : s.status === 'held' ? t.heldOut : t.soldOut}
+              </span>
+            )}
           </button>
         );
       })}
     </section>
   );
+}
+
+function Leg({ label, date, time, flight }: { label: string; date: string | null; time: string | null; flight: string | null }) {
+  const detail = [date ? dateWithWeekday(date) : null, time, flight].filter(Boolean);
+  if (!detail.length) return null;
+  return <span className="board-leg"><b>{label}</b> {detail.join(' ')}</span>;
 }
 
 function TravelerPicks({ index, traveler, state, session, canApplyToAll, onChange, onRemove, onApplyAll }: {
@@ -452,9 +473,24 @@ function TextField({ label, value, onChange, required, invalid, type = 'text', p
   );
 }
 
-function FieldInput({ field, traveler, invalid, onChange }: { field: Field; traveler: Traveler; invalid: boolean; onChange: (v: string) => void }) {
-  const value = (traveler.fieldValues[field.key] as string | undefined) ?? '';
+function FieldInput({ field, traveler, invalid, onChange }: { field: Field; traveler: Traveler; invalid: boolean; onChange: (v: string | string[]) => void }) {
   const mask = traveler.masks?.[field.key];
+  if (field.type === 'multiselect') {
+    const picked = (traveler.fieldValues[field.key] as string[] | undefined) ?? [];
+    return (
+      <fieldset className={`field choices${invalid ? ' invalid' : ''}`}>
+        <legend>{field.label}{field.isRequired && <em aria-hidden="true"> *</em>}</legend>
+        {(field.choices ?? []).map((c) => (
+          <label className="check" key={c}>
+            <input type="checkbox" checked={picked.includes(c)} onChange={() => onChange(picked.includes(c) ? picked.filter((x) => x !== c) : [...picked, c])} />
+            <span>{c}</span>
+          </label>
+        ))}
+        {invalid && <small className="error">{t.fieldRequired}</small>}
+      </fieldset>
+    );
+  }
+  const value = (traveler.fieldValues[field.key] as string | undefined) ?? '';
   if (field.type === 'select') {
     return (
       <label className={`field${invalid ? ' invalid' : ''}`}>
@@ -536,7 +572,10 @@ function Done({ registration: r, session, fields, onCancel }: { registration: Re
         <section className="block" key={i}>
           <h2>{x.name}<small className="muted"> {x.travelerTypeName}</small></h2>
           <dl className="summary">
-            {fields.filter((f) => x.fieldValues[f.key]).map((f) => <div key={f.key}><dt>{f.label}</dt><dd>{String(x.fieldValues[f.key])}</dd></div>)}
+            {fields.filter((f) => x.fieldValues[f.key]).map((f) => {
+              const v = x.fieldValues[f.key];
+              return <div key={f.key}><dt>{f.label}</dt><dd>{Array.isArray(v) ? v.join('、') : String(v)}</dd></div>;
+            })}
             {x.options.map((o) => <div key={o.name}><dt>{o.name}</dt><dd>{o.price ? money(o.price) : t.included}</dd></div>)}
             {x.requestedRoomNo && <div><dt>{t.rooms}</dt><dd>{t.roomRequest(x.requestedRoomNo)}</dd></div>}
           </dl>

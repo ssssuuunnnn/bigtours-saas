@@ -1,23 +1,38 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { DatabaseService, type Tx } from './database.service.ts';
+import { pageState, type PageState } from '@bigtours/shared';
+import { DatabaseService } from './database.service.ts';
 import { EncryptionService } from './encryption.service.ts';
 import { DomainError } from './errors.ts';
 
+export const SESSION_COOKIE = 'bt_session';
+
+export interface AgencyInfo {
+  id: string;
+  code: string;
+  name: string;
+  logoObjectKey: string | null;
+  primaryColor: string | null;
+}
+
+export interface EventInfo {
+  id: string;
+  slug: string;
+  name: string;
+  itinerary: unknown;
+  status: string;
+  registrationOpensAt: Date | null;
+  registrationClosesAt: Date | null;
+  defaultSubsidyAmount: number;
+  defaultDependentLimit: number;
+  allowDependentsOnly: boolean;
+  termsVersion: number;
+  pageState: PageState;
+  pageOpensAt: Date | null;
+}
+
 export interface EmployeeContext {
-  agency: { id: string; code: string; name: string; logoObjectKey: string | null; primaryColor: string | null };
-  event: {
-    id: string;
-    slug: string;
-    name: string;
-    itinerary: unknown;
-    status: string;
-    registrationOpensAt: Date | null;
-    registrationClosesAt: Date | null;
-    defaultSubsidyAmount: number;
-    defaultDependentLimit: number;
-    allowDependentsOnly: boolean;
-    termsVersion: number;
-  };
+  agency: AgencyInfo;
+  event: EventInfo;
   employee: { id: string; employeeNo: string; name: string; subsidyAmount: number; dependentLimit: number };
 }
 
@@ -38,9 +53,8 @@ export class AccessService {
     return code;
   }
 
-  /** 無法辨識時一律回傳 NOT_FOUND，不透露旅行社、活動或員工是否存在。 */
-  async resolve(host: string | undefined, slug: string, token: string | undefined): Promise<EmployeeContext> {
-    if (!token) throw new DomainError('NOT_FOUND');
+  /** 無法辨識旅行社時回傳 NOT_FOUND，不透露旅行社是否存在。 */
+  async findAgency(host: string | undefined): Promise<AgencyInfo> {
     const code = this.agencyCodeFromHost(host);
     const { rows } = await this.db.pool.query(
       `SELECT id, code, name, logo_object_key, primary_color FROM agencies WHERE code = $1 AND status = 'active'`,
@@ -48,43 +62,66 @@ export class AccessService {
     );
     const a = rows[0];
     if (!a) throw new DomainError('NOT_FOUND');
+    return { id: a.id, code: a.code, name: a.name, logoObjectKey: a.logo_object_key, primaryColor: a.primary_color };
+  }
 
-    return this.db.withTenant(a.id, async (tx: Tx) => {
-      const { rows: found } = await tx.query(
-        `SELECT e.id AS event_id, e.slug, e.name AS event_name, e.itinerary, e.status, e.registration_opens_at,
-                e.registration_closes_at, e.default_subsidy_amount, e.default_dependent_limit,
-                e.allow_dependents_only, e.terms_version,
-                m.id AS employee_id, m.employee_no, m.name AS employee_name, m.subsidy_amount, m.dependent_limit
-           FROM event_employees m JOIN events e ON e.id = m.event_id
-          WHERE m.link_token_hash = $1 AND m.status = 'active' AND e.slug = $2
-            AND e.status IN ('published', 'closed')`,
-        [this.encryption.hashToken(token), slug],
+  async findEvent(agencyId: string, slug: string): Promise<EventInfo> {
+    const r = await this.db.withTenant(agencyId, async (tx) => {
+      const { rows } = await tx.query(
+        `SELECT id, slug, name, itinerary, status, registration_opens_at, registration_closes_at,
+                default_subsidy_amount, default_dependent_limit, allow_dependents_only, terms_version,
+                page_mode, page_is_open, page_opens_at, page_closes_at
+           FROM events WHERE slug = $1 AND status IN ('published', 'closed')`,
+        [slug],
       );
-      const r = found[0];
-      if (!r) throw new DomainError('NOT_FOUND');
-      return {
-        agency: { id: a.id, code: a.code, name: a.name, logoObjectKey: a.logo_object_key, primaryColor: a.primary_color },
-        event: {
-          id: r.event_id,
-          slug: r.slug,
-          name: r.event_name,
-          itinerary: r.itinerary,
-          status: r.status,
-          registrationOpensAt: r.registration_opens_at,
-          registrationClosesAt: r.registration_closes_at,
-          defaultSubsidyAmount: r.default_subsidy_amount,
-          defaultDependentLimit: r.default_dependent_limit,
-          allowDependentsOnly: r.allow_dependents_only,
-          termsVersion: r.terms_version,
-        },
-        employee: {
-          id: r.employee_id,
-          employeeNo: r.employee_no,
-          name: r.employee_name,
-          subsidyAmount: r.subsidy_amount ?? r.default_subsidy_amount,
-          dependentLimit: r.dependent_limit ?? r.default_dependent_limit,
-        },
-      };
+      return rows[0];
     });
+    if (!r) throw new DomainError('NOT_FOUND');
+    return {
+      id: r.id,
+      slug: r.slug,
+      name: r.name,
+      itinerary: r.itinerary,
+      status: r.status,
+      registrationOpensAt: r.registration_opens_at,
+      registrationClosesAt: r.registration_closes_at,
+      defaultSubsidyAmount: r.default_subsidy_amount,
+      defaultDependentLimit: r.default_dependent_limit,
+      allowDependentsOnly: r.allow_dependents_only,
+      termsVersion: r.terms_version,
+      pageState: pageState({ mode: r.page_mode, isOpen: r.page_is_open, opensAt: r.page_opens_at, closesAt: r.page_closes_at }),
+      pageOpensAt: r.page_mode === 'scheduled' ? r.page_opens_at : null,
+    };
+  }
+
+  /** 活動頁關閉時，已登入的員工也不能存取。 */
+  async resolve(host: string | undefined, slug: string, sessionToken: string | undefined): Promise<EmployeeContext> {
+    const agency = await this.findAgency(host);
+    const event = await this.findEvent(agency.id, slug);
+    if (event.pageState !== 'open') throw new DomainError('PAGE_CLOSED', { pageState: event.pageState });
+    if (!sessionToken) throw new DomainError('UNAUTHENTICATED');
+
+    const r = await this.db.withTenant(agency.id, async (tx) => {
+      const { rows } = await tx.query(
+        `SELECT m.id, m.employee_no, m.name, m.subsidy_amount, m.dependent_limit
+           FROM employee_sessions s JOIN event_employees m ON m.id = s.event_employee_id
+          WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()
+            AND m.event_id = $2 AND m.status = 'active'`,
+        [this.encryption.hashToken(sessionToken), event.id],
+      );
+      return rows[0];
+    });
+    if (!r) throw new DomainError('UNAUTHENTICATED');
+    return {
+      agency,
+      event,
+      employee: {
+        id: r.id,
+        employeeNo: r.employee_no,
+        name: r.name,
+        subsidyAmount: r.subsidy_amount ?? event.defaultSubsidyAmount,
+        dependentLimit: r.dependent_limit ?? event.defaultDependentLimit,
+      },
+    };
   }
 }

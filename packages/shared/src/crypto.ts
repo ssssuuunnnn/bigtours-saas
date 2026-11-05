@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 
 /** 本機以環境變數提供金鑰；正式環境改由金鑰管理服務提供。 */
 export function loadKey(base64: string | undefined): Buffer {
@@ -26,4 +26,28 @@ export function hashToken(hashKey: string, token: string): Buffer {
 
 export function generateToken(): string {
   return randomBytes(32).toString('base64url');
+}
+
+// OWASP 建議的 scrypt 參數之一；參數存在雜湊中，之後可調整
+const SCRYPT = { N: 2 ** 15, r: 8, p: 3 };
+const SCRYPT_KEY_LENGTH = 32;
+const SCRYPT_MAX_MEMORY = 128 * SCRYPT.N * SCRYPT.r * 2;
+
+function deriveKey(password: string, salt: Buffer, params: { N: number; r: number; p: number }): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scrypt(password, salt, SCRYPT_KEY_LENGTH, { ...params, maxmem: SCRYPT_MAX_MEMORY }, (err, key) => (err ? reject(err) : resolve(key)));
+  });
+}
+
+export async function hashPassword(password: string): Promise<string> {
+  const salt = randomBytes(16);
+  const key = await deriveKey(password, salt, SCRYPT);
+  return `scrypt$${SCRYPT.N}$${SCRYPT.r}$${SCRYPT.p}$${salt.toString('base64')}$${key.toString('base64')}`;
+}
+
+export async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  const [scheme, N, r, p, salt, expected] = stored.split('$');
+  if (scheme !== 'scrypt' || !N || !r || !p || !salt || !expected) return false;
+  const key = await deriveKey(password, Buffer.from(salt, 'base64'), { N: Number(N), r: Number(r), p: Number(p) });
+  return timingSafeEqual(key, Buffer.from(expected, 'base64'));
 }

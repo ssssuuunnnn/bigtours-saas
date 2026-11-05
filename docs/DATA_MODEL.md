@@ -1,6 +1,6 @@
 # 大團系統 資料模型
 
-> 狀態：第一版。需求來源為 [PRD](PRD.md)，架構見 [ARCHITECTURE](ARCHITECTURE.md)，完整欄位與限制定義在 [db/migrations/0001_init.sql](../db/migrations/0001_init.sql)。
+> 狀態：第一版。需求來源為 [PRD](PRD.md)，架構見 [ARCHITECTURE](ARCHITECTURE.md)，完整欄位與限制定義在 [db/migrations](../db/migrations/)。
 
 ## 1. 資料表總覽
 
@@ -13,7 +13,8 @@
 | | `traveler_types` | 旅客類型與團費 |
 | | `option_groups`、`options`、`option_session_quotas` | 選項群組、選項、各梯次的選項名額 |
 | | `event_fields` | 自訂欄位定義 |
-| 名單 | `event_employees` | 活動員工名單、補助金額、眷屬上限、專屬連結 |
+| 名單 | `event_employees` | 活動員工名單、補助金額、眷屬上限、登入密碼雜湊 |
+| 帳號 | `employee_password_links`、`employee_sessions` | 設定密碼連結、員工登入狀態 |
 | 報名 | `seat_holds`、`seat_hold_items` | 15 分鐘的名額保留與選項保留 |
 | | `registration_drafts` | 倒數結束後保留的已填內容（加密） |
 | | `registrations`、`travelers`、`traveler_options` | 報名、費用與付款狀態、旅客、每位旅客的選項 |
@@ -68,12 +69,20 @@ agencies
 - `registration_drafts`、`registration_revisions` 含個資，整份加密。
 - 到達保存期限時，由背景工作清除敏感欄位、匿名化旅客資料與員工名單，刪除草稿，並記錄於 `events.personal_data_purged_at`。
 
-### 3.4 專屬連結
+### 3.4 員工帳號與登入
 
-- `link_token_hash` 用於查詢，`link_token_encrypted` 供窗口再次匯出。
-- 重新產生連結時同時覆寫兩個欄位，舊連結立即失效。
+- 帳號為 `event_employees.employee_no`，屬於活動名單，不跨活動共用；`password_hash` 為 NULL 表示尚未設定密碼。
+- `employee_password_links` 只存雜湊。每位員工同時只有一個可用連結，由唯一索引保證；重新產生時先撤銷舊連結。
+- 使用連結時以同一筆更新確認並標記 `used_at`，同時送出也只會成功一次；設定完成後撤銷該員工所有登入狀態。
+- 產生連結與設定密碼都寫入 `audit_logs`，記錄產生人與時間。
+- `employee_sessions` 只存雜湊，登出或重設密碼時撤銷，12 小時後過期。
 
-### 3.5 額度
+### 3.5 活動頁開關
+
+- `events.page_mode` 為 `manual` 時只看 `page_is_open`，為 `scheduled` 時只看 `page_opens_at`、`page_closes_at`。
+- 活動頁開關與 `registration_opens_at`、`registration_closes_at` 分開：前者決定能否登入與存取，後者決定能否報名。
+
+### 3.6 額度
 
 - 額度餘額 = 該旅行社、該級距在 `agency_quota_ledger` 的 `change` 總和。
 - 建立活動時扣一場；未開放報名就刪除時退回；升級級距時退回舊級距並扣新級距。

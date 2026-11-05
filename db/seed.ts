@@ -1,8 +1,8 @@
-import { encrypt, hashToken, loadKey } from '@bigtours/shared/crypto';
+import { hashPassword, hashToken } from '@bigtours/shared/crypto';
 import pg from 'pg';
 
-// 本機示範資料。連結固定，方便開發；只在本機使用。
-const key = loadKey(process.env.DATA_ENCRYPTION_KEY);
+// 本機示範資料。密碼與連結固定，方便開發；只在本機使用。
+const DEMO_PASSWORD = 'demo1234';
 const hashKey = process.env.TOKEN_HASH_KEY!;
 const base = process.env.WEB_BASE_URL!;
 const client = new pg.Client({ connectionString: process.env.DATABASE_ADMIN_URL });
@@ -22,7 +22,7 @@ try {
     process.exit(0);
   }
   if (old) {
-    for (const t of ['room_assignments', 'rooms', 'room_preferences', 'registration_revisions', 'traveler_options', 'travelers', 'seat_hold_items', 'seat_holds', 'registration_drafts', 'registrations', 'event_employees', 'event_fields', 'option_session_quotas', 'options', 'option_groups', 'traveler_types', 'event_sessions', 'agency_quota_ledger', 'events', 'company_contacts', 'companies', 'agency_users']) {
+    for (const t of ['audit_logs', 'employee_sessions', 'employee_password_links', 'room_assignments', 'rooms', 'room_preferences', 'registration_revisions', 'traveler_options', 'travelers', 'seat_hold_items', 'seat_holds', 'registration_drafts', 'registrations', 'event_employees', 'event_fields', 'option_session_quotas', 'options', 'option_groups', 'traveler_types', 'event_sessions', 'agency_quota_ledger', 'events', 'company_contacts', 'companies', 'agency_users']) {
       await client.query(`DELETE FROM ${t} WHERE agency_id = $1`, [old.id]);
     }
     await client.query('DELETE FROM agencies WHERE id = $1', [old.id]);
@@ -55,8 +55,8 @@ try {
     })],
   )).id;
 
-  const s1 = (await one(`INSERT INTO event_sessions (agency_id, event_id, name, departs_on, returns_on, capacity, sort_order) VALUES ($1, $2, '第一梯', '2027-03-01', '2027-03-03', 40, 1) RETURNING id`, [agency, event])).id;
-  const s2 = (await one(`INSERT INTO event_sessions (agency_id, event_id, name, departs_on, returns_on, capacity, sort_order) VALUES ($1, $2, '第二梯', '2027-03-08', '2027-03-10', 3, 2) RETURNING id`, [agency, event])).id;
+  const s1 = (await one(`INSERT INTO event_sessions (agency_id, event_id, name, departs_on, returns_on, outbound_flight_no, return_flight_no, departure_time, return_arrival_time, capacity, sort_order) VALUES ($1, $2, '第一梯 沖繩三日遊', '2027-03-01', '2027-03-03', 'CX001', 'CX002', '08:30', '19:40', 40, 1) RETURNING id`, [agency, event])).id;
+  const s2 = (await one(`INSERT INTO event_sessions (agency_id, event_id, name, departs_on, returns_on, departure_time, return_arrival_time, capacity, sort_order) VALUES ($1, $2, '第二梯 沖繩三日遊', '2027-03-08', '2027-03-10', '13:15', '21:05', 3, 2) RETURNING id`, [agency, event])).id;
 
   const types: [string, number, boolean][] = [['員工本人', 15000, true], ['成人眷屬', 12000, false], ['兒童眷屬', 8000, false], ['嬰兒眷屬', 1000, false]];
   for (const [i, [name, price, self]] of types.entries()) {
@@ -85,27 +85,40 @@ try {
     ['birthday', '生日', 'date', null, true, false],
     ['national_id', '身分證字號', 'national_id', null, true, true],
     ['diet', '飲食需求', 'select', ['一般', '素食', '不吃牛'], false, false],
+    ['height', '身高（公分）', 'number', null, false, false],
+    ['needs', '需要的協助（可複選）', 'multiselect', ['輪椅', '嬰兒車', '低樓層房間'], false, false],
   ];
   for (const [i, [k, label, type, choices, required, sensitive]] of fields.entries()) {
     await client.query(`INSERT INTO event_fields (agency_id, event_id, field_key, label, field_type, choices, is_required, is_sensitive, sort_order) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [agency, event, k, label, type, choices ? JSON.stringify(choices) : null, required, sensitive, i]);
   }
 
-  const people: [string, string, string, number | null, number | null][] = [
-    ['E001', '王小明', 'e001', null, null],
-    ['E002', '林美惠', 'e002', 20000, 3],
-    ['E003', '陳志豪', 'e003', 5000, 0],
-    ['E004', '張雅婷', 'e004', null, null],
+  const people: [string, string, string, number | null, number | null, boolean][] = [
+    ['E001', '王小明', 'e001', null, null, true],
+    ['E002', '林美惠', 'e002', 20000, 3, true],
+    ['E003', '陳志豪', 'e003', 5000, 0, true],
+    ['E004', '張雅婷', 'e004', null, null, false],
   ];
-  console.log('\n示範連結：');
-  for (const [no, name, slugPart, subsidy, limit] of people) {
+  const demoHash = await hashPassword(DEMO_PASSWORD);
+  const site = `${base.replace('{agency}', code)}/acme-2027`;
+  console.log(`\n報名網站：${site}（示範密碼 ${DEMO_PASSWORD}）`);
+  for (const [no, name, slugPart, subsidy, limit, hasPassword] of people) {
+    const employee = (await one(
+      `INSERT INTO event_employees (agency_id, event_id, employee_no, name, email, subsidy_amount, dependent_limit, password_hash, password_set_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+      [agency, event, no, name, `${slugPart}@example.com`, subsidy, limit, hasPassword ? demoHash : null, hasPassword ? new Date() : null],
+    )).id;
+    if (hasPassword) {
+      console.log(`${no} ${name}：可直接登入`);
+      continue;
+    }
     const token = `demo-${slugPart}-local-development-only`;
     await client.query(
-      `INSERT INTO event_employees (agency_id, event_id, employee_no, name, email, subsidy_amount, dependent_limit, link_token_hash, link_token_encrypted)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [agency, event, no, name, `${slugPart}@example.com`, subsidy, limit, hashToken(hashKey, token), encrypt(key, token)],
+      `INSERT INTO employee_password_links (agency_id, event_employee_id, token_hash, delivery, created_by_type, expires_at)
+       VALUES ($1, $2, $3, 'manual', 'system', now() + interval '14 days')`,
+      [agency, employee, hashToken(hashKey, token)],
     );
-    console.log(`${no} ${name}：${base.replace('{agency}', code)}/acme-2027/e/${token}`);
+    console.log(`${no} ${name}：尚未設定密碼，${site}/set-password/${token}`);
   }
   await client.query('COMMIT');
 } catch (err) {
