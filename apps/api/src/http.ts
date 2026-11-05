@@ -5,13 +5,15 @@ export type RequestHeaders = Record<string, string | undefined>;
 
 export const requestHost = (h: RequestHeaders) => h['x-forwarded-host'] ?? h['host'];
 
-export function sessionTokenFrom(h: RequestHeaders): string | undefined {
+export function cookieValue(h: RequestHeaders, cookie: string): string | undefined {
   for (const part of (h['cookie'] ?? '').split(';')) {
     const [name, ...value] = part.trim().split('=');
-    if (name === SESSION_COOKIE) return value.join('=') || undefined;
+    if (name === cookie) return value.join('=') || undefined;
   }
   return undefined;
 }
+
+export const sessionTokenFrom = (h: RequestHeaders) => cookieValue(h, SESSION_COOKIE);
 
 /**
  * 登入狀態放在 Cookie。各旅行社子網域屬於同一個網站，SameSite 擋不住彼此的請求，

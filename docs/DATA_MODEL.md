@@ -14,7 +14,7 @@
 | | `option_groups`、`options`、`option_session_quotas` | 選項群組、選項、各梯次的選項名額 |
 | | `event_fields` | 自訂欄位定義 |
 | 名單 | `event_employees` | 活動員工名單、補助金額、眷屬上限、登入密碼雜湊 |
-| 帳號 | `employee_password_links`、`employee_sessions` | 設定密碼連結、員工登入狀態 |
+| 帳號 | `employee_password_links`、`employee_sessions`、`agency_user_sessions` | 設定密碼連結、員工與旅行社人員的登入狀態 |
 | 報名 | `seat_holds`、`seat_hold_items` | 15 分鐘的名額保留與選項保留 |
 | | `registration_drafts` | 倒數結束後保留的已填內容（加密） |
 | | `registrations`、`travelers`、`traveler_options` | 報名、費用與付款狀態、旅客、每位旅客的選項 |

@@ -22,7 +22,7 @@ try {
     process.exit(0);
   }
   if (old) {
-    for (const t of ['audit_logs', 'employee_sessions', 'employee_password_links', 'room_assignments', 'rooms', 'room_preferences', 'registration_revisions', 'traveler_options', 'travelers', 'seat_hold_items', 'seat_holds', 'registration_drafts', 'registrations', 'event_employees', 'event_fields', 'option_session_quotas', 'options', 'option_groups', 'traveler_types', 'event_sessions', 'agency_quota_ledger', 'events', 'company_contacts', 'companies', 'agency_users']) {
+    for (const t of ['audit_logs', 'agency_user_sessions', 'employee_sessions', 'employee_password_links', 'room_assignments', 'rooms', 'room_preferences', 'registration_revisions', 'traveler_options', 'travelers', 'seat_hold_items', 'seat_holds', 'registration_drafts', 'registrations', 'event_employees', 'event_fields', 'option_session_quotas', 'options', 'option_groups', 'traveler_types', 'event_sessions', 'agency_quota_ledger', 'events', 'company_contacts', 'companies', 'agency_users']) {
       await client.query(`DELETE FROM ${t} WHERE agency_id = $1`, [old.id]);
     }
     await client.query('DELETE FROM agencies WHERE id = $1', [old.id]);
@@ -83,7 +83,7 @@ try {
 
   const fields: [string, string, string, unknown, boolean, boolean][] = [
     ['birthday', '生日', 'date', null, true, false],
-    ['national_id', '身分證字號', 'national_id', null, true, true],
+    ['national_id', '身分證字號', 'text', null, true, true],
     ['diet', '飲食需求', 'select', ['一般', '素食', '不吃牛'], false, false],
     ['height', '身高（公分）', 'number', null, false, false],
     ['needs', '需要的協助（可複選）', 'multiselect', ['輪椅', '嬰兒車', '低樓層房間'], false, false],
@@ -100,6 +100,8 @@ try {
     ['E004', '張雅婷', 'e004', null, null, false],
   ];
   const demoHash = await hashPassword(DEMO_PASSWORD);
+  await client.query(`INSERT INTO agency_users (agency_id, email, password_hash, name, role) VALUES ($1, 'admin@demo-travel.example', $2, '示範管理員', 'admin')`, [agency, demoHash]);
+  console.log(`\n旅行社後台：${base.replace('{agency}', code)}/admin（admin@demo-travel.example／${DEMO_PASSWORD}）`);
   const site = `${base.replace('{agency}', code)}/acme-2027`;
   console.log(`\n報名網站：${site}（示範密碼 ${DEMO_PASSWORD}）`);
   for (const [no, name, slugPart, subsidy, limit, hasPassword] of people) {

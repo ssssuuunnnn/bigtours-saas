@@ -74,7 +74,7 @@ button, input, select { font: inherit; color: inherit; }
 .traveler-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
 .traveler-head h3 { font-size: 16px; margin-right: auto; }
 .price { font-size: 15px; }
-select, input[type='text'], input[type='password'], input[type='date'], input[type='number'] {
+select, textarea, input[type='text'], input[type='password'], input[type='email'], input[type='date'], input[type='time'], input[type='number'] {
   min-height: 44px; padding: 8px 10px; border: 1px solid var(--ink-soft); border-radius: 4px; background: var(--paper); width: 100%;
 }
 .traveler-head select { width: auto; max-width: 100%; }
@@ -150,3 +150,43 @@ a.primary-link { display: flex; align-items: center; justify-content: center; mi
 .site-link { display: block; min-height: 44px; padding: 10px 0; color: var(--brand); font-size: 16px; font-weight: 700; word-break: break-all; }
 .field.choices { border: 0; padding: 0; margin: 0; gap: 8px; }
 .field.choices legend { padding: 0; margin-bottom: 8px; }
+
+/* 旅行社後台：以桌機為主 */
+.admin-bar { display: flex; align-items: center; gap: 16px; padding: 10px 24px; background: var(--board); color: var(--board-text); }
+.admin-brand { color: inherit; font-weight: 700; text-decoration: none; margin-right: auto; }
+.admin-brand span { margin-left: 10px; font-weight: 400; font-size: 14px; opacity: .8; }
+.admin-bar button.link { color: inherit; }
+.admin-user { font-size: 14px; }
+.admin-login { min-height: 100dvh; display: grid; place-items: center; padding: 16px; }
+.admin-login form { width: min(100%, 400px); }
+.admin-login h1 { font-size: 22px; }
+.admin-main { max-width: 1080px; margin: 0 auto; padding: 24px; display: grid; gap: 16px; }
+.admin-main h1 { font-size: 24px; line-height: 1.35; }
+.admin-back { font-size: 14px; color: var(--brand); }
+.admin-events { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.admin-events a { display: grid; gap: 2px; padding: 14px 16px; background: var(--paper); border-radius: 4px; color: inherit; text-decoration: none; }
+.admin-events a:hover { outline: 2px solid var(--brand); }
+.admin-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 2px solid var(--line); }
+.admin-tabs button { min-height: 44px; padding: 8px 16px; border: 0; background: none; cursor: pointer; font-weight: 500; }
+.admin-tabs button[aria-selected='true'] { color: var(--brand); font-weight: 700; box-shadow: inset 0 -3px 0 var(--brand); }
+.admin-panel { display: grid; gap: 12px; }
+.admin-panel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.admin-table-wrap { overflow-x: auto; background: var(--paper); border-radius: 4px; }
+.admin-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.admin-table th { padding: 10px 12px; text-align: left; font-weight: 500; color: var(--ink-soft); white-space: nowrap; }
+.admin-table td { padding: 10px 12px; border-top: 1px solid var(--line); vertical-align: middle; }
+.admin-table tr.fixed td { background: var(--sky); }
+.admin-actions { white-space: nowrap; }
+.admin-actions button { margin-right: 10px; }
+.move { display: inline-flex; gap: 4px; }
+.move button { width: 36px; height: 36px; padding: 0; border: 1px solid var(--ink-soft); border-radius: 4px; background: var(--paper); cursor: pointer; font-size: 11px; }
+.admin-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 16px; padding: 16px; background: var(--paper); border-radius: 4px; border: 2px solid var(--brand); }
+.admin-form > .error { grid-column: 1 / -1; }
+.admin-form input:not([type='checkbox']), .admin-form select, .admin-form textarea { width: 100%; }
+.admin-form .span-2 { grid-column: span 2; }
+.admin-form .span-3 { grid-column: 1 / -1; }
+.admin-form-actions { display: flex; justify-content: flex-end; gap: 8px; }
+@media (max-width: 720px) {
+  .admin-form { grid-template-columns: minmax(0, 1fr); }
+  .admin-form .span-2 { grid-column: auto; }
+}
