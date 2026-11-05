@@ -1,10 +1,10 @@
-import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Put, Res } from '@nestjs/common';
-import { agencyLoginRequest, companyInput, createEventRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, pinnedNavRequest, pricingRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
-import type { Response } from 'express';
+import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Put, Query, Req, Res } from '@nestjs/common';
+import { agencyLoginRequest, companyInput, contactsRequest, createEventRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
+import type { Request, Response } from 'express';
 import type { ZodType } from 'zod';
 import { AgencyAdminService } from './agency-admin.service.ts';
 import { DomainError } from './errors.ts';
-import { assertSameOrigin, cookieValue, requestHost, type RequestHeaders } from './http.ts';
+import { assertSameOrigin, cookieValue, requestHost, sendPdf, type RequestHeaders } from './http.ts';
 
 const COOKIE = 'bt_agency_session';
 const cookieOptions = () => ({
@@ -227,5 +227,55 @@ export class AgencyController {
   @HttpCode(204)
   async deleteOption(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('optionId') optionId: string) {
     await this.admin.deleteOption(await this.configurer(h), eventId, optionId);
+  }
+
+  @Put('events/:eventId/option-groups/order')
+  @HttpCode(204)
+  async orderOptionGroups(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    await this.admin.reorderOptionGroups(await this.configurer(h), eventId, parse(orderRequest, body).ids);
+  }
+
+  @Put('events/:eventId/option-groups/:groupId/options/order')
+  @HttpCode(204)
+  async orderOptions(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('groupId') groupId: string, @Body() body: unknown) {
+    await this.admin.reorderOptions(await this.configurer(h), eventId, groupId, parse(orderRequest, body).ids);
+  }
+
+  @Put('events/:eventId/payment-terms')
+  @HttpCode(204)
+  async savePaymentTerms(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    await this.admin.savePaymentTerms(await this.configurer(h), eventId, parse(paymentTermsRequest, body));
+  }
+
+  @Put('events/:eventId/terms')
+  async uploadTerms(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Query('name') name: unknown, @Req() req: Request) {
+    return this.admin.uploadTerms(await this.configurer(h), eventId, typeof name === 'string' ? name : '', req.body);
+  }
+
+  @Get('events/:eventId/terms')
+  async downloadTerms(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Res() res: Response) {
+    const file = await this.admin.readTerms(await this.configurer(h), eventId);
+    sendPdf(res, file.name, file.content);
+  }
+
+  @Get('events/:eventId/contacts')
+  async contacts(@Headers() h: RequestHeaders, @Param('eventId') eventId: string) {
+    return this.admin.listContacts(await this.configurer(h), eventId);
+  }
+
+  @Put('events/:eventId/contacts')
+  async saveContacts(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    return this.admin.saveContacts(await this.configurer(h), eventId, parse(contactsRequest, body).contacts);
+  }
+
+  @Get('events/:eventId/publish-check')
+  async publishCheck(@Headers() h: RequestHeaders, @Param('eventId') eventId: string) {
+    return this.admin.publishCheck(await this.configurer(h), eventId);
+  }
+
+  @Post('events/:eventId/publish')
+  @HttpCode(204)
+  async publish(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    await this.admin.publish(await this.configurer(h), eventId, parse(publishRequest, body).confirmFreeSelfFee);
   }
 }

@@ -7,13 +7,16 @@ import { canSeeEventSection } from '../../../../lib/admin-nav';
 import { a } from '../../../../messages/admin';
 import { useAdminMe } from '../../admin-shell';
 import { BasicPanel } from './basic-panel';
+import { ContactsPanel } from './contacts-panel';
 import { FieldsPanel } from './fields-panel';
 import { OptionsPanel } from './options-panel';
+import { PaymentTermsPanel } from './payment-terms-panel';
+import { PublishPanel } from './publish-panel';
 import { SchedulePanel } from './schedule-panel';
 import { SessionsPanel } from './sessions-panel';
 import { TypesPanel } from './types-panel';
 
-const BUILT: EventNavKey[] = ['basic', 'schedule', 'sessions', 'types', 'options', 'fields'];
+const BUILT: EventNavKey[] = ['basic', 'schedule', 'sessions', 'types', 'options', 'fields', 'payment-terms', 'contacts', 'publish'];
 
 export function EventSection({ id, section }: { id: string; section: EventNavKey }) {
   const me = useAdminMe();
@@ -35,6 +38,9 @@ export function EventSection({ id, section }: { id: string; section: EventNavKey
       {section === 'types' && <TypesPanel event={event} />}
       {section === 'options' && <OptionsPanel event={event} />}
       {section === 'fields' && <FieldsPanel event={event} />}
+      {section === 'payment-terms' && <PaymentTermsPanel event={event} onSaved={load} />}
+      {section === 'contacts' && <ContactsPanel event={event} />}
+      {section === 'publish' && <PublishPanel event={event} onPublished={load} />}
       {!BUILT.includes(section) && <p className="muted">{a.comingSoon}</p>}
     </main>
   );

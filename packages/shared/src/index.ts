@@ -83,6 +83,7 @@ export const ERROR_CODES = [
   'INVALID_INPUT', 'CAPACITY_BELOW_SOLD', 'TIER_LIMIT_EXCEEDED', 'SESSION_IN_USE', 'FIELD_LOCKED',
   'FORBIDDEN', 'QUOTA_EMPTY', 'SLUG_TAKEN', 'EVENT_NOT_DRAFT', 'EVENT_NOT_PUBLISHED', 'PAGE_MODE_MISMATCH',
   'DUPLICATE_NAME', 'TRAVELER_TYPE_IN_USE', 'ROOM_TYPE_IN_USE', 'OPTION_IN_USE', 'QUOTA_IN_USE',
+  'PUBLISH_BLOCKED', 'PUBLISH_REQUIREMENT', 'INVALID_FILE', 'FILE_TOO_LARGE',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
@@ -202,6 +203,26 @@ export const optionInput = z.object({
   })).max(100),
 });
 export type OptionInput = z.infer<typeof optionInput>;
+
+export const paymentTermsRequest = z.object({
+  paymentInstructions: z.string().trim().max(2000).nullable().transform((v) => v || null),
+  retentionDays: z.number().int().min(1).max(3650),
+});
+export type PaymentTermsInput = z.infer<typeof paymentTermsRequest>;
+
+/** 整份送出；順序依陣列，服務人員不是後台帳號。 */
+export const contactsRequest = z.object({
+  contacts: z.array(z.object({
+    id: z.string().uuid().nullable().default(null),
+    name: z.string().trim().min(1).max(50),
+    phone: z.string().trim().min(1).max(30),
+    scope: z.string().trim().min(1).max(100),
+  })).max(20),
+});
+export type ContactsInput = z.infer<typeof contactsRequest>;
+
+/** 員工本人團費為 0 時，要明確確認才能發布。 */
+export const publishRequest = z.object({ confirmFreeSelfFee: z.boolean().default(false) });
 
 export const orderRequest = z.object({ ids: z.array(z.string().uuid()).min(1).max(200) });
 

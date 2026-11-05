@@ -141,10 +141,11 @@ function SessionForm({ event, session, sessions, onCancel, onSaved }: { event: A
         {rooms.length === 0 ? <small className="muted">{a.noRoomTypes}</small> : (
           <div className="admin-table-wrap">
             <table className="admin-table admin-edit-table">
-              <thead><tr><th scope="col">{a.roomTypeName}</th><th scope="col">{a.roomCapacity}</th><th scope="col">{a.roomSurcharge}</th><th scope="col">{a.roomBeds}</th><th scope="col">{a.actions}</th></tr></thead>
+              <thead><tr><th scope="col">{a.order}</th><th scope="col">{a.roomTypeName}</th><th scope="col">{a.roomCapacity}</th><th scope="col">{a.roomSurcharge}</th><th scope="col">{a.roomBeds}</th><th scope="col">{a.actions}</th></tr></thead>
               <tbody>
                 {rooms.map((r, i) => (
                   <tr key={i}>
+                    <td><MoveButtons name={r.name || a.roomLabel(a.roomTypeName, i)} canUp={i > 0} canDown={i < rooms.length - 1} onUp={() => setV({ ...v, roomTypes: swapped(rooms, i, i - 1) })} onDown={() => setV({ ...v, roomTypes: swapped(rooms, i, i + 1) })} /></td>
                     <td><input aria-label={a.roomLabel(a.roomTypeName, i)} type="text" required maxLength={50} value={r.name} onChange={(e) => setRoom(i, { name: e.target.value })} /></td>
                     <td><input aria-label={a.roomLabel(a.roomCapacity, i)} type="number" required min={1} max={20} value={r.capacity} onChange={(e) => setRoom(i, { capacity: Number(e.target.value) })} /></td>
                     <td><input aria-label={a.roomLabel(a.roomSurcharge, i)} type="number" required min={0} max={10000000} value={r.surcharge} onChange={(e) => setRoom(i, { surcharge: Number(e.target.value) })} /></td>

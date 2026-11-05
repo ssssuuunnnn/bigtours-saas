@@ -1,5 +1,10 @@
 import { hashPassword, hashToken } from '@bigtours/shared/crypto';
 import pg from 'pg';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+
+const DEMO_TERMS_PDF = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F1<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>>>>>>>endobj\n4 0 obj<</Length 66>>stream\nBT /F1 18 Tf 72 720 Td (Demo registration and privacy terms) Tj ET\nendstream endobj\ntrailer<</Root 1 0 R>>\n";
 
 // 本機示範資料。密碼與連結固定，方便開發；只在本機使用。
 const DEMO_PASSWORD = 'demo1234';
@@ -91,6 +96,20 @@ try {
     await client.query(`INSERT INTO session_room_types (agency_id, session_id, name, capacity, surcharge, bed_quota, sort_order) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [agency, session, name, capacity, surcharge, beds, i]);
   }
+
+  for (const [i, [name, phone, scope]] of [['李冠廷', '0912-000-111', '報名與付款問題'], ['吳佩珊', '0912-000-222', '行前說明、出團當天聯繫']].entries()) {
+    await client.query(`INSERT INTO event_service_contacts (agency_id, event_id, name, phone, scope, sort_order) VALUES ($1, $2, $3, $4, $5, $6)`, [agency, event, name, phone, scope, i]);
+  }
+  // 示範用條款：英文內容才不需要嵌入字型
+  const termsKey = `${agency}/events/${event}/terms/v1-demo.pdf`;
+  const termsPath = join(process.env.STORAGE_DIR ?? join(tmpdir(), 'bigtours-storage'), termsKey);
+  await mkdir(dirname(termsPath), { recursive: true });
+  await writeFile(termsPath, DEMO_TERMS_PDF);
+  await client.query(
+    `UPDATE events SET terms_object_key = $2, terms_file_name = '報名與個資條款.pdf',
+            payment_instructions = '請於 2/5（五）前匯款至 示範銀行 012-345678，並在備註填寫員工姓名。\n付款問題請洽 02-2345-6789。' WHERE id = $1`,
+    [event, termsKey],
+  );
 
   const fields: [string, string, string, unknown, boolean, boolean][] = [
     ['birthday', '生日', 'date', null, true, false],

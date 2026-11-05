@@ -188,6 +188,7 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
       <div style={brand}>
         {masthead}
         <Done
+          paymentInstructions={state.event.paymentInstructions}
           registration={registration}
           session={availability.find((s) => s.id === registration.sessionId)}
           fields={state.fields}
@@ -295,6 +296,7 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
               <input type="checkbox" checked={termsAccepted} onChange={(e) => { setTermsAccepted(e.target.checked); setTermsError(false); }} />
               <span>{t.terms}</span>
             </label>
+            {state.event.hasTerms && <p><a className="terms-link" href={`/api/v1/public/events/${state.event.slug}/terms`} target="_blank" rel="noopener">{t.termsLink}</a></p>}
             {termsError && <p className="error">{t.termsRequired}</p>}
             <button type="button" className="ghost wide abandon" disabled={busy} onClick={abandon}>{t.backToChoose}</button>
           </section>
@@ -552,7 +554,7 @@ function FeeBar({ fees, error, note, children }: { fees: { total: number; subsid
   );
 }
 
-function Done({ registration: r, session, fields, onCancel }: { registration: Registration; session?: SessionAvailability; fields: Field[]; onCancel: () => Promise<void> }) {
+function Done({ registration: r, session, fields, paymentInstructions, onCancel }: { registration: Registration; paymentInstructions: string | null; session?: SessionAvailability; fields: Field[]; onCancel: () => Promise<void> }) {
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requested = r.status === 'cancel_requested';
@@ -569,6 +571,12 @@ function Done({ registration: r, session, fields, onCancel }: { registration: Re
           <div><dt>{t.paymentStatus}</dt><dd>{t.payment[r.paymentStatus]}</dd></div>
         </dl>
       </section>
+      {paymentInstructions && r.selfPayAmount > 0 && !requested && (
+        <section className="block">
+          <h2>{t.paymentInstructions}</h2>
+          <p className="preline">{paymentInstructions}</p>
+        </section>
+      )}
       {r.travelers.map((x, i) => (
         <section className="block" key={i}>
           <h2>{x.name}<small className="muted"> {x.travelerTypeName}</small></h2>

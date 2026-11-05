@@ -1,9 +1,10 @@
-import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Put } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Put, Res } from '@nestjs/common';
 import { draftRequest, holdRequest, submitRequest, updateHoldRequest } from '@bigtours/shared';
+import type { Response } from 'express';
 import type { ZodType } from 'zod';
 import { AccessService } from './access.service.ts';
 import { DomainError } from './errors.ts';
-import { assertSameOrigin, requestHost, sessionTokenFrom } from './http.ts';
+import { assertSameOrigin, requestHost, sendPdf, sessionTokenFrom } from './http.ts';
 import { RegistrationService } from './registration.service.ts';
 
 function parse<T>(schema: ZodType<T, any, any>, body: unknown, code: 'INVALID_SELECTION' | 'INVALID_DETAILS'): T {
@@ -28,6 +29,12 @@ export class PublicController {
   @Get()
   async state(@Headers() h: Record<string, string>, @Param('slug') slug: string) {
     return this.registrations.getState(await this.ctx(h, slug));
+  }
+
+  @Get('terms')
+  async terms(@Headers() h: Record<string, string>, @Param('slug') slug: string, @Res() res: Response) {
+    const file = await this.registrations.readTerms(await this.ctx(h, slug));
+    sendPdf(res, file.name, file.content);
   }
 
   @Get('availability')

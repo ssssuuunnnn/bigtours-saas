@@ -36,6 +36,10 @@ const STATUS: Record<ErrorCode, number> = {
   ROOM_TYPE_IN_USE: 409,
   OPTION_IN_USE: 409,
   QUOTA_IN_USE: 409,
+  PUBLISH_BLOCKED: 409,
+  PUBLISH_REQUIREMENT: 409,
+  INVALID_FILE: 422,
+  FILE_TOO_LARGE: 413,
 };
 
 /** 回傳錯誤代碼，文字由前端依語系顯示。 */

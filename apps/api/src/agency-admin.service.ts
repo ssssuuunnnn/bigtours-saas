@@ -1,11 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { can, pageState, type AgencyPermission, type EventBasicInput, type EventNavKey, type EventScheduleInput, type FieldInput, type OptionGroupInput, type OptionInput, type PricingInput, type SessionInput } from '@bigtours/shared';
+import { can, pageState, type AgencyPermission, type ContactsInput, type EventBasicInput, type EventNavKey, type EventScheduleInput, type FieldInput, type OptionGroupInput, type OptionInput, type PaymentTermsInput, type PricingInput, type SessionInput } from '@bigtours/shared';
 import { generateToken, hashPassword, verifyPassword } from '@bigtours/shared/crypto';
 import { randomBytes } from 'node:crypto';
 import { AccessService } from './access.service.ts';
 import { DatabaseService, type Tx } from './database.service.ts';
 import { EncryptionService } from './encryption.service.ts';
 import { DomainError } from './errors.ts';
+import { StorageService } from './storage.service.ts';
 
 const SESSION_HOURS = 12;
 const MAX_FAILED_LOGINS = 5;
@@ -67,6 +68,7 @@ export class AgencyAdminService {
     @Inject(DatabaseService) private readonly db: DatabaseService,
     @Inject(EncryptionService) private readonly encryption: EncryptionService,
     @Inject(AccessService) private readonly access: AccessService,
+    @Inject(StorageService) private readonly storage: StorageService,
   ) {}
 
   // ===== 登入 =====
@@ -166,7 +168,8 @@ export class AgencyAdminService {
       const event = await this.lockEvent(tx, eventId, false);
       const { rows } = await tx.query(
         `SELECT e.status, e.itinerary, e.theme_color, e.support_phone, e.support_hours, e.page_mode, e.page_is_open, e.page_opens_at, e.page_closes_at,
-                e.registration_opens_at, e.registration_closes_at, c.name AS company_name,
+                e.registration_opens_at, e.registration_closes_at, e.payment_instructions, e.retention_days,
+                e.terms_file_name, e.terms_version, c.name AS company_name,
                 (SELECT count(*)::int FROM seat_holds h WHERE h.event_id = e.id AND h.status = 'active' AND h.expires_at > now()) AS active_holds
            FROM events e JOIN companies c ON c.id = e.company_id WHERE e.id = $1`,
         [eventId],
@@ -179,6 +182,8 @@ export class AgencyAdminService {
         pageMode: r.page_mode, pageIsOpen: r.page_is_open, pageOpensAt: r.page_opens_at, pageClosesAt: r.page_closes_at,
         registrationOpensAt: r.registration_opens_at, registrationClosesAt: r.registration_closes_at,
         pageState: this.currentPageState(r), activeHolds: r.active_holds,
+        paymentInstructions: r.payment_instructions, retentionDays: r.retention_days,
+        termsFileName: r.terms_file_name, termsVersion: r.terms_version,
       };
     });
   }
@@ -379,6 +384,11 @@ export class AgencyAdminService {
         [sessionId],
       );
       if (used.rowCount) throw new DomainError('SESSION_IN_USE');
+      const { rows: others } = await tx.query(
+        `SELECT e.status, (SELECT count(*)::int FROM event_sessions s WHERE s.event_id = e.id AND s.id <> $2) AS others FROM events e WHERE e.id = $1`,
+        [eventId, sessionId],
+      );
+      if (others[0].status !== 'draft' && others[0].others === 0) throw new DomainError('PUBLISH_REQUIREMENT');
       await tx.query(`DELETE FROM event_sessions WHERE id = $1`, [sessionId]);
     });
   }
@@ -674,6 +684,170 @@ export class AgencyAdminService {
     if (rowCount) throw new DomainError('DUPLICATE_NAME');
   }
 
+  reorderOptionGroups(ctx: AgencyUserContext, eventId: string, ids: string[]) {
+    return this.reorder(ctx, eventId, 'option_groups', ids);
+  }
+
+  async reorderOptions(ctx: AgencyUserContext, eventId: string, groupId: string, ids: string[]) {
+    await this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, true);
+      await this.assertGroup(tx, eventId, groupId);
+      const { rows } = await tx.query(`SELECT id FROM options WHERE group_id = $1`, [groupId]);
+      const existing = new Set(rows.map((r) => r.id as string));
+      if (new Set(ids).size !== ids.length || ids.length !== existing.size || ids.some((id) => !existing.has(id))) {
+        throw new DomainError('INVALID_INPUT', { issues: ['ids'] });
+      }
+      await tx.query(
+        `UPDATE options t SET sort_order = o.ord FROM unnest($1::uuid[]) WITH ORDINALITY AS o(id, ord) WHERE t.id = o.id AND t.group_id = $2`,
+        [ids, groupId],
+      );
+    });
+  }
+
+  // ===== 付款說明與條款 =====
+
+  async savePaymentTerms(ctx: AgencyUserContext, eventId: string, input: PaymentTermsInput) {
+    await this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, true);
+      if (!input.paymentInstructions && await this.isPublished(tx, eventId)) throw new DomainError('PUBLISH_REQUIREMENT');
+      await tx.query(
+        `UPDATE events SET payment_instructions = $2, retention_days = $3, updated_at = now() WHERE id = $1`,
+        [eventId, input.paymentInstructions, input.retentionDays],
+      );
+    });
+  }
+
+  /** 更換條款會產生新版本；舊檔保留，才能對照員工當時同意的內容。 */
+  uploadTerms(ctx: AgencyUserContext, eventId: string, name: string, content: unknown) {
+    if (!Buffer.isBuffer(content) || content.subarray(0, 5).toString('latin1') !== '%PDF-') throw new DomainError('INVALID_FILE');
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, true);
+      const { rows } = await tx.query(`SELECT terms_object_key, terms_version FROM events WHERE id = $1`, [eventId]);
+      const version: number = rows[0].terms_object_key ? rows[0].terms_version + 1 : rows[0].terms_version;
+      const key = `${ctx.agencyId}/events/${eventId}/terms/v${version}-${randomBytes(6).toString('hex')}.pdf`;
+      const fileName = name.replace(/[\\/\p{Cc}]/gu, '').trim().slice(-200) || 'terms.pdf';
+      await this.storage.put(key, content);
+      await tx.query(
+        `UPDATE events SET terms_object_key = $2, terms_file_name = $3, terms_version = $4, updated_at = now() WHERE id = $1`,
+        [eventId, key, fileName, version],
+      );
+      return { termsFileName: fileName, termsVersion: version };
+    });
+  }
+
+  async readTerms(ctx: AgencyUserContext, eventId: string) {
+    const r = await this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, false);
+      const { rows } = await tx.query(`SELECT terms_object_key, terms_file_name FROM events WHERE id = $1`, [eventId]);
+      return rows[0];
+    });
+    if (!r.terms_object_key) throw new DomainError('NOT_FOUND');
+    return { name: r.terms_file_name as string, content: await this.storage.get(r.terms_object_key) };
+  }
+
+  // ===== 服務人員 =====
+
+  listContacts(ctx: AgencyUserContext, eventId: string) {
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, false);
+      return this.readContacts(tx, eventId);
+    });
+  }
+
+  saveContacts(ctx: AgencyUserContext, eventId: string, input: ContactsInput['contacts']) {
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, true);
+      if (input.length === 0 && await this.isPublished(tx, eventId)) throw new DomainError('PUBLISH_REQUIREMENT');
+      const { rows } = await tx.query(`SELECT id FROM event_service_contacts WHERE event_id = $1`, [eventId]);
+      const existing = new Set(rows.map((r) => r.id as string));
+      if (input.some((c) => c.id && !existing.has(c.id))) throw new DomainError('INVALID_INPUT', { issues: ['contacts'] });
+      const keep = input.flatMap((c) => (c.id ? [c.id] : []));
+      await tx.query(`DELETE FROM event_service_contacts WHERE event_id = $1 AND NOT (id = ANY($2::uuid[]))`, [eventId, keep]);
+      for (const [i, c] of input.entries()) {
+        if (c.id) {
+          await tx.query(`UPDATE event_service_contacts SET name = $2, phone = $3, scope = $4, sort_order = $5 WHERE id = $1`, [c.id, c.name, c.phone, c.scope, i + 1]);
+        } else {
+          await tx.query(
+            `INSERT INTO event_service_contacts (agency_id, event_id, name, phone, scope, sort_order) VALUES ($1, $2, $3, $4, $5, $6)`,
+            [ctx.agencyId, eventId, c.name, c.phone, c.scope, i + 1],
+          );
+        }
+      }
+      return this.readContacts(tx, eventId);
+    });
+  }
+
+  private async readContacts(tx: Tx, eventId: string) {
+    const { rows } = await tx.query(`SELECT id, name, phone, scope FROM event_service_contacts WHERE event_id = $1 ORDER BY sort_order, name`, [eventId]);
+    return rows;
+  }
+
+  // ===== 發布 =====
+
+  publishCheck(ctx: AgencyUserContext, eventId: string) {
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, false);
+      return this.computePublishChecks(tx, eventId);
+    });
+  }
+
+  /** 重新檢查後才發布；檢查與改狀態都在鎖定活動的交易內。 */
+  async publish(ctx: AgencyUserContext, eventId: string, confirmFreeSelfFee: boolean) {
+    await this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, true);
+      const { status, checks } = await this.computePublishChecks(tx, eventId);
+      if (status !== 'draft') throw new DomainError('EVENT_NOT_DRAFT');
+      const blocked = checks.filter((c) => c.state === 'block' || (c.state === 'confirm' && !confirmFreeSelfFee)).map((c) => c.key);
+      if (blocked.length) throw new DomainError('PUBLISH_BLOCKED', { keys: blocked });
+      await tx.query(`UPDATE events SET status = 'published', updated_at = now() WHERE id = $1`, [eventId]);
+    });
+  }
+
+  private async computePublishChecks(tx: Tx, eventId: string) {
+    const { rows } = await tx.query(
+      `SELECT e.status, e.itinerary, e.hero_object_key, e.terms_object_key, e.terms_version, e.payment_instructions,
+              e.registration_opens_at, e.registration_closes_at, e.page_mode,
+              (SELECT count(*)::int FROM event_fields f WHERE f.event_id = e.id) AS fields,
+              (SELECT count(*)::int FROM event_service_contacts c WHERE c.event_id = e.id) AS contacts,
+              (SELECT count(*)::int FROM event_employees m WHERE m.event_id = e.id AND m.status = 'active') AS employees,
+              (SELECT count(*)::int FROM traveler_types t WHERE t.event_id = e.id) AS types,
+              (SELECT base_price FROM traveler_types t WHERE t.event_id = e.id AND t.is_employee_self) AS self_fee,
+              (SELECT count(*)::int FROM event_sessions s WHERE s.event_id = e.id) AS sessions,
+              (SELECT COALESCE(sum(s.capacity), 0)::int FROM event_sessions s WHERE s.event_id = e.id) AS capacity,
+              (SELECT count(*)::int FROM event_sessions s WHERE s.event_id = e.id AND EXISTS (SELECT 1 FROM session_room_types r WHERE r.session_id = s.id)
+                  AND (SELECT sum(r.bed_quota) FROM session_room_types r WHERE r.session_id = s.id) < s.capacity) AS short_beds,
+              (SELECT count(*)::int FROM option_groups g WHERE g.event_id = e.id) AS groups,
+              (SELECT count(*)::int FROM option_groups g WHERE g.event_id = e.id AND g.is_required AND NOT EXISTS (SELECT 1 FROM options o WHERE o.group_id = g.id)) AS required_empty,
+              (SELECT count(*)::int FROM option_groups g WHERE g.event_id = e.id AND NOT g.is_required AND NOT EXISTS (SELECT 1 FROM options o WHERE o.group_id = g.id)) AS optional_empty
+         FROM events e WHERE e.id = $1`,
+      [eventId],
+    );
+    const r = rows[0];
+    const days: number = r.itinerary?.days?.length ?? 0;
+    const hasPeriod = r.registration_opens_at !== null && r.registration_closes_at !== null;
+    const check = (key: string, state: 'ok' | 'warn' | 'block' | 'confirm', data: Record<string, unknown> = {}) => ({ key, state, data });
+    const selfFee: number = r.self_fee ?? 0;
+    const checks = [
+      check('basic', days > 0 ? 'ok' : 'warn', { days }),
+      check('heroImage', r.hero_object_key ? 'ok' : 'warn'),
+      check('schedule', hasPeriod ? 'ok' : 'warn', { hasPeriod, opensAt: r.registration_opens_at, closesAt: r.registration_closes_at, pageMode: r.page_mode }),
+      check('sessions', r.sessions === 0 || r.capacity === 0 ? 'block' : r.short_beds > 0 ? 'warn' : 'ok', { count: r.sessions, capacity: r.capacity, shortBeds: r.short_beds }),
+      check('types', r.self_fee === null ? 'block' : selfFee === 0 ? 'confirm' : 'ok', { count: r.types, selfFee }),
+      check('options', r.required_empty > 0 ? 'block' : r.optional_empty > 0 ? 'warn' : 'ok', { count: r.groups, requiredEmpty: r.required_empty, optionalEmpty: r.optional_empty }),
+      check('fields', 'ok', { count: r.fields }),
+      check('terms', r.terms_object_key ? 'ok' : 'block', { version: r.terms_version }),
+      check('payment', r.payment_instructions ? 'ok' : 'block'),
+      check('contacts', r.contacts > 0 ? 'ok' : 'block', { count: r.contacts }),
+      check('roster', r.employees > 0 ? 'ok' : 'warn', { count: r.employees }),
+    ];
+    return { status: r.status as string, checks };
+  }
+
+  private async isPublished(tx: Tx, eventId: string) {
+    const { rows } = await tx.query(`SELECT status FROM events WHERE id = $1`, [eventId]);
+    return rows[0].status !== 'draft';
+  }
+
   // ===== 旅客資料欄位 =====
 
   listFields(ctx: AgencyUserContext, eventId: string) {
@@ -734,7 +908,7 @@ export class AgencyAdminService {
 
   // ===== 內部 =====
 
-  private async reorder(ctx: AgencyUserContext, eventId: string, table: 'event_sessions' | 'event_fields', ids: string[]) {
+  private async reorder(ctx: AgencyUserContext, eventId: string, table: 'event_sessions' | 'event_fields' | 'option_groups', ids: string[]) {
     await this.db.withTenant(ctx.agencyId, async (tx) => {
       await this.lockEvent(tx, eventId, true);
       const { rows } = await tx.query(`SELECT id FROM ${table} WHERE event_id = $1`, [eventId]);

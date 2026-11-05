@@ -26,6 +26,8 @@ export interface EventInfo {
   defaultDependentLimit: number;
   allowDependentsOnly: boolean;
   termsVersion: number;
+  hasTerms: boolean;
+  paymentInstructions: string | null;
   pageState: PageState;
   pageOpensAt: Date | null;
 }
@@ -69,7 +71,7 @@ export class AccessService {
     const r = await this.db.withTenant(agencyId, async (tx) => {
       const { rows } = await tx.query(
         `SELECT id, slug, name, itinerary, status, registration_opens_at, registration_closes_at,
-                default_subsidy_amount, default_dependent_limit, allow_dependents_only, terms_version,
+                default_subsidy_amount, default_dependent_limit, allow_dependents_only, terms_version, terms_object_key, payment_instructions,
                 page_mode, page_is_open, page_opens_at, page_closes_at, theme_color
            FROM events WHERE slug = $1 AND status IN ('published', 'closed')`,
         [slug],
@@ -90,6 +92,8 @@ export class AccessService {
       defaultDependentLimit: r.default_dependent_limit,
       allowDependentsOnly: r.allow_dependents_only,
       termsVersion: r.terms_version,
+      hasTerms: r.terms_object_key !== null,
+      paymentInstructions: r.payment_instructions,
       pageState: pageState({ mode: r.page_mode, isOpen: r.page_is_open, opensAt: r.page_opens_at, closesAt: r.page_closes_at }),
       pageOpensAt: r.page_mode === 'scheduled' ? r.page_opens_at : null,
     };
