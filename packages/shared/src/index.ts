@@ -83,6 +83,7 @@ export const ERROR_CODES = [
   'INVALID_INPUT', 'CAPACITY_BELOW_SOLD', 'TIER_LIMIT_EXCEEDED', 'SESSION_IN_USE', 'FIELD_LOCKED',
   'FORBIDDEN', 'QUOTA_EMPTY', 'SLUG_TAKEN', 'EVENT_NOT_DRAFT', 'EVENT_NOT_PUBLISHED', 'PAGE_MODE_MISMATCH',
   'DUPLICATE_NAME', 'TRAVELER_TYPE_IN_USE', 'ROOM_TYPE_IN_USE', 'OPTION_IN_USE', 'QUOTA_IN_USE',
+  'DUPLICATE_EMPLOYEE_NO', 'EMPLOYEE_NO_LOCKED', 'EMPLOYEE_HAS_REGISTRATION', 'CSV_BAD_HEADER', 'CSV_TOO_MANY_ROWS',
   'PUBLISH_BLOCKED', 'PUBLISH_REQUIREMENT', 'INVALID_FILE', 'FILE_TOO_LARGE',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -223,6 +224,25 @@ export type ContactsInput = z.infer<typeof contactsRequest>;
 
 /** 員工本人團費為 0 時，要明確確認才能發布。 */
 export const publishRequest = z.object({ confirmFreeSelfFee: z.boolean().default(false) });
+
+/** 補助與眷屬上限留空時套用活動預設值。 */
+export const employeeInput = z.object({
+  employeeNo: z.string().trim().min(1).max(50),
+  name: z.string().trim().min(1).max(100),
+  email: z.string().trim().email().max(200).nullable().or(z.literal('').transform(() => null)),
+  department: z.string().trim().max(100).nullable().transform((v) => v || null),
+  subsidyAmount: z.number().int().min(0).max(10_000_000).nullable(),
+  dependentLimit: z.number().int().min(0).max(50).nullable(),
+});
+export type EmployeeInput = z.infer<typeof employeeInput>;
+
+/** 指定員工，或寄給所有還沒收到信（未寄、失敗、已過期）的員工。 */
+export const accountEmailRequest = z.union([
+  z.object({ employeeIds: z.array(z.string().uuid()).min(1).max(5000) }),
+  z.object({ allPending: z.literal(true) }),
+]);
+
+export const rosterCopyRequest = z.object({ fromEventId: z.string().uuid() });
 
 export const orderRequest = z.object({ ids: z.array(z.string().uuid()).min(1).max(200) });
 

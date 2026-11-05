@@ -16,6 +16,8 @@ x-app: &app
     TOKEN_HASH_KEY: dev-only-token-hash-key
     WEB_BASE_URL: http://{agency}.lvh.me:3000
     STORAGE_DIR: /data/storage
+    SMTP_URL: smtp://mailpit:1025
+    MAIL_FROM: no-reply@bigtours.example
 
 services:
   postgres:

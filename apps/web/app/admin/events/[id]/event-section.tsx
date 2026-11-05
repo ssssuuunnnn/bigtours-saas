@@ -12,11 +12,12 @@ import { FieldsPanel } from './fields-panel';
 import { OptionsPanel } from './options-panel';
 import { PaymentTermsPanel } from './payment-terms-panel';
 import { PublishPanel } from './publish-panel';
+import { RosterPanel } from './roster-panel';
 import { SchedulePanel } from './schedule-panel';
 import { SessionsPanel } from './sessions-panel';
 import { TypesPanel } from './types-panel';
 
-const BUILT: EventNavKey[] = ['basic', 'schedule', 'sessions', 'types', 'options', 'fields', 'payment-terms', 'contacts', 'publish'];
+const BUILT: EventNavKey[] = ['basic', 'schedule', 'sessions', 'types', 'options', 'fields', 'payment-terms', 'contacts', 'publish', 'roster'];
 
 export function EventSection({ id, section }: { id: string; section: EventNavKey }) {
   const me = useAdminMe();
@@ -41,6 +42,7 @@ export function EventSection({ id, section }: { id: string; section: EventNavKey
       {section === 'payment-terms' && <PaymentTermsPanel event={event} onSaved={load} />}
       {section === 'contacts' && <ContactsPanel event={event} />}
       {section === 'publish' && <PublishPanel event={event} onPublished={load} />}
+      {section === 'roster' && <RosterPanel event={event} />}
       {!BUILT.includes(section) && <p className="muted">{a.comingSoon}</p>}
     </main>
   );

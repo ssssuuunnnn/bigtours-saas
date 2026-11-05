@@ -6,6 +6,7 @@ import pg from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.ts';
+import { MailService } from '../src/mail.service.ts';
 
 const PASSWORD = 'abcd1234';
 let app: INestApplication;
@@ -900,5 +901,205 @@ describe('前台圖片、行程 PDF 與複製活動', () => {
     await api(ops).post('/copy', body('nope-1')).expect(403);
     await admin.query(`DELETE FROM agency_quota_ledger WHERE agency_id = $1`, [a.agencyId]);
     expect((await api(a).post('/copy', body(`q-${Date.now()}`)).expect(409)).body.code).toBe('QUOTA_EMPTY');
+  });
+});
+
+describe('員工名單與帳號開通', () => {
+  const emp = (o: object = {}) => ({ employeeNo: 'E001', name: '陳怡君', email: 'e001@example.com', department: '研發部', subsidyAmount: null, dependentLimit: null, ...o });
+  const csv = (a: Ag, path: string, content: string | Buffer) => request(app.getHttpServer()).post(`/api/v1/agency/events/${a.eventId}/employees/import${path}`)
+    .set('x-forwarded-host', a.host).set('cookie', a.cookie).set('content-type', 'text/csv').send(Buffer.from(content));
+  const list = async (a: Ag, query = '') => (await api(a).get(`/employees${query}`).expect(200)).body;
+  const mail = () => app.get(MailService);
+  const until = async (fn: () => Promise<boolean>) => { for (let i = 0; i < 100; i++) { if (await fn()) return; await new Promise((r) => setTimeout(r, 30)); } throw new Error('等待逾時'); };
+  const stateOf = async (a: Ag, no: string) => (await list(a, `?search=${no}`)).rows[0]?.accountState;
+
+  it('新增、修改與搜尋；員工編號不能重複，補助留空回傳 null', async () => {
+    const a = await makeAgency('admin');
+    await api(a).post('/employees', emp({ email: '壞信箱' })).expect(422);
+    const id = (await api(a).post('/employees', emp()).expect(201)).body.id;
+    expect((await api(a).post('/employees', emp()).expect(409)).body.code).toBe('DUPLICATE_EMPLOYEE_NO');
+    await api(a).post('/employees', emp({ employeeNo: 'E002', name: '林雅婷', email: '', subsidyAmount: 12000, dependentLimit: 3 })).expect(201);
+    const all = await list(a);
+    expect(all).toMatchObject({ total: 2, rosterTotal: 2, pageSize: 50, summary: { none: 1, no_email: 1 } });
+    expect(all.rows[0]).toMatchObject({ id, employeeNo: 'E001', subsidyAmount: null, accountState: 'none', registered: false });
+    expect((await list(a, '?search=雅婷')).rows.map((r: any) => r.employeeNo)).toEqual(['E002']);
+    expect((await list(a, '?search=%25')).total).toBe(0);
+    expect((await list(a, '?account=no_email')).rows.map((r: any) => r.employeeNo)).toEqual(['E002']);
+    expect((await list(a, '?registration=registered')).total).toBe(0);
+    await api(a).patch(`/employees/${id}`, emp({ name: '陳怡君二', subsidyAmount: 500 })).expect(204);
+    expect((await list(a)).rows[0]).toMatchObject({ name: '陳怡君二', subsidyAmount: 500 });
+    expect((await api(a).patch(`/employees/${id}`, emp({ employeeNo: 'E002' })).expect(409)).body.code).toBe('DUPLICATE_EMPLOYEE_NO');
+    const other = await makeAgency('admin');
+    await api(other).patch(`/employees/${id}`, emp()).expect(404);
+    expect((await api(other).get('/employees').expect(200)).body.total).toBe(0);
+  });
+
+  it('開通後不能改員工編號；報名開始後改補助留下紀錄', async () => {
+    const a = await makeAgency('admin');
+    const id = (await api(a).post('/employees', emp()).expect(201)).body.id;
+    await api(a).patch(`/employees/${id}`, emp({ subsidyAmount: 100 })).expect(204);
+    const log = await q1(`SELECT actor_type, actor_id IS NOT NULL AS has_actor, metadata FROM audit_logs WHERE agency_id = $1 AND action = 'employee.subsidy_changed' AND target_id = $2`, [a.agencyId, id]);
+    expect(log).toEqual({ actor_type: 'agency_user', has_actor: true, metadata: { from: null, to: 100 } });
+    await admin.query(`UPDATE events SET registration_opens_at = now() + interval '1 day' WHERE id = $1`, [a.eventId]);
+    await api(a).patch(`/employees/${id}`, emp({ subsidyAmount: 200 })).expect(204);
+    expect((await admin.query(`SELECT 1 FROM audit_logs WHERE action = 'employee.subsidy_changed' AND target_id = $1`, [id])).rowCount).toBe(1);
+    await admin.query(`UPDATE event_employees SET password_set_at = now(), password_hash = 'x' WHERE id = $1`, [id]);
+    expect((await api(a).patch(`/employees/${id}`, emp({ employeeNo: 'E999' })).expect(409)).body.code).toBe('EMPLOYEE_NO_LOCKED');
+    expect((await list(a)).rows[0].accountState).toBe('activated');
+  });
+
+  it('已報名不能移除；移除後不在名單內，重新加入要重新開通', async () => {
+    const a = await makeAgency('admin');
+    const id = (await api(a).post('/employees', emp()).expect(201)).body.id;
+    const s = (await api(a).post('/sessions', session()).expect(201)).body.id;
+    const reg = await q1(
+      `INSERT INTO registrations (agency_id, event_id, session_id, event_employee_id, total_amount, payment_status, terms_version_accepted, terms_accepted_at)
+       VALUES ($1, $2, $3, $4, 0, 'unpaid', 1, now()) RETURNING id`, [a.agencyId, a.eventId, s, id]);
+    expect((await list(a)).rows[0].registered).toBe(true);
+    expect((await list(a, '?registration=registered')).total).toBe(1);
+    expect((await api(a).del(`/employees/${id}`).expect(409)).body.code).toBe('EMPLOYEE_HAS_REGISTRATION');
+    await admin.query(`UPDATE registrations SET status = 'cancelled' WHERE id = $1`, [reg.id]);
+    await admin.query(`UPDATE event_employees SET password_set_at = now(), password_hash = 'x' WHERE id = $1`, [id]);
+    await api(a).del(`/employees/${id}`).expect(204);
+    expect((await list(a)).total).toBe(0);
+    await api(a).post('/employees', emp({ name: '回來了' })).expect(201);
+    expect((await list(a)).rows[0]).toMatchObject({ id, name: '回來了', activated: false });
+  });
+
+  it('CSV 預覽不寫入，列出錯誤與重複；確認後才匯入', async () => {
+    const a = await makeAgency('admin');
+    await api(a).post('/employees', emp({ employeeNo: 'E001', name: '舊名字', subsidyAmount: 100 })).expect(201);
+    const file = [
+      '員工編號,姓名,部門,Email,補助金額,眷屬人數上限',
+      'E001,新名字,研發部,e001@example.com,"8,000",2',
+      'E002,林雅婷,,,,',
+      ',何美玲,,,,',
+      'E003,,,,,',
+      'E004,鄭宇軒,,yuxuan@,,',
+      'E005,許雅雯,,,八千,',
+      'E006,王小明,,,,三人',
+      'E002,重複的,,,,',
+    ].join('\n');
+    const preview = (await csv(a, '/preview', file).expect(200)).body;
+    expect(preview).toMatchObject({ newCount: 1, updateCount: 1, errorCount: 5, duplicateCount: 1, issuesTruncated: false });
+    expect(preview.issues.map((i: any) => [i.row, i.code])).toEqual([[4, 'MISSING_NO'], [5, 'MISSING_NAME'], [6, 'BAD_EMAIL'], [7, 'BAD_SUBSIDY'], [8, 'BAD_LIMIT'], [9, 'DUPLICATE']]);
+    expect(preview.issues[3].value).toBe('八千');
+    expect(preview.issues[5].firstRow).toBe(3);
+    expect((await list(a)).total).toBe(1);
+
+    expect((await csv(a, '', file).expect(200)).body).toEqual({ created: 1, updated: 1, errorCount: 5, duplicateCount: 1 });
+    const rows = (await list(a)).rows;
+    expect(rows.map((r: any) => [r.employeeNo, r.name, r.subsidyAmount, r.dependentLimit, r.department])).toEqual([['E001', '新名字', 8000, 2, '研發部'], ['E002', '林雅婷', null, null, null]]);
+    expect(mail().sent.filter((m) => m.to === 'e001@example.com' && m.subject.includes('設定密碼')).length).toBe(0);
+  });
+
+  it('CSV 接受 UTF-8 BOM 與 Big5，沒有的欄位不動，檔案有問題時回傳明確錯誤', async () => {
+    const a = await makeAgency('admin');
+    await api(a).post('/employees', emp()).expect(201);
+    await csv(a, '', '﻿員工編號,姓名\nE001,改名\n').expect(200);
+    expect((await list(a)).rows[0]).toMatchObject({ name: '改名', email: 'e001@example.com', department: '研發部' });
+    // 「員工編號,姓名\nE100,王小明」的 Big5 編碼
+    const big5 = Buffer.from('rfukdb1zuLksqW2mVwpFMTAwLKT9pHCp+go=', 'base64');
+    expect((await csv(a, '/preview', big5).expect(200)).body.newCount).toBe(1);
+    await csv(a, '', big5).expect(200);
+    expect((await list(a, '?search=E100')).rows[0].name).toBe('王小明');
+    expect((await csv(a, '/preview', '姓名,部門\nA,B\n').expect(422)).body.code).toBe('CSV_BAD_HEADER');
+    // 真的 Excel 檔（zip）或其他二進位內容不會被當成名單
+    expect((await csv(a, '/preview', Buffer.from([0x50, 0x4b, 0x03, 0x04, 0xff, 0xff, 0xff])).expect(422)).body.code).toMatch(/INVALID_FILE|CSV_BAD_HEADER/);
+    expect((await csv(a, '/preview', '').expect(422)).body.code).toBe('INVALID_FILE');
+    const many = ['員工編號,姓名', ...Array.from({ length: 5001 }, (_, i) => `N${i},X`)].join('\n');
+    expect((await csv(a, '/preview', many).expect(422)).body.code).toBe('CSV_TOO_MANY_ROWS');
+    expect((await csv(a, '/preview', Buffer.alloc(6 * 1024 * 1024, 65)).expect(413)).body.code).toBe('FILE_TOO_LARGE');
+  });
+
+  it('從同企業的其他活動複製名單，不帶密碼，已有的不動；不能跨企業', async () => {
+    const a = await makeAgency('admin');
+    const company = (await q1(`SELECT company_id FROM events WHERE id = $1`, [a.eventId])).company_id;
+    const target = await q1(`INSERT INTO events (agency_id, company_id, slug, name, pricing_tier_id) VALUES ($1, $2, 'evt2', 'E2', $3) RETURNING id`, [a.agencyId, company, tierId]);
+    const b: Ag = { ...a, eventId: target.id };
+    const id = (await api(a).post('/employees', emp({ subsidyAmount: 300 })).expect(201)).body.id;
+    await api(a).post('/employees', emp({ employeeNo: 'E002', email: '' })).expect(201);
+    await admin.query(`UPDATE event_employees SET password_set_at = now(), password_hash = 'x' WHERE id = $1`, [id]);
+    await api(b).post('/employees', emp({ employeeNo: 'E002', name: '已存在' })).expect(201);
+    expect((await api(b).get('/employees/copy-sources').expect(200)).body).toEqual([{ id: a.eventId, name: 'E', employees: 2 }]);
+    expect((await api(b).post('/employees/copy', { fromEventId: a.eventId }).expect(200)).body).toEqual({ added: 1, skipped: 1 });
+    const rows = (await list(b)).rows;
+    expect(rows.map((r: any) => [r.employeeNo, r.name, r.subsidyAmount, r.activated])).toEqual([['E001', '陳怡君', 300, false], ['E002', '已存在', null, false]]);
+    const other = await makeAgency('admin');
+    await api(other).post('/employees/copy', { fromEventId: a.eventId }).expect(404);
+  });
+
+  it('寄帳號信：背景寄送含連結、沒信箱跳過、失敗可重寄；連結設定密碼後變已開通', async () => {
+    const a = await makeAgency('admin');
+    const stamp = randomUUID().slice(0, 8);
+    const addr = (n: string) => `${n}-${stamp}@example.com`;
+    const ok = (await api(a).post('/employees', emp({ email: addr('ok') })).expect(201)).body.id;
+    await api(a).post('/employees', emp({ employeeNo: 'E002', email: '' })).expect(201);
+    const bad = (await api(a).post('/employees', emp({ employeeNo: 'E003', email: addr('bad') })).expect(201)).body.id;
+    mail().failFor.add(addr('bad'));
+    expect((await api(a).post('/employees/account-emails', { employeeIds: [ok, bad] }).expect(202)).body).toEqual({ queued: 2, skipped: 0 });
+    await until(async () => (await stateOf(a, 'E001')) === 'sent' && (await stateOf(a, 'E003')) === 'failed');
+    expect((await list(a)).summary).toMatchObject({ sent: 1, failed: 1, no_email: 1 });
+    const sent = mail().sent.filter((m) => m.to === addr('ok'));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.fromName).toBe('T');
+    const token = sent[0]!.text.match(/set-password\/(\S+)/)![1]!;
+    expect(sent[0]!.html).toContain(`set-password/${token}`);
+    expect(sent[0]!.text).not.toContain('E001');
+
+    // 只寄給還沒收到的人：失敗的重寄，沒信箱的跳過
+    mail().failFor.delete(addr('bad'));
+    expect((await api(a).post('/employees/account-emails', { allPending: true }).expect(202)).body).toEqual({ queued: 1, skipped: 0 });
+    await until(async () => (await stateOf(a, 'E003')) === 'sent');
+    expect(mail().sent.filter((m) => m.to === addr('ok'))).toHaveLength(1);
+
+    // 連結可用且設定後變已開通
+    await request(app.getHttpServer()).post('/api/v1/public/events/evt/password-links/set').set('x-forwarded-host', a.host).set('origin', `http://${a.host}`).send({ token, password: 'abcd1234' }).expect((r) => { if (r.status >= 300) throw new Error(`${r.status} ${JSON.stringify(r.body)}`); });
+    expect(await stateOf(a, 'E001')).toBe('activated');
+    // 指定寄給已開通的員工（忘記密碼）仍然可以
+    expect((await api(a).post('/employees/account-emails', { employeeIds: [ok] }).expect(202)).body.queued).toBe(1);
+    await until(async () => mail().sent.filter((m) => m.to === addr('ok')).length === 2);
+    await api(a).post('/employees/account-emails', { employeeIds: [] }).expect(422);
+  });
+
+  it('寄送中的員工不會重複排入；逾時視為失敗', async () => {
+    const a = await makeAgency('admin');
+    const id = (await api(a).post('/employees', emp()).expect(201)).body.id;
+    const m = await q1(`INSERT INTO email_messages (agency_id, event_id, event_employee_id, recipient_email, template_key, idempotency_key) VALUES ($1, $2, $3, 'x@example.com', 'account', $4) RETURNING id`, [a.agencyId, a.eventId, id, randomUUID()]);
+    expect(await stateOf(a, 'E001')).toBe('sending');
+    expect((await api(a).post('/employees/account-emails', { employeeIds: [id] }).expect(202)).body).toEqual({ queued: 0, skipped: 1 });
+    await admin.query(`UPDATE email_messages SET created_at = now() - interval '20 minutes' WHERE id = $1`, [m.id]);
+    expect(await stateOf(a, 'E001')).toBe('failed');
+  });
+
+  it('產生連結：舊連結失效、記錄產生人；有信箱才通知且信中不含連結', async () => {
+    const a = await makeAgency('admin');
+    const stamp = randomUUID().slice(0, 8);
+    const to = `link-${stamp}@example.com`;
+    const withMail = (await api(a).post('/employees', emp({ email: to })).expect(201)).body.id;
+    const noMail = (await api(a).post('/employees', emp({ employeeNo: 'E002', email: '' })).expect(201)).body.id;
+    const first = (await api(a).post(`/employees/${withMail}/password-link`, {}).expect(201)).body;
+    expect(first).toMatchObject({ slug: 'evt', notified: true, issuedBy: 'A' });
+    expect(first.token.length).toBeGreaterThan(20);
+    await until(async () => mail().sent.some((m) => m.to === to));
+    const notice = mail().sent.find((m) => m.to === to)!;
+    expect(notice.text).not.toContain(first.token);
+    expect(notice.text).not.toContain('set-password');
+    expect(await stateOf(a, 'E001')).toBe('link_issued');
+    const second = (await api(a).post(`/employees/${withMail}/password-link`, {}).expect(201)).body;
+    expect(second.token).not.toBe(first.token);
+    const links = (await admin.query(`SELECT revoked_at IS NOT NULL AS revoked, delivery, created_by_type FROM employee_password_links WHERE event_employee_id = $1 ORDER BY created_at`, [withMail])).rows;
+    expect(links).toEqual([{ revoked: true, delivery: 'manual', created_by_type: 'agency_user' }, { revoked: false, delivery: 'manual', created_by_type: 'agency_user' }]);
+    expect((await api(a).post(`/employees/${noMail}/password-link`, {}).expect(201)).body.notified).toBe(false);
+    const other = await makeAgency('admin');
+    await api(other).post(`/employees/${withMail}/password-link`, {}).expect(404);
+  });
+
+  it('營運人員不能看名單或開通帳號', async () => {
+    const a = await makeAgency('operations');
+    await api(a).get('/employees').expect(403);
+    await api(a).post('/employees', emp()).expect(403);
+    await api(a).post('/employees/account-emails', { allPending: true }).expect(403);
+    await csv(a, '/preview', '員工編號,姓名\n').expect(403);
   });
 });

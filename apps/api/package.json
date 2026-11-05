@@ -13,7 +13,9 @@
     "@nestjs/common": "^12",
     "@nestjs/core": "^12",
     "@nestjs/platform-express": "^12",
+    "csv-parse": "^7.0.3",
     "express": "^5.3.0",
+    "nodemailer": "^10.3.1",
     "pg": "^8",
     "reflect-metadata": "^0.2",
     "rxjs": "^7",
@@ -22,6 +24,7 @@
   "devDependencies": {
     "@types/express": "^5",
     "@types/node": "^22",
+    "@types/nodemailer": "^8.0.2",
     "@types/pg": "^8",
     "@types/supertest": "^6",
     "supertest": "^7",

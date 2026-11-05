@@ -72,7 +72,7 @@
 |---|---|---|
 | RDS PostgreSQL | PostgreSQL 容器 | 主要資料，RLS 與名額交易 |
 | S3（尚未實作） | 磁碟目錄（`STORAGE_DIR`） | 圖片、條款、行程 PDF、匯出檔 |
-| SES | Mailpit | 攔截所有信件，不寄給真實收件人 |
+| SES（SMTP 端點） | Mailpit | 只透過 `SMTP_URL` 寄信，本機攔截所有信件，不寄給真實收件人 |
 | KMS | 本機開發金鑰 | 敏感欄位加密，僅限開發使用 |
 | 子網域 | `abc-travel.lvh.me` | 指回本機，用於測試多旅行社 |
 
