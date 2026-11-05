@@ -25,6 +25,7 @@ const STATUS: Record<ErrorCode, number> = {
   TIER_LIMIT_EXCEEDED: 409,
   SESSION_IN_USE: 409,
   FIELD_LOCKED: 409,
+  FORBIDDEN: 403,
 };
 
 /** 回傳錯誤代碼，文字由前端依語系顯示。 */

@@ -1,15 +1,11 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { adminApi, type AdminEventSummary } from '../../lib/admin-api';
 import { a } from '../../messages/admin';
-import { AdminShell } from './admin-shell';
 
-export default function AdminHome() {
-  return <AdminShell>{() => <EventList />}</AdminShell>;
-}
-
-function EventList() {
+export default function EventList() {
   const [events, setEvents] = useState<AdminEventSummary[] | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => { adminApi.events().then(setEvents).catch(() => setFailed(true)); }, []);
@@ -22,10 +18,10 @@ function EventList() {
       <ul className="admin-events">
         {events.map((e) => (
           <li key={e.id}>
-            <a href={`/admin/events/${e.id}`}>
+            <Link href={`/admin/events/${e.id}`}>
               <strong>{e.name}</strong>
               <span className="muted">{e.companyName}・/{e.slug}・{a.status[e.status] ?? e.status}</span>
-            </a>
+            </Link>
           </li>
         ))}
       </ul>

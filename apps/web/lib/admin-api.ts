@@ -1,8 +1,9 @@
+import type { EventNavKey } from '@bigtours/shared';
 import { ApiError } from './api';
 
 export interface AdminEventSummary { id: string; slug: string; name: string; status: string; companyName: string }
 export interface AdminEvent { id: string; slug: string; name: string; tierMax: number; hasRegistrations: boolean }
-export interface AdminMe { agencyName: string; user: { name: string; role: string } }
+export interface AdminMe { agencyName: string; user: { name: string; role: string }; pinnedNavItems: EventNavKey[] }
 export interface SessionValues {
   name: string;
   departsOn: string;
@@ -33,6 +34,7 @@ export const adminApi = {
   login: (email: string, password: string) => call<void>('POST', '/session', { email, password }),
   logout: () => call<void>('DELETE', '/session'),
   me: () => call<AdminMe>('GET', '/me'),
+  setPinnedNav: (items: EventNavKey[]) => call<void>('PUT', '/me/pinned-nav', { items }),
   events: () => call<AdminEventSummary[]>('GET', '/events'),
   event: (id: string) => call<AdminEvent>('GET', `/events/${id}`),
   sessions: (id: string) => call<AdminSession[]>('GET', `/events/${id}/sessions`),
