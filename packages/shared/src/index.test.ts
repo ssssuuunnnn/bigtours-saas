@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calculateFees, isValidPassword, maskValue, pageState, seatStatus } from './index.ts';
+import { AGENCY_ROLES, calculateFees, can, isValidPassword, maskValue, pageState, pinnedNavRequest, seatStatus } from './index.ts';
 import { decrypt, encrypt, hashPassword, loadKey, verifyPassword } from './crypto.ts';
 
 describe('calculateFees', () => {
@@ -73,5 +73,30 @@ describe('pageState', () => {
     expect(pageState(page, at('2026-12-31T23:59:59Z'))).toBe('not_open');
     expect(pageState(page, opensAt)).toBe('open');
     expect(pageState(page, closesAt)).toBe('closed');
+  });
+});
+
+describe('旅行社角色權限', () => {
+  it('活動設定只開放管理員與活動操作員', () => {
+    expect(can('admin', 'configureEvents')).toBe(true);
+    expect(can('event_operator', 'configureEvents')).toBe(true);
+    expect(can('operations', 'configureEvents')).toBe(false);
+  });
+  it('營運工作三種角色都可以', () => {
+    for (const role of AGENCY_ROLES) expect(can(role, 'operateEvents')).toBe(true);
+  });
+  it('個資與人員管理只開放管理員', () => {
+    expect(can('event_operator', 'viewSensitiveData')).toBe(false);
+    expect(can('operations', 'manageAgency')).toBe(false);
+    expect(can('admin', 'manageAgency')).toBe(true);
+  });
+  it('未知角色沒有任何權限', () => expect(can('operator', 'operateEvents')).toBe(false));
+});
+
+describe('釘選選單', () => {
+  it('接受已知項目', () => expect(pinnedNavRequest.safeParse({ items: ['rooms', 'roster'] }).success).toBe(true));
+  it('拒絕未知項目與重複項目', () => {
+    expect(pinnedNavRequest.safeParse({ items: ['nope'] }).success).toBe(false);
+    expect(pinnedNavRequest.safeParse({ items: ['rooms', 'rooms'] }).success).toBe(false);
   });
 });

@@ -100,8 +100,14 @@ try {
     ['E004', '張雅婷', 'e004', null, null, false],
   ];
   const demoHash = await hashPassword(DEMO_PASSWORD);
-  await client.query(`INSERT INTO agency_users (agency_id, email, password_hash, name, role) VALUES ($1, 'admin@demo-travel.example', $2, '示範管理員', 'admin')`, [agency, demoHash]);
-  console.log(`\n旅行社後台：${base.replace('{agency}', code)}/admin（admin@demo-travel.example／${DEMO_PASSWORD}）`);
+  for (const [email, name, role] of [
+    ['admin@demo-travel.example', '示範管理員', 'admin'],
+    ['operator@demo-travel.example', '示範活動操作員', 'event_operator'],
+    ['ops@demo-travel.example', '示範營運人員', 'operations'],
+  ] as const) {
+    await client.query(`INSERT INTO agency_users (agency_id, email, password_hash, name, role) VALUES ($1, $2, $3, $4, $5)`, [agency, email, demoHash, name, role]);
+  }
+  console.log(`\n旅行社後台：${base.replace('{agency}', code)}/admin（admin@、operator@、ops@demo-travel.example／${DEMO_PASSWORD}）`);
   const site = `${base.replace('{agency}', code)}/acme-2027`;
   console.log(`\n報名網站：${site}（示範密碼 ${DEMO_PASSWORD}）`);
   for (const [no, name, slugPart, subsidy, limit, hasPassword] of people) {

@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import type { FieldInput, SessionInput } from '@bigtours/shared';
+import { can, type AgencyPermission, type EventNavKey, type FieldInput, type SessionInput } from '@bigtours/shared';
 import { generateToken, hashPassword, verifyPassword } from '@bigtours/shared/crypto';
 import { randomBytes } from 'node:crypto';
 import { AccessService } from './access.service.ts';
@@ -16,7 +16,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export interface AgencyUserContext {
   agencyId: string;
   agencyName: string;
-  user: { id: string; name: string; role: string };
+  user: { id: string; name: string; role: string; pinnedNavItems: string[] };
 }
 
 const sessionRow = (r: any) => ({
@@ -105,14 +105,24 @@ export class AgencyAdminService {
     if (!token) throw new DomainError('UNAUTHENTICATED');
     const user = await this.db.withTenant(agency.id, async (tx) => {
       const { rows } = await tx.query(
-        `SELECT u.id, u.name, u.role FROM agency_user_sessions s JOIN agency_users u ON u.id = s.agency_user_id
+        `SELECT u.id, u.name, u.role, u.pinned_nav_items FROM agency_user_sessions s JOIN agency_users u ON u.id = s.agency_user_id
           WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now() AND u.status = 'active'`,
         [this.encryption.hashToken(token)],
       );
       return rows[0];
     });
     if (!user) throw new DomainError('UNAUTHENTICATED');
-    return { agencyId: agency.id, agencyName: agency.name, user };
+    return { agencyId: agency.id, agencyName: agency.name, user: { id: user.id, name: user.name, role: user.role, pinnedNavItems: user.pinned_nav_items } };
+  }
+
+  assertCan(ctx: AgencyUserContext, permission: AgencyPermission) {
+    if (!can(ctx.user.role, permission)) throw new DomainError('FORBIDDEN');
+  }
+
+  setPinnedNav(ctx: AgencyUserContext, items: EventNavKey[]) {
+    return this.db.withTenant(ctx.agencyId, (tx) =>
+      tx.query(`UPDATE agency_users SET pinned_nav_items = $2 WHERE id = $1`, [ctx.user.id, items]),
+    );
   }
 
   // ===== 活動 =====

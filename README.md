@@ -16,7 +16,7 @@ docker compose up --build
 - `E002` 林美惠（補助 $20,000，可帶 3 位眷屬）
 - `E003` 陳志豪（補助 $5,000，不能帶眷屬）
 
-旅行社後台在 <http://demo-travel.lvh.me:3000/admin>，帳號 `admin@demo-travel.example`，密碼同上，可設定梯次與旅客資料欄位。
+旅行社後台在 <http://demo-travel.lvh.me:3000/admin>，帳號 `admin@demo-travel.example`（管理員）、`operator@demo-travel.example`（活動操作員）、`ops@demo-travel.example`（營運人員），密碼同上。目前可設定梯次與旅客資料欄位，其他選單項目開發中。
 
 `E004` 張雅婷尚未設定密碼，用[設定密碼連結](http://demo-travel.lvh.me:3000/acme-2027/set-password/demo-e004-local-development-only)走一次開通流程。連結只能使用一次，重設示範資料後可再次使用。
 

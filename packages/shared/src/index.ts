@@ -81,6 +81,7 @@ export const ERROR_CODES = [
   'HOLD_MISMATCH', 'SESSION_FULL', 'OPTION_FULL', 'INVALID_SELECTION', 'INVALID_DETAILS', 'NOT_CANCELLABLE',
   'UNAUTHENTICATED', 'INVALID_CREDENTIALS', 'PAGE_CLOSED', 'FORBIDDEN_ORIGIN', 'LINK_INVALID', 'INVALID_PASSWORD',
   'INVALID_INPUT', 'CAPACITY_BELOW_SOLD', 'TIER_LIMIT_EXCEEDED', 'SESSION_IN_USE', 'FIELD_LOCKED',
+  'FORBIDDEN',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
@@ -154,3 +155,35 @@ export const fieldInput = z.object({
 export type FieldInput = z.infer<typeof fieldInput>;
 
 export const orderRequest = z.object({ ids: z.array(z.string().uuid()).min(1).max(200) });
+
+// ===== 旅行社人員權限 =====
+
+export const AGENCY_ROLES = ['admin', 'event_operator', 'operations'] as const;
+export type AgencyRole = (typeof AGENCY_ROLES)[number];
+
+/** 各權限開放的角色；後端強制檢查，前端只用來決定要顯示什麼。 */
+const PERMISSIONS = {
+  /** 建立與設定活動、員工名單與帳號開通、企業窗口、Email 範本、釘選選單 */
+  configureEvents: ['admin', 'event_operator'],
+  /** 報名總覽（營運人員唯讀）、報名管理、行程改派、分房、匯出不含個資的資料 */
+  operateEvents: ['admin', 'event_operator', 'operations'],
+  /** 查看完整個資、匯出個資、個資紀錄 */
+  viewSensitiveData: ['admin'],
+  /** 人員管理、旅行社設定 */
+  manageAgency: ['admin'],
+} as const satisfies Record<string, readonly AgencyRole[]>;
+export type AgencyPermission = keyof typeof PERMISSIONS;
+
+export const can = (role: string, permission: AgencyPermission) =>
+  (PERMISSIONS[permission] as readonly string[]).includes(role);
+
+export const EVENT_NAV_KEYS = [
+  'basic', 'schedule', 'sessions', 'types', 'options', 'fields', 'payment-terms', 'contacts', 'publish',
+  'overview', 'roster', 'registrations', 'emails',
+  'rooms', 'export',
+] as const;
+export type EventNavKey = (typeof EVENT_NAV_KEYS)[number];
+
+export const pinnedNavRequest = z.object({
+  items: z.array(z.enum(EVENT_NAV_KEYS)).max(EVENT_NAV_KEYS.length).refine((v) => new Set(v).size === v.length),
+});

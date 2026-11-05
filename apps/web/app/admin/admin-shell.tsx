@@ -1,14 +1,24 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { ApiError } from '../../lib/api';
 import { adminApi, type AdminMe } from '../../lib/admin-api';
 import { a } from '../../messages/admin';
+import { Sidebar } from './sidebar';
 
 export const adminError = (e: unknown) => a.errors[e instanceof ApiError ? e.code : 'fallback'] ?? a.errors.fallback!;
 
-/** 共用外框：確認登入狀態，未登入時顯示登入表單。 */
-export function AdminShell({ children }: { children: (me: AdminMe) => React.ReactNode }) {
+const MeContext = createContext<AdminMe | null>(null);
+
+/** 只能在 AdminShell 內使用：登入完成後才會渲染內容。 */
+export function useAdminMe() {
+  const me = useContext(MeContext);
+  if (!me) throw new Error('useAdminMe 必須在 AdminShell 內使用');
+  return me;
+}
+
+/** 共用外框：確認登入狀態，未登入時顯示登入表單；登入後顯示左側選單。 */
+export function AdminShell({ children }: { children: React.ReactNode }) {
   const [me, setMe] = useState<AdminMe | null>(null);
   const [view, setView] = useState<'loading' | 'login' | 'ready' | 'failed'>('loading');
 
@@ -23,14 +33,16 @@ export function AdminShell({ children }: { children: (me: AdminMe) => React.Reac
   if (view === 'failed') return <main className="center-note"><p role="alert">{a.loadFailed}</p></main>;
   if (view === 'login' || !me) return <AdminLogin onDone={load} />;
   return (
-    <div className="admin">
-      <header className="admin-bar">
-        <a href="/admin" className="admin-brand">{me.agencyName}<span>{a.title}</span></a>
-        <span className="admin-user">{me.user.name}</span>
-        <button type="button" className="link" onClick={() => adminApi.logout().finally(() => { setMe(null); setView('login'); })}>{a.logout}</button>
-      </header>
-      {children(me)}
-    </div>
+    <MeContext.Provider value={me}>
+      <div className="admin">
+        <Sidebar
+          me={me}
+          onPinned={(pinnedNavItems) => setMe({ ...me, pinnedNavItems })}
+          onLogout={() => adminApi.logout().finally(() => { setMe(null); setView('login'); })}
+        />
+        {children}
+      </div>
+    </MeContext.Provider>
   );
 }
 

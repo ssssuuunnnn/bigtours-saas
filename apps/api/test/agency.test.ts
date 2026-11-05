@@ -15,7 +15,7 @@ let hash: string;
 
 const q1 = async (sql: string, params: unknown[] = []) => (await admin.query(sql, params)).rows[0];
 
-async function makeAgency() {
+async function makeAgency(role = 'event_operator') {
   const code = `g-${randomUUID().slice(0, 8)}`;
   const agencyId = (await q1(`INSERT INTO agencies (code, name) VALUES ($1, 'T') RETURNING id`, [code])).id as string;
   const company = (await q1(`INSERT INTO companies (agency_id, name) VALUES ($1, 'C') RETURNING id`, [agencyId])).id as string;
@@ -24,7 +24,7 @@ async function makeAgency() {
      VALUES ($1, $2, 'evt', 'E', 'published', $3, now() - interval '1 day', now() + interval '30 days') RETURNING id`,
     [agencyId, company, tierId],
   )).id as string;
-  await admin.query(`INSERT INTO agency_users (agency_id, email, password_hash, name, role) VALUES ($1, 'a@example.com', $2, 'A', 'operator')`, [agencyId, hash]);
+  await admin.query(`INSERT INTO agency_users (agency_id, email, password_hash, name, role) VALUES ($1, 'a@example.com', $2, 'A', $3)`, [agencyId, hash, role]);
   const token = generateToken();
   const userId = (await q1(`SELECT id FROM agency_users WHERE agency_id = $1`, [agencyId])).id;
   await admin.query(`INSERT INTO agency_user_sessions (agency_id, agency_user_id, token_hash, expires_at) VALUES ($1, $2, $3, now() + interval '1 hour')`,
@@ -244,5 +244,63 @@ describe('旅客資料欄位設定', () => {
   it('活動代碼不能使用 admin', async () => {
     const a = await makeAgency();
     await expect(admin.query(`UPDATE events SET slug = 'admin' WHERE id = $1`, [a.eventId])).rejects.toThrow();
+  });
+});
+
+describe('角色權限', () => {
+  const me = (a: Ag) => request(app.getHttpServer()).get('/api/v1/agency/me').set('x-forwarded-host', a.host).set('cookie', a.cookie);
+  const pin = (a: Ag, items: unknown) => request(app.getHttpServer()).put('/api/v1/agency/me/pinned-nav').set('x-forwarded-host', a.host).set('cookie', a.cookie).send({ items });
+
+  it('登入資訊回傳角色與釘選項目', async () => {
+    const a = await makeAgency('admin');
+    const res = await me(a).expect(200);
+    expect(res.body.user.role).toBe('admin');
+    expect(res.body.pinnedNavItems).toEqual([]);
+  });
+
+  it('活動操作員可以設定活動', async () => {
+    const a = await makeAgency('event_operator');
+    await api(a).get('/sessions').expect(200);
+    await api(a).post('/sessions', session()).expect(201);
+  });
+
+  it('營運人員不能查看或修改活動設定', async () => {
+    const a = await makeAgency('operations');
+    const res = await api(a).get('/sessions').expect(403);
+    expect(res.body.code).toBe('FORBIDDEN');
+    await api(a).post('/sessions', session()).expect(403);
+    await api(a).get('/fields').expect(403);
+    await api(a).post('/fields', field()).expect(403);
+    await api(a).put('/fields/order', { ids: [randomUUID()] }).expect(403);
+  });
+
+  it('營運人員仍可看到活動資訊', async () => {
+    const a = await makeAgency('operations');
+    const res = await request(app.getHttpServer()).get('/api/v1/agency/events').set('x-forwarded-host', a.host).set('cookie', a.cookie).expect(200);
+    expect(res.body).toHaveLength(1);
+    await api(a).get('').expect(200);
+  });
+
+  it('沒有登入時回 401，不回 403', async () => {
+    const a = await makeAgency('operations');
+    await request(app.getHttpServer()).get(`/api/v1/agency/events/${a.eventId}/sessions`).set('x-forwarded-host', a.host).expect(401);
+  });
+
+  it('釘選項目依順序保存，下次登入仍在', async () => {
+    const a = await makeAgency('event_operator');
+    await pin(a, ['registrations', 'roster']).expect(204);
+    expect((await me(a).expect(200)).body.pinnedNavItems).toEqual(['registrations', 'roster']);
+    await pin(a, []).expect(204);
+    expect((await me(a)).body.pinnedNavItems).toEqual([]);
+  });
+
+  it('拒絕未知或重複的釘選項目', async () => {
+    const a = await makeAgency('admin');
+    await pin(a, ['nope']).expect(422);
+    await pin(a, ['rooms', 'rooms']).expect(422);
+  });
+
+  it('營運人員沒有釘選功能', async () => {
+    await pin(await makeAgency('operations'), ['rooms']).expect(403);
   });
 });
