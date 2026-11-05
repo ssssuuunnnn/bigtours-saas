@@ -20,8 +20,16 @@ export interface SessionValues {
   outboundFlightNo: string | null;
   returnFlightNo: string | null;
   capacity: number;
+  roomTypes: RoomTypeValues[];
 }
+export interface RoomTypeValues { id: string | null; name: string; capacity: number; surcharge: number; bedQuota: number; soldCount?: number }
 export interface AdminSession extends SessionValues { id: string; soldCount: number }
+export interface TravelerTypeValues { id: string | null; name: string; basePrice: number; note: string | null; occupiesBed: boolean; isEmployeeSelf?: boolean }
+export interface PricingValues { types: TravelerTypeValues[]; defaultSubsidyAmount: number; defaultDependentLimit: number; allowDependentsOnly: boolean }
+export interface OptionGroupValues { name: string; isRequired: boolean; maxSelect: number; preferenceCount: number }
+export interface OptionValues { name: string; price: number; quotas: { sessionId: string; capacity: number | null }[] }
+export interface AdminOption { id: string; name: string; price: number; quotas: Record<string, { capacity: number; soldCount: number }> }
+export interface AdminOptionGroup extends OptionGroupValues { id: string; options: AdminOption[] }
 export interface FieldValues { label: string; type: string; choices: string[] | null; isRequired: boolean; isSensitive: boolean }
 export interface AdminField extends FieldValues { id: string }
 
@@ -57,6 +65,15 @@ export const adminApi = {
   updateSession: (id: string, sid: string, v: SessionValues) => call<AdminSession>('PATCH', `/events/${id}/sessions/${sid}`, v),
   deleteSession: (id: string, sid: string) => call<void>('DELETE', `/events/${id}/sessions/${sid}`),
   orderSessions: (id: string, ids: string[]) => call<void>('PUT', `/events/${id}/sessions/order`, { ids }),
+  pricing: (id: string) => call<PricingValues>('GET', `/events/${id}/pricing`),
+  savePricing: (id: string, v: PricingValues) => call<PricingValues>('PUT', `/events/${id}/pricing`, v),
+  optionGroups: (id: string) => call<AdminOptionGroup[]>('GET', `/events/${id}/option-groups`),
+  createOptionGroup: (id: string, v: OptionGroupValues) => call<{ id: string }>('POST', `/events/${id}/option-groups`, v),
+  updateOptionGroup: (id: string, gid: string, v: OptionGroupValues) => call<void>('PATCH', `/events/${id}/option-groups/${gid}`, v),
+  deleteOptionGroup: (id: string, gid: string) => call<void>('DELETE', `/events/${id}/option-groups/${gid}`),
+  createOption: (id: string, gid: string, v: OptionValues) => call<{ id: string }>('POST', `/events/${id}/option-groups/${gid}/options`, v),
+  updateOption: (id: string, oid: string, v: OptionValues) => call<void>('PATCH', `/events/${id}/options/${oid}`, v),
+  deleteOption: (id: string, oid: string) => call<void>('DELETE', `/events/${id}/options/${oid}`),
   fields: (id: string) => call<AdminField[]>('GET', `/events/${id}/fields`),
   createField: (id: string, v: FieldValues) => call<AdminField>('POST', `/events/${id}/fields`, v),
   updateField: (id: string, fid: string, v: FieldValues) => call<AdminField>('PATCH', `/events/${id}/fields/${fid}`, v),

@@ -199,11 +199,24 @@ a.primary-link { display: flex; align-items: center; justify-content: center; mi
 .admin-table th { padding: 10px 12px; text-align: left; font-weight: 500; color: var(--ink-soft); white-space: nowrap; }
 .admin-table td { padding: 10px 12px; border-top: 1px solid var(--line); vertical-align: middle; }
 .admin-table tr.fixed td { background: var(--sky); }
+.admin-edit-table td { padding: 8px 10px; }
+.admin-edit-table input[type='checkbox'] { display: block; width: 20px; height: 20px; accent-color: var(--brand); }
+.admin-edit-table input:not([type='checkbox']) { width: 100%; min-width: 88px; }
+.admin-edit-table small { display: block; margin-top: 2px; }
+.admin-rooms-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px; }
+.admin-inline-field { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.admin-form .admin-inline-field select { width: auto; }
+.admin-group { display: grid; gap: 10px; padding: 16px; background: var(--paper); border-radius: 4px; }
+.admin-group-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; }
+.admin-group-head h2 { margin: 0; font-size: 17px; }
+.admin-group-head p { margin: 2px 0 0; font-size: 14px; color: var(--ink-soft); }
 .admin-actions { white-space: nowrap; }
 .admin-actions button { margin-right: 10px; }
 .move { display: inline-flex; gap: 4px; }
 .move button { width: 36px; height: 36px; padding: 0; border: 1px solid var(--ink-soft); border-radius: 4px; background: var(--paper); cursor: pointer; font-size: 11px; }
 .admin-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 16px; padding: 16px; background: var(--paper); border-radius: 4px; border: 2px solid var(--brand); }
+.admin-form > .field { align-self: start; }
+.admin-nowrap { white-space: nowrap; }
 .admin-form > .error { grid-column: 1 / -1; }
 .admin-form input:not([type='checkbox']), .admin-form select, .admin-form textarea { width: 100%; }
 .admin-form .span-2 { grid-column: span 2; }

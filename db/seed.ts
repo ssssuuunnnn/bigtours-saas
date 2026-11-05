@@ -66,6 +66,9 @@ try {
     await client.query(`INSERT INTO traveler_types (agency_id, event_id, name, base_price, is_employee_self, sort_order) VALUES ($1, $2, $3, $4, $5, $6)`, [agency, event, name, price, self, i]);
   }
 
+  await client.query(`UPDATE traveler_types SET note = '含機票與保險' WHERE event_id = $1 AND name = '成人眷屬'`, [event]);
+  await client.query(`UPDATE traveler_types SET note = '未滿 2 歲', occupies_bed = false WHERE event_id = $1 AND name = '嬰兒眷屬'`, [event]);
+
   const group = async (name: string, required: boolean, min: number, max: number, sort: number) =>
     (await one(`INSERT INTO option_groups (agency_id, event_id, name, is_required, min_select, max_select, sort_order) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`, [agency, event, name, required, min, max, sort])).id;
   const option = async (g: string, name: string, price: number, quotas: [string, number][], sort: number) => {
@@ -75,14 +78,19 @@ try {
     }
   };
   const day2 = await group('第二天行程', true, 1, 1, 1);
+  await client.query(`UPDATE option_groups SET preference_count = 3 WHERE id = $1`, [day2]);
   await option(day2, '美麗海水族館', 2000, [[s1, 25], [s2, 2]], 1);
   await option(day2, '市區觀光', 0, [], 2);
   const addOn = await group('加購活動', false, 0, 2, 2);
   await option(addOn, '溫泉', 500, [], 1);
   await option(addOn, '晚宴升級', 800, [[s1, 10]], 2);
-  const room = await group('房型', true, 1, 1, 3);
-  await option(room, '雙人房', 0, [], 1);
-  await option(room, '單人房差', 3000, [], 2);
+  const rooms: [string, string, number, number, number][] = [
+    [s1, '二人房', 2, 0, 60], [s1, '單人房', 1, 3000, 10], [s2, '三人房', 3, 0, 30], [s2, '二人房', 2, 1000, 20],
+  ];
+  for (const [i, [session, name, capacity, surcharge, beds]] of rooms.entries()) {
+    await client.query(`INSERT INTO session_room_types (agency_id, session_id, name, capacity, surcharge, bed_quota, sort_order) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [agency, session, name, capacity, surcharge, beds, i]);
+  }
 
   const fields: [string, string, string, unknown, boolean, boolean][] = [
     ['birthday', '生日', 'date', null, true, false],

@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { can, pageState, type AgencyPermission, type EventBasicInput, type EventNavKey, type EventScheduleInput, type FieldInput, type SessionInput } from '@bigtours/shared';
+import { can, pageState, type AgencyPermission, type EventBasicInput, type EventNavKey, type EventScheduleInput, type FieldInput, type OptionGroupInput, type OptionInput, type PricingInput, type SessionInput } from '@bigtours/shared';
 import { generateToken, hashPassword, verifyPassword } from '@bigtours/shared/crypto';
 import { randomBytes } from 'node:crypto';
 import { AccessService } from './access.service.ts';
@@ -33,6 +33,23 @@ const sessionRow = (r: any) => ({
 });
 const SESSION_COLUMNS = `id, name, departs_on, returns_on, to_char(departure_time, 'HH24:MI') AS departure_time,
   to_char(return_arrival_time, 'HH24:MI') AS return_arrival_time, outbound_flight_no, return_flight_no, capacity, sold_count`;
+
+const roomTypeRow = (r: any) => ({
+  id: r.id,
+  name: r.name,
+  capacity: r.capacity,
+  surcharge: r.surcharge,
+  bedQuota: r.bed_quota,
+  soldCount: r.sold_count,
+});
+const travelerTypeRow = (r: any) => ({
+  id: r.id,
+  name: r.name,
+  basePrice: r.base_price,
+  note: r.note,
+  occupiesBed: r.occupies_bed,
+  isEmployeeSelf: r.is_employee_self,
+});
 
 const fieldRow = (r: any) => ({
   id: r.id,
@@ -223,6 +240,10 @@ export class AgencyAdminService {
         [ctx.agencyId, input.companyId, input.slug, input.name, input.pricingTierId, ctx.user.id],
       );
       await tx.query(
+        `INSERT INTO traveler_types (agency_id, event_id, name, base_price, is_employee_self) VALUES ($1, $2, '員工本人', 0, true)`,
+        [ctx.agencyId, rows[0].id],
+      );
+      await tx.query(
         `INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason, event_id, created_by) VALUES ($1, $2, -1, 'event_created', $3, $4)`,
         [ctx.agencyId, input.pricingTierId, rows[0].id, ctx.user.id],
       );
@@ -296,7 +317,7 @@ export class AgencyAdminService {
     return this.db.withTenant(ctx.agencyId, async (tx) => {
       await this.lockEvent(tx, eventId, false);
       const { rows } = await tx.query(`SELECT ${SESSION_COLUMNS} FROM event_sessions WHERE event_id = $1 ORDER BY sort_order, departs_on, name`, [eventId]);
-      return rows.map(sessionRow);
+      return this.withRoomTypes(tx, rows);
     });
   }
 
@@ -313,7 +334,8 @@ export class AgencyAdminService {
         [ctx.agencyId, eventId, input.name, input.departsOn, input.returnsOn, input.departureTime, input.returnArrivalTime,
           input.outboundFlightNo, input.returnFlightNo, input.capacity],
       );
-      return sessionRow(rows[0]);
+      if (input.roomTypes) await this.saveRoomTypes(tx, ctx.agencyId, rows[0].id, input.roomTypes);
+      return (await this.withRoomTypes(tx, rows))[0];
     });
   }
 
@@ -324,7 +346,13 @@ export class AgencyAdminService {
       // 與保留、送出相同，先鎖梯次，人數才不會在檢查後改變
       const { rows: found } = await tx.query(`SELECT sold_count FROM event_sessions WHERE id = $1 AND event_id = $2 FOR UPDATE`, [sessionId, eventId]);
       if (!found[0]) throw new DomainError('NOT_FOUND');
-      if (input.capacity < found[0].sold_count) throw new DomainError('CAPACITY_BELOW_SOLD', { soldCount: found[0].sold_count });
+      // 保留中的名額送出時會變成已報名，所以也要算進去。
+      const { rows: holds } = await tx.query(
+        `SELECT COALESCE(sum(quantity), 0)::int AS held FROM seat_holds WHERE session_id = $1 AND status = 'active' AND expires_at > now()`,
+        [sessionId],
+      );
+      const taken = found[0].sold_count + holds[0].held;
+      if (input.capacity < taken) throw new DomainError('CAPACITY_BELOW_SOLD', { soldCount: taken });
       await this.assertTierLimit(tx, eventId, event.max_travelers, input.capacity, sessionId);
       const { rows } = await tx.query(
         `UPDATE event_sessions
@@ -334,7 +362,8 @@ export class AgencyAdminService {
         [sessionId, eventId, input.name, input.departsOn, input.returnsOn, input.departureTime, input.returnArrivalTime,
           input.outboundFlightNo, input.returnFlightNo, input.capacity],
       );
-      return sessionRow(rows[0]);
+      if (input.roomTypes) await this.saveRoomTypes(tx, ctx.agencyId, sessionId, input.roomTypes);
+      return (await this.withRoomTypes(tx, rows))[0];
     });
   }
 
@@ -356,6 +385,293 @@ export class AgencyAdminService {
 
   reorderSessions(ctx: AgencyUserContext, eventId: string, ids: string[]) {
     return this.reorder(ctx, eventId, 'event_sessions', ids);
+  }
+
+  private async withRoomTypes(tx: Tx, sessions: any[]) {
+    const { rows } = await tx.query(
+      `SELECT id, session_id, name, capacity, surcharge, bed_quota, sold_count FROM session_room_types
+        WHERE session_id = ANY($1::uuid[]) ORDER BY sort_order, name`,
+      [sessions.map((s) => s.id)],
+    );
+    return sessions.map((s) => ({ ...sessionRow(s), roomTypes: rows.filter((r) => r.session_id === s.id).map(roomTypeRow) }));
+  }
+
+  /** 整份覆蓋這個梯次的房型；已售出的房型不能刪除，床位也不能低於已售。 */
+  private async saveRoomTypes(tx: Tx, agencyId: string, sessionId: string, input: NonNullable<SessionInput['roomTypes']>) {
+    this.assertUniqueNames(input.map((r) => r.name));
+    const { rows } = await tx.query(`SELECT id, sold_count FROM session_room_types WHERE session_id = $1 FOR UPDATE`, [sessionId]);
+    const existing = new Map(rows.map((r) => [r.id as string, r.sold_count as number]));
+    const keep = new Set(input.flatMap((r) => (r.id ? [r.id] : [])));
+    if (input.some((r) => r.id && !existing.has(r.id))) throw new DomainError('INVALID_INPUT', { issues: ['roomTypes'] });
+    if ([...existing].some(([id, sold]) => sold > 0 && !keep.has(id))) throw new DomainError('ROOM_TYPE_IN_USE');
+    await tx.query(`DELETE FROM session_room_types WHERE session_id = $1 AND NOT (id = ANY($2::uuid[]))`, [sessionId, [...keep]]);
+    for (const [i, r] of input.entries()) {
+      const sold = r.id ? existing.get(r.id)! : 0;
+      if (r.bedQuota < sold) throw new DomainError('CAPACITY_BELOW_SOLD', { soldCount: sold });
+      if (r.id) {
+        await tx.query(
+          `UPDATE session_room_types SET name = $2, capacity = $3, surcharge = $4, bed_quota = $5, sort_order = $6 WHERE id = $1`,
+          [r.id, r.name, r.capacity, r.surcharge, r.bedQuota, i + 1],
+        );
+      } else {
+        await tx.query(
+          `INSERT INTO session_room_types (agency_id, session_id, name, capacity, surcharge, bed_quota, sort_order) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [agencyId, sessionId, r.name, r.capacity, r.surcharge, r.bedQuota, i + 1],
+        );
+      }
+    }
+  }
+
+  // ===== 旅客類型與團費 =====
+
+  getPricing(ctx: AgencyUserContext, eventId: string) {
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, false);
+      return this.readPricing(tx, eventId);
+    });
+  }
+
+  /** 價格改動只影響之後的新報名，已送出的報名保留當時的快照。 */
+  savePricing(ctx: AgencyUserContext, eventId: string, input: PricingInput) {
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, true);
+      const { rows } = await tx.query(`SELECT id, name, is_employee_self FROM traveler_types WHERE event_id = $1 FOR UPDATE`, [eventId]);
+      const existing = new Map(rows.map((r) => [r.id as string, r]));
+      if (input.types.some((t) => t.id && !existing.has(t.id))) throw new DomainError('INVALID_INPUT', { issues: ['types'] });
+      const keep = input.types.flatMap((t) => (t.id ? [t.id] : []));
+      if (rows.some((r) => r.is_employee_self && !keep.includes(r.id))) throw new DomainError('INVALID_INPUT', { issues: ['types'] });
+      // 員工本人固定：名稱不變，也一定佔床。
+      const types = input.types.map((t) => {
+        const self = t.id ? existing.get(t.id)?.is_employee_self : false;
+        return self ? { ...t, name: existing.get(t.id!)!.name as string, occupiesBed: true } : t;
+      });
+      this.assertUniqueNames(types.map((t) => t.name));
+
+      const removed = rows.filter((r) => !keep.includes(r.id)).map((r) => r.id as string);
+      if (removed.length) {
+        const used = await tx.query(`SELECT 1 FROM travelers WHERE traveler_type_id = ANY($1::uuid[]) LIMIT 1`, [removed]);
+        if (used.rowCount) throw new DomainError('TRAVELER_TYPE_IN_USE');
+        await tx.query(`DELETE FROM traveler_types WHERE id = ANY($1::uuid[])`, [removed]);
+      }
+      for (const [i, t] of types.entries()) {
+        if (t.id) {
+          await tx.query(
+            `UPDATE traveler_types SET name = $2, base_price = $3, note = $4, occupies_bed = $5, sort_order = $6 WHERE id = $1`,
+            [t.id, t.name, t.basePrice, t.note, t.occupiesBed, i + 1],
+          );
+        } else {
+          await tx.query(
+            `INSERT INTO traveler_types (agency_id, event_id, name, base_price, note, occupies_bed, sort_order) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [ctx.agencyId, eventId, t.name, t.basePrice, t.note, t.occupiesBed, i + 1],
+          );
+        }
+      }
+      await tx.query(
+        `UPDATE events SET default_subsidy_amount = $2, default_dependent_limit = $3, allow_dependents_only = $4, updated_at = now() WHERE id = $1`,
+        [eventId, input.defaultSubsidyAmount, input.defaultDependentLimit, input.allowDependentsOnly],
+      );
+      return this.readPricing(tx, eventId);
+    });
+  }
+
+  private async readPricing(tx: Tx, eventId: string) {
+    const { rows } = await tx.query(
+      `SELECT id, name, base_price, note, occupies_bed, is_employee_self FROM traveler_types
+        WHERE event_id = $1 ORDER BY is_employee_self DESC, sort_order, name`,
+      [eventId],
+    );
+    const { rows: events } = await tx.query(`SELECT default_subsidy_amount, default_dependent_limit, allow_dependents_only FROM events WHERE id = $1`, [eventId]);
+    return {
+      types: rows.map(travelerTypeRow),
+      defaultSubsidyAmount: events[0].default_subsidy_amount,
+      defaultDependentLimit: events[0].default_dependent_limit,
+      allowDependentsOnly: events[0].allow_dependents_only,
+    };
+  }
+
+  // ===== 自選行程 =====
+
+  listOptionGroups(ctx: AgencyUserContext, eventId: string) {
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, false);
+      const { rows: groups } = await tx.query(
+        `SELECT id, name, is_required, max_select, preference_count FROM option_groups WHERE event_id = $1 ORDER BY sort_order, name`,
+        [eventId],
+      );
+      const { rows: options } = await tx.query(
+        `SELECT o.id, o.group_id, o.name, o.price FROM options o JOIN option_groups g ON g.id = o.group_id
+          WHERE g.event_id = $1 ORDER BY o.sort_order, o.name`,
+        [eventId],
+      );
+      const { rows: quotas } = await tx.query(
+        `SELECT q.option_id, q.session_id, q.capacity, q.sold_count FROM option_session_quotas q
+           JOIN event_sessions s ON s.id = q.session_id WHERE s.event_id = $1`,
+        [eventId],
+      );
+      return groups.map((g) => ({
+        id: g.id,
+        name: g.name,
+        isRequired: g.is_required,
+        maxSelect: g.max_select,
+        preferenceCount: g.preference_count,
+        options: options.filter((o) => o.group_id === g.id).map((o) => ({
+          id: o.id,
+          name: o.name,
+          price: o.price,
+          quotas: Object.fromEntries(quotas.filter((q) => q.option_id === o.id)
+            .map((q) => [q.session_id, { capacity: q.capacity, soldCount: q.sold_count }])),
+        })),
+      }));
+    });
+  }
+
+  createOptionGroup(ctx: AgencyUserContext, eventId: string, input: OptionGroupInput) {
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, true);
+      await this.assertNameFree(tx, 'option_groups', 'event_id', eventId, input.name, null);
+      const { rows } = await tx.query(
+        `INSERT INTO option_groups (agency_id, event_id, name, is_required, min_select, max_select, preference_count, sort_order)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, (SELECT COALESCE(max(sort_order), 0) + 1 FROM option_groups WHERE event_id = $2)) RETURNING id`,
+        [ctx.agencyId, eventId, input.name, input.isRequired, input.isRequired ? 1 : 0, input.maxSelect, input.preferenceCount],
+      );
+      return { id: rows[0].id as string };
+    });
+  }
+
+  async updateOptionGroup(ctx: AgencyUserContext, eventId: string, groupId: string, input: OptionGroupInput) {
+    await this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, true);
+      await this.assertGroup(tx, eventId, groupId);
+      await this.assertNameFree(tx, 'option_groups', 'event_id', eventId, input.name, groupId);
+      await tx.query(
+        `UPDATE option_groups SET name = $2, is_required = $3, min_select = $4, max_select = $5, preference_count = $6 WHERE id = $1`,
+        [groupId, input.name, input.isRequired, input.isRequired ? 1 : 0, input.maxSelect, input.preferenceCount],
+      );
+    });
+  }
+
+  async deleteOptionGroup(ctx: AgencyUserContext, eventId: string, groupId: string) {
+    await this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, true);
+      await this.assertGroup(tx, eventId, groupId);
+      const { rows } = await tx.query(`SELECT id FROM options WHERE group_id = $1`, [groupId]);
+      await this.clearOptionHolds(tx, rows.map((r) => r.id));
+      await tx.query(`DELETE FROM option_groups WHERE id = $1`, [groupId]);
+    });
+  }
+
+  createOption(ctx: AgencyUserContext, eventId: string, groupId: string, input: OptionInput) {
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, true);
+      await this.assertGroup(tx, eventId, groupId);
+      await this.assertNameFree(tx, 'options', 'group_id', groupId, input.name, null);
+      const { rows } = await tx.query(
+        `INSERT INTO options (agency_id, group_id, name, price, sort_order)
+         VALUES ($1, $2, $3, $4, (SELECT COALESCE(max(sort_order), 0) + 1 FROM options WHERE group_id = $2)) RETURNING id`,
+        [ctx.agencyId, groupId, input.name, input.price],
+      );
+      await this.saveQuotas(tx, ctx.agencyId, eventId, rows[0].id, input.quotas);
+      return { id: rows[0].id as string };
+    });
+  }
+
+  /** 價格改動只影響之後的新報名，已選的旅客保留當時的快照。 */
+  async updateOption(ctx: AgencyUserContext, eventId: string, optionId: string, input: OptionInput) {
+    await this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, true);
+      const groupId = await this.optionGroupId(tx, eventId, optionId);
+      await this.assertNameFree(tx, 'options', 'group_id', groupId, input.name, optionId);
+      await tx.query(`UPDATE options SET name = $2, price = $3 WHERE id = $1`, [optionId, input.name, input.price]);
+      await this.saveQuotas(tx, ctx.agencyId, eventId, optionId, input.quotas);
+    });
+  }
+
+  async deleteOption(ctx: AgencyUserContext, eventId: string, optionId: string) {
+    await this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, true);
+      await this.optionGroupId(tx, eventId, optionId);
+      await this.clearOptionHolds(tx, [optionId]);
+      await tx.query(`DELETE FROM options WHERE id = $1`, [optionId]);
+    });
+  }
+
+  private async saveQuotas(tx: Tx, agencyId: string, eventId: string, optionId: string, quotas: OptionInput['quotas']) {
+    const ids = quotas.map((q) => q.sessionId);
+    const { rows: sessions } = await tx.query(`SELECT id FROM event_sessions WHERE event_id = $1 AND id = ANY($2::uuid[])`, [eventId, ids]);
+    if (new Set(ids).size !== ids.length || sessions.length !== ids.length) throw new DomainError('INVALID_INPUT', { issues: ['quotas'] });
+    for (const { sessionId, capacity } of quotas) {
+      // 與保留、送出相同，先鎖名額列，人數才不會在檢查後改變。
+      const { rows } = await tx.query(
+        `SELECT q.id, q.sold_count,
+                COALESCE((SELECT sum(i.quantity) FROM seat_hold_items i JOIN seat_holds h ON h.id = i.hold_id
+                           WHERE i.quota_id = q.id AND h.status = 'active' AND h.expires_at > now()), 0)::int AS held
+           FROM option_session_quotas q WHERE q.option_id = $1 AND q.session_id = $2 FOR UPDATE OF q`,
+        [optionId, sessionId],
+      );
+      const found = rows[0];
+      const taken = found ? found.sold_count + found.held : 0;
+      if (capacity === null) {
+        if (!found) continue;
+        // 名額列記著已售人數，已有人選時移除會讓之後的計數歸零。
+        if (taken > 0) throw new DomainError('QUOTA_IN_USE');
+        await tx.query(`DELETE FROM seat_hold_items WHERE quota_id = $1`, [found.id]);
+        await tx.query(`DELETE FROM option_session_quotas WHERE id = $1`, [found.id]);
+      } else if (found) {
+        if (capacity < taken) throw new DomainError('CAPACITY_BELOW_SOLD', { soldCount: taken });
+        await tx.query(`UPDATE option_session_quotas SET capacity = $2 WHERE id = $1`, [found.id, capacity]);
+      } else {
+        await tx.query(
+          `INSERT INTO option_session_quotas (agency_id, option_id, session_id, capacity) VALUES ($1, $2, $3, $4)`,
+          [agencyId, optionId, sessionId, capacity],
+        );
+      }
+    }
+  }
+
+  /** 有旅客選過或保留中的選項不能刪除；已結束的保留紀錄會一併清除。 */
+  private async clearOptionHolds(tx: Tx, optionIds: string[]) {
+    const used = await tx.query(
+      `SELECT 1 FROM traveler_options WHERE option_id = ANY($1::uuid[])
+       UNION ALL
+       SELECT 1 FROM seat_hold_items i JOIN seat_holds h ON h.id = i.hold_id JOIN option_session_quotas q ON q.id = i.quota_id
+        WHERE q.option_id = ANY($1::uuid[]) AND h.status = 'active' AND h.expires_at > now()
+       LIMIT 1`,
+      [optionIds],
+    );
+    if (used.rowCount) throw new DomainError('OPTION_IN_USE');
+    await tx.query(
+      `DELETE FROM seat_hold_items WHERE quota_id IN (SELECT id FROM option_session_quotas WHERE option_id = ANY($1::uuid[]))`,
+      [optionIds],
+    );
+  }
+
+  private async assertGroup(tx: Tx, eventId: string, groupId: string) {
+    this.assertUuid(groupId);
+    const { rows } = await tx.query(`SELECT id FROM option_groups WHERE id = $1 AND event_id = $2 FOR UPDATE`, [groupId, eventId]);
+    if (!rows[0]) throw new DomainError('NOT_FOUND');
+  }
+
+  private async optionGroupId(tx: Tx, eventId: string, optionId: string) {
+    this.assertUuid(optionId);
+    const { rows } = await tx.query(
+      `SELECT o.group_id FROM options o JOIN option_groups g ON g.id = o.group_id WHERE o.id = $1 AND g.event_id = $2 FOR UPDATE OF o`,
+      [optionId, eventId],
+    );
+    if (!rows[0]) throw new DomainError('NOT_FOUND');
+    return rows[0].group_id as string;
+  }
+
+  private assertUniqueNames(names: string[]) {
+    if (new Set(names).size !== names.length) throw new DomainError('DUPLICATE_NAME');
+  }
+
+  /** 呼叫前已鎖定活動，同時新增不會產生相同名稱。 */
+  private async assertNameFree(tx: Tx, table: 'option_groups' | 'options', scope: 'event_id' | 'group_id', scopeId: string, name: string, excludeId: string | null) {
+    const { rowCount } = await tx.query(
+      `SELECT 1 FROM ${table} WHERE ${scope} = $1 AND name = $2 AND ($3::uuid IS NULL OR id <> $3)`,
+      [scopeId, name, excludeId],
+    );
+    if (rowCount) throw new DomainError('DUPLICATE_NAME');
   }
 
   // ===== 旅客資料欄位 =====
