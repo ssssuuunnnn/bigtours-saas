@@ -464,11 +464,19 @@ export class AgencyAdminService {
   /** 整份覆蓋這個梯次的房型；已售出的房型不能刪除，床位也不能低於已售。 */
   private async saveRoomTypes(tx: Tx, agencyId: string, sessionId: string, input: NonNullable<SessionInput['roomTypes']>) {
     this.assertUniqueNames(input.map((r) => r.name));
-    const { rows } = await tx.query(`SELECT id, sold_count FROM session_room_types WHERE session_id = $1 FOR UPDATE`, [sessionId]);
-    const existing = new Map(rows.map((r) => [r.id as string, r.sold_count as number]));
+    // 保留中的床位送出時會變成已售，所以也要算進去。
+    const { rows } = await tx.query(
+      `SELECT r.id, r.sold_count + COALESCE((SELECT sum(i.quantity) FROM seat_hold_room_items i JOIN seat_holds h ON h.id = i.hold_id
+                WHERE i.room_type_id = r.id AND h.status = 'active' AND h.expires_at > now()), 0)::int AS taken,
+              EXISTS (SELECT 1 FROM travelers t WHERE t.session_room_type_id = r.id) AS referenced
+         FROM session_room_types r WHERE r.session_id = $1 FOR UPDATE OF r`,
+      [sessionId],
+    );
+    const existing = new Map(rows.map((r) => [r.id as string, r.taken as number]));
+    const referenced = new Set(rows.filter((r) => r.referenced).map((r) => r.id as string));
     const keep = new Set(input.flatMap((r) => (r.id ? [r.id] : [])));
     if (input.some((r) => r.id && !existing.has(r.id))) throw new DomainError('INVALID_INPUT', { issues: ['roomTypes'] });
-    if ([...existing].some(([id, sold]) => sold > 0 && !keep.has(id))) throw new DomainError('ROOM_TYPE_IN_USE');
+    if ([...existing].some(([id, taken]) => (taken > 0 || referenced.has(id)) && !keep.has(id))) throw new DomainError('ROOM_TYPE_IN_USE');
     await tx.query(`DELETE FROM session_room_types WHERE session_id = $1 AND NOT (id = ANY($2::uuid[]))`, [sessionId, [...keep]]);
     for (const [i, r] of input.entries()) {
       const sold = r.id ? existing.get(r.id)! : 0;

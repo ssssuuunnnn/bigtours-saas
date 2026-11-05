@@ -19,8 +19,8 @@ const HOLD_MINUTES = 15;
 type Selection = HoldRequest['travelers'];
 
 interface EventConfig {
-  types: Map<string, { id: string; name: string; basePrice: number; isEmployeeSelf: boolean }>;
-  groups: Map<string, { id: string; name: string; isRequired: boolean; minSelect: number; maxSelect: number; options: string[] }>;
+  types: Map<string, { id: string; name: string; basePrice: number; isEmployeeSelf: boolean; note: string | null; occupiesBed: boolean }>;
+  groups: Map<string, { id: string; name: string; isRequired: boolean; minSelect: number; maxSelect: number; preferenceCount: number; options: string[] }>;
   options: Map<string, { id: string; groupId: string; name: string; price: number; hasPdf: boolean }>;
   fields: {
     id: string;
@@ -34,6 +34,10 @@ interface EventConfig {
 }
 
 interface DraftPayload extends DraftRequest {}
+
+/** 一筆保留需要的選項名額與房型床位。 */
+interface SeatNeeds { quotas: Map<string, number>; rooms: Map<string, number> }
+type RoomType = { id: string; surcharge: number };
 
 /** 不同梯次的併發請求不會互相排隊，由唯一索引作為最後防線，並轉成一般錯誤。 */
 function rethrowUniqueViolation(constraint: string, code: ErrorCode) {
@@ -132,8 +136,8 @@ export class RegistrationService {
       this.validateSelection(ctx, config, req.travelers);
       await this.assertNotRegistered(tx, ctx.employee.id);
 
-      const needs = await this.quotaNeeds(tx, req.sessionId, req.travelers);
-      await this.lockSeats(tx, ctx.event.id, req.sessionId, [...needs.keys()]);
+      const needs = await this.seatNeeds(tx, config, req.sessionId, req.travelers);
+      await this.lockSeats(tx, ctx.event.id, req.sessionId, [...needs.quotas.keys()], [...needs.rooms.keys()]);
 
       await tx.query(
         `UPDATE seat_holds SET status = 'expired', closed_at = now()
@@ -171,10 +175,12 @@ export class RegistrationService {
       const hold = current.rows[0];
       if (!hold) throw new DomainError('HOLD_EXPIRED');
 
-      const needs = await this.quotaNeeds(tx, hold.session_id, travelers);
+      const needs = await this.seatNeeds(tx, config, hold.session_id, travelers);
       const existingItems = await tx.query(`SELECT quota_id FROM seat_hold_items WHERE hold_id = $1`, [hold.id]);
-      const quotaIds = new Set<string>([...needs.keys(), ...existingItems.rows.map((r) => r.quota_id as string)]);
-      await this.lockSeats(tx, ctx.event.id, hold.session_id, [...quotaIds]);
+      const existingRooms = await tx.query(`SELECT room_type_id FROM seat_hold_room_items WHERE hold_id = $1`, [hold.id]);
+      const quotaIds = new Set<string>([...needs.quotas.keys(), ...existingItems.rows.map((r) => r.quota_id as string)]);
+      const roomIds = new Set<string>([...needs.rooms.keys(), ...existingRooms.rows.map((r) => r.room_type_id as string)]);
+      await this.lockSeats(tx, ctx.event.id, hold.session_id, [...quotaIds], [...roomIds]);
 
       // 取得鎖之後再確認一次，避免等待期間已逾時或已送出
       const locked = await tx.query(
@@ -186,6 +192,7 @@ export class RegistrationService {
       await this.assertSeats(tx, hold.session_id, travelers.length, needs, hold.id);
       await tx.query(`UPDATE seat_holds SET quantity = $1 WHERE id = $2`, [travelers.length, hold.id]);
       await tx.query(`DELETE FROM seat_hold_items WHERE hold_id = $1`, [hold.id]);
+      await tx.query(`DELETE FROM seat_hold_room_items WHERE hold_id = $1`, [hold.id]);
       await this.writeHoldItems(tx, ctx.agency.id, hold.id, needs);
       return this.loadActiveHold(tx, ctx.employee.id);
     });
@@ -234,8 +241,8 @@ export class RegistrationService {
       const found = current.rows[0];
       if (!found) throw new DomainError('HOLD_EXPIRED');
 
-      const needs = await this.quotaNeeds(tx, found.session_id, req.travelers);
-      await this.lockSeats(tx, ctx.event.id, found.session_id, [...needs.keys()]);
+      const needs = await this.seatNeeds(tx, config, found.session_id, req.travelers);
+      await this.lockSeats(tx, ctx.event.id, found.session_id, [...needs.quotas.keys()], [...needs.rooms.keys()]);
 
       const locked = await tx.query(
         `SELECT id, quantity, session_id FROM seat_holds WHERE id = $1 AND status = 'active' AND expires_at > now() FOR UPDATE`,
@@ -245,17 +252,22 @@ export class RegistrationService {
       if (!hold) throw new DomainError('HOLD_EXPIRED');
 
       const heldItems = await tx.query(`SELECT quota_id, quantity FROM seat_hold_items WHERE hold_id = $1`, [hold.id]);
+      const heldRooms = await tx.query(`SELECT room_type_id, quantity FROM seat_hold_room_items WHERE hold_id = $1`, [hold.id]);
       const sameItems =
-        heldItems.rowCount === needs.size && heldItems.rows.every((r) => needs.get(r.quota_id) === r.quantity);
+        heldItems.rowCount === needs.quotas.size && heldItems.rows.every((r) => needs.quotas.get(r.quota_id) === r.quantity) &&
+        heldRooms.rowCount === needs.rooms.size && heldRooms.rows.every((r) => needs.rooms.get(r.room_type_id) === r.quantity);
       if (hold.quantity !== req.travelers.length || !sameItems) throw new DomainError('HOLD_MISMATCH');
 
       const previous = await this.readDraftPayload(tx, ctx.employee.id);
       const details = this.mergeSensitive(req, previous, config).travelers;
       this.validateDetails(config, details);
 
+      const roomTypes = await this.sessionRoomTypes(tx, hold.session_id);
+      const surcharge = (roomTypeId: string | null) => (roomTypeId ? roomTypes.get(roomTypeId)!.surcharge : 0);
       const fees = calculateFees(
         details.map((t) => ({
           basePrice: config.types.get(t.travelerTypeId)!.basePrice,
+          roomSurcharge: surcharge(t.roomTypeId),
           optionPrices: t.optionIds.map((id) => config.options.get(id)!.price),
         })),
         ctx.employee.subsidyAmount,
@@ -283,8 +295,9 @@ export class RegistrationService {
         const { plain, sensitive, masks } = this.splitFields(config, t.fieldValues);
         const inserted = await tx.query(
           `INSERT INTO travelers (agency_id, registration_id, traveler_type_id, is_employee_self, name, base_price_snapshot,
-                                  field_values, sensitive_values_encrypted, sensitive_masks, requested_room_no, sort_order)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+                                  field_values, sensitive_values_encrypted, sensitive_masks, requested_room_no, sort_order,
+                                  session_room_type_id, room_surcharge_snapshot)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
           [
             ctx.agency.id,
             registrationId,
@@ -297,6 +310,8 @@ export class RegistrationService {
             JSON.stringify(masks),
             t.requestedRoomNo,
             index,
+            t.roomTypeId,
+            surcharge(t.roomTypeId),
           ],
         );
         for (const optionId of t.optionIds) {
@@ -304,6 +319,14 @@ export class RegistrationService {
             `INSERT INTO traveler_options (agency_id, traveler_id, option_id, price_snapshot) VALUES ($1, $2, $3, $4)`,
             [ctx.agency.id, inserted.rows[0].id, optionId, config.options.get(optionId)!.price],
           );
+        }
+        for (const [groupId, optionIds] of Object.entries(t.preferences)) {
+          for (const [i, optionId] of optionIds.entries()) {
+            await tx.query(
+              `INSERT INTO traveler_option_preferences (agency_id, traveler_id, group_id, rank, option_id) VALUES ($1, $2, $3, $4, $5)`,
+              [ctx.agency.id, inserted.rows[0].id, groupId, i + 2, optionId],
+            );
+          }
         }
       }
 
@@ -319,8 +342,11 @@ export class RegistrationService {
         hold.quantity,
         hold.session_id,
       ]);
-      for (const [quotaId, quantity] of needs) {
+      for (const [quotaId, quantity] of needs.quotas) {
         await tx.query(`UPDATE option_session_quotas SET sold_count = sold_count + $1 WHERE id = $2`, [quantity, quotaId]);
+      }
+      for (const [roomId, quantity] of needs.rooms) {
+        await tx.query(`UPDATE session_room_types SET sold_count = sold_count + $1 WHERE id = $2`, [quantity, roomId]);
       }
       await tx.query(
         `UPDATE seat_holds SET status = 'converted', registration_id = $1, closed_at = now() WHERE id = $2`,
@@ -367,7 +393,12 @@ export class RegistrationService {
           GROUP BY q.id`,
         [registrationId, reg.session_id],
       );
-      await this.lockSeats(tx, reg.event_id, reg.session_id, quotaRows.map((r) => r.id));
+      const { rows: roomRows } = await tx.query(
+        `SELECT session_room_type_id AS id, count(*)::int AS quantity FROM travelers
+          WHERE registration_id = $1 AND session_room_type_id IS NOT NULL GROUP BY session_room_type_id`,
+        [registrationId],
+      );
+      await this.lockSeats(tx, reg.event_id, reg.session_id, quotaRows.map((r) => r.id), roomRows.map((r) => r.id));
 
       const updated = await tx.query(
         `UPDATE registrations SET status = 'cancelled', cancelled_at = now(), cancelled_by = $2, updated_at = now()
@@ -383,6 +414,9 @@ export class RegistrationService {
       ]);
       for (const q of quotaRows) {
         await tx.query(`UPDATE option_session_quotas SET sold_count = sold_count - $1 WHERE id = $2`, [q.quantity, q.id]);
+      }
+      for (const r of roomRows) {
+        await tx.query(`UPDATE session_room_types SET sold_count = sold_count - $1 WHERE id = $2`, [r.quantity, r.id]);
       }
     });
   }
@@ -435,6 +469,16 @@ export class RegistrationService {
           throw new DomainError('INVALID_SELECTION', { reason: 'option_group_rule', groupId: g.id });
         }
       }
+      for (const [groupId, optionIds] of Object.entries(t.preferences)) {
+        if (optionIds.length === 0) continue;
+        const group = config.groups.get(groupId);
+        const first = group?.options.find((id) => t.optionIds.includes(id));
+        // 要先選第一志願；第二、第三志願可以是已額滿的選項，所以這裡不檢查名額。
+        if (!group || !first || optionIds.length > group.preferenceCount - 1 || new Set([first, ...optionIds]).size !== optionIds.length + 1
+          || optionIds.some((id) => !group.options.includes(id))) {
+          throw new DomainError('INVALID_SELECTION', { reason: 'option_preferences', groupId });
+        }
+      }
     }
 
     if (selfCount > 1) throw new DomainError('INVALID_SELECTION', { reason: 'multiple_self' });
@@ -476,27 +520,46 @@ export class RegistrationService {
     }
   }
 
-  /** 每個受名額限制的選項在此梯次需要幾個名額；沒有名額設定的選項不限量。 */
-  private async quotaNeeds(tx: Tx, sessionId: string, travelers: Selection): Promise<Map<string, number>> {
-    const session = await tx.query(`SELECT 1 FROM event_sessions WHERE id = $1`, [sessionId]);
-    if (!session.rowCount) throw new DomainError('INVALID_SELECTION', { reason: 'unknown_session' });
-    const optionIds = travelers.flatMap((t) => t.optionIds);
-    const needs = new Map<string, number>();
-    if (!optionIds.length) return needs;
-    const { rows } = await tx.query(
-      `SELECT id, option_id FROM option_session_quotas WHERE session_id = $1 AND option_id = ANY($2::uuid[])`,
-      [sessionId, optionIds],
-    );
-    const quotaByOption = new Map<string, string>(rows.map((r) => [r.option_id, r.id]));
-    for (const optionId of optionIds) {
-      const quotaId = quotaByOption.get(optionId);
-      if (quotaId) needs.set(quotaId, (needs.get(quotaId) ?? 0) + 1);
-    }
-    return needs;
+  private async sessionRoomTypes(tx: Tx, sessionId: string): Promise<Map<string, RoomType>> {
+    const { rows } = await tx.query(`SELECT id, surcharge FROM session_room_types WHERE session_id = $1`, [sessionId]);
+    return new Map(rows.map((r) => [r.id, { id: r.id, surcharge: r.surcharge }]));
   }
 
-  /** 固定鎖定順序：先梯次，再依 ID 排序的選項名額，避免死結。 */
-  private async lockSeats(tx: Tx, eventId: string, sessionId: string, quotaIds: string[]) {
+  /** 沒有名額設定的選項不限量。梯次有房型時，佔床的旅客都要選，不佔床的旅客不能選。 */
+  private async seatNeeds(tx: Tx, config: EventConfig, sessionId: string, travelers: Selection): Promise<SeatNeeds> {
+    const session = await tx.query(`SELECT 1 FROM event_sessions WHERE id = $1`, [sessionId]);
+    if (!session.rowCount) throw new DomainError('INVALID_SELECTION', { reason: 'unknown_session' });
+
+    const roomTypes = await this.sessionRoomTypes(tx, sessionId);
+    const rooms = new Map<string, number>();
+    for (const t of travelers) {
+      const occupiesBed = config.types.get(t.travelerTypeId)!.occupiesBed;
+      if (t.roomTypeId === null) {
+        if (occupiesBed && roomTypes.size > 0) throw new DomainError('INVALID_SELECTION', { reason: 'room_type_required', key: t.key });
+        continue;
+      }
+      if (!occupiesBed || !roomTypes.has(t.roomTypeId)) throw new DomainError('INVALID_SELECTION', { reason: 'invalid_room_type', key: t.key });
+      rooms.set(t.roomTypeId, (rooms.get(t.roomTypeId) ?? 0) + 1);
+    }
+
+    const optionIds = travelers.flatMap((t) => t.optionIds);
+    const quotas = new Map<string, number>();
+    if (optionIds.length) {
+      const { rows } = await tx.query(
+        `SELECT id, option_id FROM option_session_quotas WHERE session_id = $1 AND option_id = ANY($2::uuid[])`,
+        [sessionId, optionIds],
+      );
+      const quotaByOption = new Map<string, string>(rows.map((r) => [r.option_id, r.id]));
+      for (const optionId of optionIds) {
+        const quotaId = quotaByOption.get(optionId);
+        if (quotaId) quotas.set(quotaId, (quotas.get(quotaId) ?? 0) + 1);
+      }
+    }
+    return { quotas, rooms };
+  }
+
+  /** 固定鎖定順序：先梯次，再依 ID 排序的選項名額與房型，避免死結。 */
+  private async lockSeats(tx: Tx, eventId: string, sessionId: string, quotaIds: string[], roomIds: string[] = []) {
     const session = await tx.query(`SELECT id FROM event_sessions WHERE id = $1 AND event_id = $2 FOR UPDATE`, [
       sessionId,
       eventId,
@@ -505,10 +568,13 @@ export class RegistrationService {
     for (const id of [...quotaIds].sort()) {
       await tx.query(`SELECT id FROM option_session_quotas WHERE id = $1 FOR UPDATE`, [id]);
     }
+    for (const id of [...roomIds].sort()) {
+      await tx.query(`SELECT id FROM session_room_types WHERE id = $1 FOR UPDATE`, [id]);
+    }
   }
 
   /** 呼叫前必須已取得 lockSeats 的鎖。excludeHoldId 用於修改自己的保留。 */
-  private async assertSeats(tx: Tx, sessionId: string, quantity: number, needs: Map<string, number>, excludeHoldId?: string) {
+  private async assertSeats(tx: Tx, sessionId: string, quantity: number, needs: SeatNeeds, excludeHoldId?: string) {
     const exclude = excludeHoldId ?? '00000000-0000-0000-0000-000000000000';
     const s = await tx.query(
       `SELECT s.capacity, s.sold_count,
@@ -524,7 +590,7 @@ export class RegistrationService {
         remaining: Math.max(seat.capacity - seat.sold_count - seat.held, 0),
       });
     }
-    for (const [quotaId, need] of needs) {
+    for (const [quotaId, need] of needs.quotas) {
       const q = await tx.query(
         `SELECT q.option_id, q.capacity, q.sold_count,
                 COALESCE((SELECT sum(i.quantity) FROM seat_hold_items i JOIN seat_holds h ON h.id = i.hold_id
@@ -541,10 +607,30 @@ export class RegistrationService {
         });
       }
     }
+    for (const [roomId, need] of needs.rooms) {
+      const r = await tx.query(
+        `SELECT r.bed_quota, r.sold_count,
+                COALESCE((SELECT sum(i.quantity) FROM seat_hold_room_items i JOIN seat_holds h ON h.id = i.hold_id
+                           WHERE i.room_type_id = r.id AND h.status = 'active' AND h.expires_at > now() AND h.id <> $2), 0)::int AS held
+           FROM session_room_types r WHERE r.id = $1`,
+        [roomId, exclude],
+      );
+      const room = r.rows[0];
+      if (room.sold_count + room.held + need > room.bed_quota) {
+        throw new DomainError('ROOM_FULL', {
+          roomTypeId: roomId,
+          status: seatStatus(room.bed_quota, room.sold_count, room.held),
+          remaining: Math.max(room.bed_quota - room.sold_count - room.held, 0),
+        });
+      }
+    }
   }
 
-  private async writeHoldItems(tx: Tx, agencyId: string, holdId: string, needs: Map<string, number>) {
-    for (const [quotaId, quantity] of needs) {
+  private async writeHoldItems(tx: Tx, agencyId: string, holdId: string, needs: SeatNeeds) {
+    for (const [roomId, quantity] of needs.rooms) {
+      await tx.query(`INSERT INTO seat_hold_room_items (agency_id, hold_id, room_type_id, quantity) VALUES ($1, $2, $3, $4)`, [agencyId, holdId, roomId, quantity]);
+    }
+    for (const [quotaId, quantity] of needs.quotas) {
       await tx.query(`INSERT INTO seat_hold_items (agency_id, hold_id, quota_id, quantity) VALUES ($1, $2, $3, $4)`, [
         agencyId,
         holdId,
@@ -556,11 +642,11 @@ export class RegistrationService {
 
   private async loadConfig(tx: Tx, eventId: string): Promise<EventConfig> {
     const types = await tx.query(
-      `SELECT id, name, base_price, is_employee_self FROM traveler_types WHERE event_id = $1 ORDER BY sort_order, name`,
+      `SELECT id, name, base_price, is_employee_self, note, occupies_bed FROM traveler_types WHERE event_id = $1 ORDER BY sort_order, name`,
       [eventId],
     );
     const groups = await tx.query(
-      `SELECT id, name, is_required, min_select, max_select FROM option_groups WHERE event_id = $1 ORDER BY sort_order, name`,
+      `SELECT id, name, is_required, min_select, max_select, preference_count FROM option_groups WHERE event_id = $1 ORDER BY sort_order, name`,
       [eventId],
     );
     const options = await tx.query(
@@ -574,12 +660,12 @@ export class RegistrationService {
     );
     const config: EventConfig = {
       types: new Map(
-        types.rows.map((r) => [r.id, { id: r.id, name: r.name, basePrice: r.base_price, isEmployeeSelf: r.is_employee_self }]),
+        types.rows.map((r) => [r.id, { id: r.id, name: r.name, basePrice: r.base_price, isEmployeeSelf: r.is_employee_self, note: r.note, occupiesBed: r.occupies_bed }]),
       ),
       groups: new Map(
         groups.rows.map((r) => [
           r.id,
-          { id: r.id, name: r.name, isRequired: r.is_required, minSelect: r.min_select, maxSelect: r.max_select, options: [] as string[] },
+          { id: r.id, name: r.name, isRequired: r.is_required, minSelect: r.min_select, maxSelect: r.max_select, preferenceCount: r.preference_count, options: [] as string[] },
         ]),
       ),
       options: new Map(options.rows.map((r) => [r.id, { id: r.id, groupId: r.group_id, name: r.name, price: r.price, hasPdf: r.has_pdf }])),
@@ -615,6 +701,13 @@ export class RegistrationService {
          FROM option_session_quotas q JOIN event_sessions s ON s.id = q.session_id WHERE s.event_id = $1`,
       [eventId],
     );
+    const rooms = await tx.query(
+      `SELECT r.id, r.session_id, r.name, r.capacity, r.surcharge, r.bed_quota, r.sold_count,
+              COALESCE((SELECT sum(i.quantity) FROM seat_hold_room_items i JOIN seat_holds h ON h.id = i.hold_id
+                         WHERE i.room_type_id = r.id AND h.status = 'active' AND h.expires_at > now()), 0)::int AS held
+         FROM session_room_types r JOIN event_sessions s ON s.id = r.session_id WHERE s.event_id = $1 ORDER BY r.sort_order, r.name`,
+      [eventId],
+    );
     return sessions.rows.map((s) => ({
       id: s.id,
       name: s.name,
@@ -626,6 +719,16 @@ export class RegistrationService {
       returnArrivalTime: s.return_arrival_time,
       remaining: Math.max(s.capacity - s.sold_count - s.held, 0),
       status: seatStatus(s.capacity, s.sold_count, s.held),
+      roomTypes: rooms.rows
+        .filter((r) => r.session_id === s.id)
+        .map((r) => ({
+          id: r.id,
+          name: r.name,
+          capacity: r.capacity,
+          surcharge: r.surcharge,
+          remaining: Math.max(r.bed_quota - r.sold_count - r.held, 0),
+          status: seatStatus(r.bed_quota, r.sold_count, r.held),
+        })),
       options: quotas.rows
         .filter((q) => q.session_id === s.id)
         .map((q) => ({
@@ -657,9 +760,13 @@ export class RegistrationService {
     if (!r) return null;
     const travelers = await tx.query(
       `SELECT t.id, t.name, t.traveler_type_id, t.base_price_snapshot, t.field_values, t.sensitive_masks, t.requested_room_no,
+              t.room_surcharge_snapshot, rt.name AS room_type_name,
+              COALESCE((SELECT json_agg(json_build_object('groupId', p.group_id, 'rank', p.rank, 'optionId', p.option_id) ORDER BY p.rank)
+                          FROM traveler_option_preferences p WHERE p.traveler_id = t.id), '[]') AS preferences,
               COALESCE((SELECT json_agg(json_build_object('optionId', o.option_id, 'price', o.price_snapshot))
                           FROM traveler_options o WHERE o.traveler_id = t.id), '[]') AS options
-         FROM travelers t WHERE t.registration_id = $1 ORDER BY t.sort_order`,
+         FROM travelers t LEFT JOIN session_room_types rt ON rt.id = t.session_room_type_id
+        WHERE t.registration_id = $1 ORDER BY t.sort_order`,
       [r.id],
     );
     return {
@@ -678,6 +785,12 @@ export class RegistrationService {
         basePrice: t.base_price_snapshot,
         fieldValues: { ...t.field_values, ...t.sensitive_masks },
         requestedRoomNo: t.requested_room_no,
+        roomType: t.room_type_name ? { name: t.room_type_name, surcharge: t.room_surcharge_snapshot } : null,
+        preferences: t.preferences.map((p: { groupId: string; rank: number; optionId: string }) => ({
+          rank: p.rank,
+          groupName: config.groups.get(p.groupId)?.name ?? '',
+          optionName: config.options.get(p.optionId)?.name ?? '',
+        })),
         options: t.options.map((o: { optionId: string; price: number }) => ({
           optionId: o.optionId,
           name: config.options.get(o.optionId)?.name ?? '',

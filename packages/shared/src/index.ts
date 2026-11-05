@@ -4,6 +4,10 @@ const travelerSelection = z.object({
   key: z.string().uuid(), // 前端產生，用於草稿與敏感欄位比對
   travelerTypeId: z.string().uuid(),
   optionIds: z.array(z.string().uuid()).max(50).default([]),
+  /** 佔床的旅客在有房型的梯次要選房型；不佔床的旅客一律不選。 */
+  roomTypeId: z.string().uuid().nullable().default(null),
+  /** 依群組列出第二、第三志願；第一志願就是 optionIds 裡選的選項。 */
+  preferences: z.record(z.string().uuid(), z.array(z.string().uuid()).max(2)).default({}),
 });
 
 export const holdRequest = z.object({
@@ -51,6 +55,8 @@ export function seatStatus(capacity: number, sold: number, held: number): SeatSt
 
 export interface FeeTraveler {
   basePrice: number;
+  /** 房型每人加價；不佔床或沒有房型時不用傳。 */
+  roomSurcharge?: number;
   optionPrices: number[];
 }
 
@@ -62,9 +68,9 @@ export interface FeeResult {
   selfPay: number;
 }
 
-/** 每位旅客費用 = 團費 + 自選行程；補助不找零、不累積。 */
+/** 每位旅客費用 = 團費 + 房型加價 + 自選行程；補助不找零、不累積。 */
 export function calculateFees(travelers: FeeTraveler[], subsidyAmount: number): FeeResult {
-  const travelerTotals = travelers.map((t) => t.optionPrices.reduce((sum, p) => sum + p, t.basePrice));
+  const travelerTotals = travelers.map((t) => t.optionPrices.reduce((sum, p) => sum + p, t.basePrice + (t.roomSurcharge ?? 0)));
   const total = travelerTotals.reduce((sum, t) => sum + t, 0);
   const subsidyApplied = Math.min(total, subsidyAmount);
   return { travelerTotals, total, subsidyAmount, subsidyApplied, selfPay: total - subsidyApplied };
@@ -82,7 +88,7 @@ export const ERROR_CODES = [
   'UNAUTHENTICATED', 'INVALID_CREDENTIALS', 'PAGE_CLOSED', 'FORBIDDEN_ORIGIN', 'LINK_INVALID', 'INVALID_PASSWORD',
   'INVALID_INPUT', 'CAPACITY_BELOW_SOLD', 'TIER_LIMIT_EXCEEDED', 'SESSION_IN_USE', 'FIELD_LOCKED',
   'FORBIDDEN', 'QUOTA_EMPTY', 'SLUG_TAKEN', 'EVENT_NOT_DRAFT', 'EVENT_NOT_PUBLISHED', 'PAGE_MODE_MISMATCH',
-  'DUPLICATE_NAME', 'TRAVELER_TYPE_IN_USE', 'ROOM_TYPE_IN_USE', 'OPTION_IN_USE', 'QUOTA_IN_USE',
+  'DUPLICATE_NAME', 'TRAVELER_TYPE_IN_USE', 'ROOM_TYPE_IN_USE', 'OPTION_IN_USE', 'QUOTA_IN_USE', 'ROOM_FULL',
   'DUPLICATE_EMPLOYEE_NO', 'EMPLOYEE_NO_LOCKED', 'EMPLOYEE_HAS_REGISTRATION', 'CSV_BAD_HEADER', 'CSV_TOO_MANY_ROWS',
   'PUBLISH_BLOCKED', 'PUBLISH_REQUIREMENT', 'INVALID_FILE', 'FILE_TOO_LARGE',
 ] as const;

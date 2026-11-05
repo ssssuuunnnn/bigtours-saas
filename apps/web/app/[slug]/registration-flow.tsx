@@ -19,13 +19,15 @@ const newTraveler = (typeId: string, optionIds: string[]): Traveler => ({
   key: uuid(),
   travelerTypeId: typeId,
   optionIds,
+  roomTypeId: null,
+  preferences: {},
   name: '',
   fieldValues: {},
   requestedRoomNo: 1,
 });
 
 const errorText = (e: unknown) => t.errors[e instanceof ApiError ? e.code : 'fallback'] ?? t.errors.fallback!;
-const selectionOf = (x: Traveler) => ({ key: x.key, travelerTypeId: x.travelerTypeId, optionIds: x.optionIds });
+const selectionOf = (x: Traveler) => ({ key: x.key, travelerTypeId: x.travelerTypeId, optionIds: x.optionIds, roomTypeId: x.roomTypeId, preferences: x.preferences });
 const shortDate = (d: string | null) => (d ? `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}` : '');
 /** 例如 3/12（五）。日期沒有時區，以 UTC 計算星期避免差一天。 */
 const dateWithWeekday = (d: string) => `${shortDate(d)}（${'日一二三四五六'[new Date(`${d}T00:00:00Z`).getUTCDay()]}）`;
@@ -103,11 +105,12 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
     if (!state) return null;
     const options = new Map(state.optionGroups.flatMap((g) => g.options).map((o) => [o.id, o.price]));
     const types = new Map(state.travelerTypes.map((x) => [x.id, x.basePrice]));
+    const surcharges = new Map(availability.flatMap((s) => s.roomTypes).map((r) => [r.id, r.surcharge]));
     return calculateFees(
-      travelers.map((x) => ({ basePrice: types.get(x.travelerTypeId) ?? 0, optionPrices: x.optionIds.map((id) => options.get(id) ?? 0) })),
+      travelers.map((x) => ({ basePrice: types.get(x.travelerTypeId) ?? 0, roomSurcharge: x.roomTypeId ? surcharges.get(x.roomTypeId) ?? 0 : 0, optionPrices: x.optionIds.map((id) => options.get(id) ?? 0) })),
       state.employee.subsidyAmount,
     );
-  }, [state, travelers]);
+  }, [state, travelers, availability]);
 
   if (fatal) return <main className="center-note"><p role="alert">{t.loadFailed}</p></main>;
   if (!state || !fees) return <main className="center-note" aria-busy="true"><p>{t.loading}</p></main>;
@@ -143,6 +146,7 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
 
   const startHold = async () => {
     if (!sessionId) { setError(t.chooseSessionFirst); return; }
+    if (session?.roomTypes.length && travelers.some((x) => occupiesBed(state, x) && !x.roomTypeId)) { setError(t.roomTypeRequired); return; }
     setBusy(true); setError(null);
     try {
       const hold = await api.hold(sessionId, travelers.map(selectionOf));
@@ -210,14 +214,14 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
           state={state}
           session={session}
           canApplyToAll={travelers.length > 1}
-          onChange={(next) => changeTravelers(travelers.map((x) => (x.key === next.key ? next : x)))}
+          onChange={(next) => changeTravelers(travelers.map((x) => (x.key === next.key ? roomRule(state, session, next) : x)))}
           onRemove={() => changeTravelers(travelers.filter((x) => x.key !== traveler.key))}
-          onApplyAll={() => changeTravelers(travelers.map((x) => ({ ...x, optionIds: traveler.optionIds })))}
+          onApplyAll={() => changeTravelers(travelers.map((x) => ({ ...x, optionIds: traveler.optionIds, preferences: traveler.preferences })))}
         />
       ))}
       {firstDependentType && state.employee.dependentLimit > 0 ? (
         <div className="add-row">
-          <button type="button" className="ghost" disabled={dependentLeft <= 0} onClick={() => changeTravelers([...travelers, newTraveler(firstDependentType.id, defaultOptions(state))])}>
+          <button type="button" className="ghost" disabled={dependentLeft <= 0} onClick={() => changeTravelers([...travelers, roomRule(state, session, newTraveler(firstDependentType.id, defaultOptions(state)))])}>
             {t.addDependent}
           </button>
           <span className="muted">{t.dependentLeft(Math.max(dependentLeft, 0))}</span>
@@ -274,6 +278,7 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
                   onChange={(value) => setTravelers(travelers.map((x) => (x.key === traveler.key ? { ...x, fieldValues: { ...x.fieldValues, [field.key]: value } } : x)))}
                 />
               ))}
+              {traveler.roomTypeId && <p className="muted">{t.roomType}：{session?.roomTypes.find((r) => r.id === traveler.roomTypeId)?.name}</p>}
               <label className="field">
                 <span>{t.roomOf}</span>
                 <select
@@ -288,6 +293,7 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
           <section className="block">
             <h2>{t.rooms}</h2>
             <p className="muted">{t.roomsHint}</p>
+            {mismatchedRooms(state, session, travelers).map((no) => <p key={no} className="notice" role="status">{t.roomMismatch(no)}</p>)}
             {usedRooms.map((no) => (
               <TextField key={no} label={t.coworker(no)} value={rooms[no] ?? ''} onChange={(v) => setRooms({ ...rooms, [no]: v })} />
             ))}
@@ -317,9 +323,14 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
       <main className="page has-bar">
         {restored && <p className="notice">{t.draftRestored}</p>}
         <Itinerary state={state} />
-        <Board sessions={availability} selected={sessionId} onSelect={(id) => { setSessionId(id); setError(null); }} disabled={!open} hideSeats={state.event.openState === 'not_open'} />
+        <Board sessions={availability} selected={sessionId} onSelect={(id) => {
+          setSessionId(id); setError(null);
+          const next = availability.find((s) => s.id === id) ?? null;
+          setTravelers(travelers.map((x) => roomRule(state, next, x)));
+        }} disabled={!open} hideSeats={state.event.openState === 'not_open'} />
         {!open && <p className="notice">{state.event.openState === 'closed' ? t.closed : t.notOpenUntil(formatDateTime(state.event.registrationOpensAt))}</p>}
         {!open && <section className="block"><h2>{t.records}</h2><p className="muted">{t.noRecords}</p></section>}
+        {open && <FeeList types={state.travelerTypes} />}
         {open && picker}
       </main>
       {open && (
@@ -328,6 +339,48 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
         </FeeBar>
       )}
     </div>
+  );
+}
+
+const occupiesBed = (s: EventState, x: Traveler) => s.travelerTypes.find((y) => y.id === x.travelerTypeId)?.occupiesBed ?? true;
+
+/** 不佔床的旅客不選房型；換梯次時清掉這個梯次沒有的房型，只有一種可選時直接帶入。 */
+function roomRule(s: EventState, session: SessionAvailability | null, x: Traveler): Traveler {
+  const rooms = session?.roomTypes ?? [];
+  if (!occupiesBed(s, x) || rooms.length === 0) return x.roomTypeId ? { ...x, roomTypeId: null } : x;
+  if (x.roomTypeId && rooms.some((r) => r.id === x.roomTypeId)) return x;
+  const open = rooms.filter((r) => r.status === 'available');
+  return { ...x, roomTypeId: rooms.length === 1 && open.length === 1 ? open[0]!.id : null };
+}
+
+/** 同一間的佔床旅客選了不同房型，或人數超過可住人數時提醒，不阻擋。 */
+function mismatchedRooms(s: EventState, session: SessionAvailability | null, travelers: Traveler[]): number[] {
+  const byRoom = new Map<number, Traveler[]>();
+  for (const x of travelers) {
+    if (!x.roomTypeId) continue;
+    const no = x.requestedRoomNo ?? 1;
+    byRoom.set(no, [...(byRoom.get(no) ?? []), x]);
+  }
+  return [...byRoom].filter(([, members]) => {
+    const types = new Set(members.map((m) => m.roomTypeId));
+    const capacity = session?.roomTypes.find((r) => r.id === members[0]!.roomTypeId)?.capacity ?? members.length;
+    return types.size > 1 || members.length > capacity;
+  }).map(([no]) => no).sort((a, b) => a - b);
+}
+
+function FeeList({ types }: { types: EventState['travelerTypes'] }) {
+  return (
+    <section className="block">
+      <h2>{t.feeList}</h2>
+      <dl className="summary">
+        {types.map((x) => (
+          <div key={x.id}>
+            <dt>{x.name}{x.note && <small className="muted type-note">{x.note}</small>}</dt>
+            <dd>{money(x.basePrice)}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
   );
 }
 
@@ -424,7 +477,10 @@ function TravelerPicks({ index, traveler, state, session, canApplyToAll, onChang
     else if (traveler.optionIds.filter((id) => inGroup.has(id)).length >= max) return;
     else next = [...traveler.optionIds, optionId];
     if (max === 1 && has && group.minSelect === 0) next = traveler.optionIds.filter((id) => id !== optionId);
-    onChange({ ...traveler, optionIds: next });
+    // 第一志願換掉或取消時，同一個選項不能再留在其他志願。
+    const first = next.find((id) => inGroup.has(id));
+    const kept = first ? (traveler.preferences[groupId] ?? []).filter((id) => id !== first) : [];
+    onChange({ ...traveler, optionIds: next, preferences: { ...traveler.preferences, [groupId]: kept } });
   };
   return (
     <div className="traveler">
@@ -440,6 +496,21 @@ function TravelerPicks({ index, traveler, state, session, canApplyToAll, onChang
           </>
         )}
       </div>
+      {type?.occupiesBed === false
+        ? (session?.roomTypes.length ? <p className="muted">{t.roomTypeNoBed}</p> : null)
+        : (session?.roomTypes.length ? (
+          <label className="field">
+            <span>{t.roomType}</span>
+            <select value={traveler.roomTypeId ?? ''} onChange={(e) => onChange({ ...traveler, roomTypeId: e.target.value || null })}>
+              <option value="">{t.roomTypeChoose}</option>
+              {session.roomTypes.map((r) => {
+                const blocked = r.status !== 'available' && r.id !== traveler.roomTypeId;
+                const side = r.status === 'sold_out' ? ` ${t.soldOut}` : r.status === 'held' ? ` ${t.optionHeld}` : ` ${t.remaining(r.remaining)}`;
+                return <option key={r.id} value={r.id} disabled={blocked}>{t.roomTypeOption(r.name, r.capacity, r.surcharge ? t.plusPrice(money(r.surcharge)) : '', side)}</option>;
+              })}
+            </select>
+          </label>
+        ) : !session && state.availability.some((s) => s.roomTypes.length) ? <p className="muted">{t.roomTypeNeedSession}</p> : null)}
       {state.optionGroups.map((group) => (
         <fieldset key={group.id} className="group">
           <legend>{group.name}<small>{group.isRequired ? t.required : t.chooseMax(group.maxSelect)}</small></legend>
@@ -461,9 +532,37 @@ function TravelerPicks({ index, traveler, state, session, canApplyToAll, onChang
               </Fragment>
             );
           })}
+          <Preferences group={group} traveler={traveler} session={session} onChange={(ids) => onChange({ ...traveler, preferences: { ...traveler.preferences, [group.id]: ids } })} />
         </fieldset>
       ))}
       {canApplyToAll && <button type="button" className="link" onClick={onApplyAll}>{t.applyToAll}</button>}
+    </div>
+  );
+}
+
+/** 第二、第三志願：可選已額滿的選項，填了第二才能填第三。 */
+function Preferences({ group, traveler, session, onChange }: { group: EventState['optionGroups'][number]; traveler: Traveler; session: SessionAvailability | null; onChange: (ids: string[]) => void }) {
+  const first = group.options.find((o) => traveler.optionIds.includes(o.id));
+  if (group.preferenceCount <= 1 || !first) return null;
+  const chosen = traveler.preferences[group.id] ?? [];
+  const label = (id: string, name: string) => (session?.options.find((q) => q.optionId === id)?.status === 'sold_out' ? `${name}${t.preferenceFull}` : name);
+  const set = (index: number, id: string) => {
+    const next = chosen.slice(0, index);
+    if (id) next.push(id);
+    onChange(next);
+  };
+  return (
+    <div className="preferences">
+      <small className="muted">{t.preferenceHint}</small>
+      {Array.from({ length: group.preferenceCount - 1 }, (_, i) => i).filter((i) => i <= chosen.length).map((i) => (
+        <label key={i} className="field">
+          <span>{t.preferenceN(i + 2)}</span>
+          <select value={chosen[i] ?? ''} onChange={(e) => set(i, e.target.value)}>
+            <option value="">{t.preferenceNone}</option>
+            {group.options.filter((o) => o.id !== first.id && !chosen.slice(0, i).includes(o.id)).map((o) => <option key={o.id} value={o.id}>{label(o.id, o.name)}</option>)}
+          </select>
+        </label>
+      ))}
     </div>
   );
 }
@@ -591,6 +690,8 @@ function Done({ registration: r, session, fields, paymentInstructions, slug: slu
               return <div key={f.key}><dt>{f.label}</dt><dd>{Array.isArray(v) ? v.join('、') : String(v)}</dd></div>;
             })}
             {x.options.map((o) => <div key={o.name}><dt>{o.name}{o.hasPdf && <> <a className="option-pdf" href={`/api/v1/public/events/${slug}/options/${o.optionId}/pdf`} target="_blank" rel="noopener" aria-label={`${o.name}：${t.optionPdfLink}`}>{t.optionPdfLink}</a></>}</dt><dd>{o.price ? money(o.price) : t.included}</dd></div>)}
+            {x.roomType && <div><dt>{t.roomType}：{x.roomType.name}</dt><dd>{x.roomType.surcharge ? t.plusPrice(money(x.roomType.surcharge)) : t.included}</dd></div>}
+            {x.preferences.map((p) => <div key={`${p.groupName}-${p.rank}`}><dt>{p.groupName}{t.preferenceN(p.rank).replace('（選填）', '')}</dt><dd>{p.optionName}</dd></div>)}
             {x.requestedRoomNo && <div><dt>{t.rooms}</dt><dd>{t.roomRequest(x.requestedRoomNo)}</dd></div>}
           </dl>
         </section>

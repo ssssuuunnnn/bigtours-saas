@@ -533,6 +533,27 @@ describe('旅客類型、房型與自選行程', () => {
     expect(listed.body.find((s: any) => s.id === s2.body.id).roomTypes).toEqual([]);
   });
 
+  it('房型床位不能低於已售加保留中；有人保留或選過的房型不能刪除', async () => {
+    const a = await makeAgency('admin');
+    const s = await api(a).post('/sessions', session({ roomTypes: [room({ bedQuota: 5 }), room({ name: '單人房', bedQuota: 5 })] })).expect(201);
+    const [triple, single] = s.body.roomTypes;
+    const emp = await q1(`INSERT INTO event_employees (agency_id, event_id, employee_no, name) VALUES ($1, $2, 'E1', 'N') RETURNING id`, [a.agencyId, a.eventId]);
+    const hold = await q1(`INSERT INTO seat_holds (agency_id, event_id, event_employee_id, session_id, quantity, expires_at) VALUES ($1, $2, $3, $4, 3, now() + interval '10 minutes') RETURNING id`, [a.agencyId, a.eventId, emp.id, s.body.id]);
+    await admin.query(`INSERT INTO seat_hold_room_items (agency_id, hold_id, room_type_id, quantity) VALUES ($1, $2, $3, 3)`, [a.agencyId, hold.id, triple.id]);
+    const both = (o: object) => session({ roomTypes: [room({ id: triple.id, ...o }), room({ id: single.id, name: '單人房', bedQuota: 5 })] });
+    expect((await api(a).patch(`/sessions/${s.body.id}`, both({ bedQuota: 2 })).expect(409)).body.code).toBe('CAPACITY_BELOW_SOLD');
+    await api(a).patch(`/sessions/${s.body.id}`, both({ bedQuota: 3 })).expect(200);
+    expect((await api(a).patch(`/sessions/${s.body.id}`, session({ roomTypes: [room({ id: single.id, name: '單人房' })] })).expect(409)).body.code).toBe('ROOM_TYPE_IN_USE');
+
+    // 保留結束後可以刪；被報名參考過（即使已取消）就不能刪
+    await admin.query(`UPDATE seat_holds SET status = 'released' WHERE id = $1`, [hold.id]);
+    const type = await q1(`INSERT INTO traveler_types (agency_id, event_id, name, base_price) VALUES ($1, $2, 'T', 0) RETURNING id`, [a.agencyId, a.eventId]);
+    const reg = await q1(`INSERT INTO registrations (agency_id, event_id, session_id, event_employee_id, total_amount, payment_status, terms_version_accepted, terms_accepted_at, status) VALUES ($1, $2, $3, $4, 0, 'unpaid', 1, now(), 'cancelled') RETURNING id`, [a.agencyId, a.eventId, s.body.id, emp.id]);
+    await admin.query(`INSERT INTO travelers (agency_id, registration_id, traveler_type_id, name, base_price_snapshot, session_room_type_id) VALUES ($1, $2, $3, 'N', 0, $4)`, [a.agencyId, reg.id, type.id, single.id]);
+    expect((await api(a).patch(`/sessions/${s.body.id}`, session({ roomTypes: [room({ id: triple.id })] })).expect(409)).body.code).toBe('ROOM_TYPE_IN_USE');
+    await api(a).patch(`/sessions/${s.body.id}`, session({ roomTypes: [room({ id: single.id, name: '單人房' })] })).expect(200);
+  });
+
   it('名額不能低於已報名加保留中的人數', async () => {
     const a = await makeAgency('admin');
     const s = await api(a).post('/sessions', session({ capacity: 10 })).expect(201);

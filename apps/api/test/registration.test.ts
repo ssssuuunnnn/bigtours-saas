@@ -430,3 +430,119 @@ describe('取消', () => {
     expect((await api.availability()).body[0].remaining).toBe(19);
   });
 });
+
+describe('房型、不佔床與志願', () => {
+  const withRooms = async (beds = 4, opts: { limit?: number } = {}) => {
+    const f = await makeFixture();
+    const room = async (name: string, capacity: number, surcharge: number, bedQuota: number) =>
+      (await q1(`INSERT INTO session_room_types (agency_id, session_id, name, capacity, surcharge, bed_quota) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`, [f.agencyId, f.sessionId, name, capacity, surcharge, bedQuota])).id as string;
+    const twin = await room('二人房', 2, 0, 20);
+    const single = await room('單人房', 1, 3000, beds);
+    const eventId = (await q1(`SELECT id FROM events WHERE agency_id = $1`, [f.agencyId])).id;
+    const infant = (await q1(`INSERT INTO traveler_types (agency_id, event_id, name, base_price, occupies_bed, note) VALUES ($1, $2, '嬰兒', 500, false, '未滿 2 歲') RETURNING id`, [f.agencyId, eventId])).id as string;
+    return { f, twin, single, infant, eventId, limit: opts.limit };
+  };
+  const roomSel = (typeId: string, roomTypeId: string | null, optionIds: string[] = []) => ({ ...sel(typeId, optionIds), roomTypeId });
+
+  it('佔床的旅客要選房型，不佔床的不能選；前台看得到備註與房型', async () => {
+    const { f, single, infant } = await withRooms();
+    const { token } = await makeEmployee(f);
+    const api = call(f, token);
+    const state = (await api.state().expect(200)).body;
+    expect(state.travelerTypes.find((t: any) => t.name === '嬰兒')).toMatchObject({ note: '未滿 2 歲', occupiesBed: false });
+    expect(state.availability[0].roomTypes.map((r: any) => [r.name, r.capacity, r.surcharge, r.remaining, r.status])).toEqual([['二人房', 2, 0, 20, 'available'], ['單人房', 1, 3000, 4, 'available']]);
+    expect(state.availability[1].roomTypes).toEqual([]);
+
+    const noRoom = await api.hold({ sessionId: f.sessionId, travelers: [sel(f.selfType, [f.freeOption])] }).expect(422);
+    expect(noRoom.body.detail.reason).toBe('room_type_required');
+    const bedless = await api.hold({ sessionId: f.sessionId, travelers: [roomSel(f.selfType, single, [f.freeOption]), roomSel(infant, single, [f.freeOption])] }).expect(422);
+    expect(bedless.body.detail.reason).toBe('invalid_room_type');
+    const other = await api.hold({ sessionId: f.sessionFull, travelers: [roomSel(f.selfType, single, [f.freeOption])] }).expect(422);
+    expect(other.body.detail.reason).toBe('invalid_room_type');
+  });
+
+  it('房型床位一起保留與售出，費用含房型加價，不佔床不佔床位', async () => {
+    const { f, single, infant } = await withRooms();
+    const { token, id } = await makeEmployee(f, { subsidy: 0 });
+    const api = call(f, token);
+    const self = roomSel(f.selfType, single, [f.freeOption]);
+    const baby = roomSel(infant, null, [f.freeOption]);
+    await api.hold({ sessionId: f.sessionId, travelers: [self, baby] }).expect(201);
+    const during = (await api.availability().expect(200)).body[0].roomTypes.find((r: any) => r.id === single);
+    expect(during).toMatchObject({ remaining: 3 });
+    const reg = (await api.submit({ travelers: [details(self), details(baby)], termsAccepted: true }).expect(201)).body;
+    const selfFee = (await q1(`SELECT base_price FROM traveler_types WHERE id = $1`, [f.selfType])).base_price as number;
+    expect(reg.totalAmount).toBe(selfFee + 3000 + 500);
+    expect(reg.travelers[0].roomType).toEqual({ name: '單人房', surcharge: 3000 });
+    expect(reg.travelers[1].roomType).toBeNull();
+    expect((await q1(`SELECT sold_count FROM session_room_types WHERE id = $1`, [single])).sold_count).toBe(1);
+
+    // 之後改價不影響已送出的報名
+    await admin.query(`UPDATE session_room_types SET surcharge = 9999 WHERE id = $1`, [single]);
+    expect((await api.state().expect(200)).body.registration.travelers[0].roomType.surcharge).toBe(3000);
+
+    await api.cancel().expect(200);
+    await service.confirmCancel(f.agencyId, reg.id, null);
+    expect((await q1(`SELECT sold_count FROM session_room_types WHERE id = $1`, [single])).sold_count).toBe(0);
+    expect(id).toBeTruthy();
+  });
+
+  it('床位不足時回傳 ROOM_FULL；同時搶最後的床位不會超賣', async () => {
+    const { f, single } = await withRooms(3);
+    const people = await Promise.all(Array.from({ length: 8 }, () => makeEmployee(f)));
+    const results = await inBatches(people.map((p) => () => call(f, p.token).hold({ sessionId: f.sessionId, travelers: [roomSel(f.selfType, single, [f.freeOption])] })));
+    expect(results.filter((r) => r.status === 201)).toHaveLength(3);
+    const failed = results.filter((r) => r.status !== 201);
+    expect(failed.every((r) => r.body.code === 'ROOM_FULL')).toBe(true);
+    expect(failed[0]!.body.detail).toMatchObject({ roomTypeId: single, remaining: 0, status: 'held' });
+  });
+
+  it('修改保留時換房型會釋出舊床位；與保留不符時不能送出', async () => {
+    const { f, single, twin } = await withRooms(1);
+    const a = await makeEmployee(f);
+    const b = await makeEmployee(f);
+    const self = roomSel(f.selfType, single, [f.freeOption]);
+    await call(f, a.token).hold({ sessionId: f.sessionId, travelers: [self] }).expect(201);
+    expect((await call(f, b.token).hold({ sessionId: f.sessionId, travelers: [roomSel(f.selfType, single, [f.freeOption])] }).expect(409)).body.code).toBe('ROOM_FULL');
+    const mismatch = await call(f, a.token).submit({ travelers: [{ ...details(self), roomTypeId: twin }], termsAccepted: true }).expect(409);
+    expect(mismatch.body.code).toBe('HOLD_MISMATCH');
+    await call(f, a.token).update({ travelers: [{ ...self, roomTypeId: twin }] }).expect(200);
+    await call(f, b.token).hold({ sessionId: f.sessionId, travelers: [roomSel(f.selfType, single, [f.freeOption])] }).expect(201);
+  });
+
+  it('沒有房型的梯次不用選房型', async () => {
+    const f = await makeFixture();
+    const { token } = await makeEmployee(f);
+    await call(f, token).hold({ sessionId: f.sessionId, travelers: [sel(f.selfType, [f.freeOption])] }).expect(201);
+  });
+
+  it('第二、第三志願可選已額滿的選項，不佔名額也不計費', async () => {
+    const f = await makeFixture({ optionCapacity: 0 });
+    await admin.query(`UPDATE option_groups SET max_select = 1, preference_count = 3 WHERE agency_id = $1`, [f.agencyId]);
+    const group = (await q1(`SELECT id FROM option_groups WHERE agency_id = $1`, [f.agencyId])).id as string;
+    const third = (await q1(`INSERT INTO options (agency_id, group_id, name, price) VALUES ($1, $2, '第三個', 900) RETURNING id`, [f.agencyId, group])).id as string;
+    const { token } = await makeEmployee(f, { subsidy: 0 });
+    const api = call(f, token);
+    const bad = async (preferences: object) => (await api.hold({ sessionId: f.sessionId, travelers: [{ ...sel(f.selfType, [f.freeOption]), preferences }] }).expect(422)).body.detail.reason;
+    expect(await bad({ [group]: [f.freeOption] })).toBe('option_preferences');
+    expect(await bad({ [group]: [third, third] })).toBe('option_preferences');
+    expect(await bad({ [randomUUID()]: [third] })).toBe('option_preferences');
+
+    const self = { ...sel(f.selfType, [f.freeOption]), preferences: { [group]: [f.limitedOption, third] } };
+    await api.hold({ sessionId: f.sessionId, travelers: [self] }).expect(201);
+    const reg = (await api.submit({ travelers: [details(self)], termsAccepted: true }).expect(201)).body;
+    const selfFee = (await q1(`SELECT base_price FROM traveler_types WHERE id = $1`, [f.selfType])).base_price as number;
+    expect(reg.totalAmount).toBe(selfFee);
+    expect(reg.travelers[0].preferences).toEqual([{ rank: 2, groupName: expect.any(String), optionName: '限量' }, { rank: 3, groupName: expect.any(String), optionName: '第三個' }]);
+    expect((await q1(`SELECT sold_count FROM option_session_quotas WHERE id = $1`, [f.quotaId])).sold_count).toBe(0);
+  });
+
+  it('群組沒開志願時不能填，超過開放的志願數也不行', async () => {
+    const f = await makeFixture();
+    const group = (await q1(`SELECT id FROM option_groups WHERE agency_id = $1`, [f.agencyId])).id as string;
+    const { token } = await makeEmployee(f);
+    const api = call(f, token);
+    const r = await api.hold({ sessionId: f.sessionId, travelers: [{ ...sel(f.selfType, [f.freeOption]), preferences: { [group]: [f.limitedOption] } }] }).expect(422);
+    expect(r.body.detail.reason).toBe('option_preferences');
+  });
+});
