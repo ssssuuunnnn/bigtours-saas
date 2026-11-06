@@ -16,17 +16,21 @@ export interface SessionAvailability {
   remaining: number;
   status: 'available' | 'held' | 'sold_out';
   options: { optionId: string; remaining: number; status: 'available' | 'held' | 'sold_out' }[];
+  roomTypes: RoomTypeChoice[];
 }
+export interface RoomTypeChoice { id: string; name: string; capacity: number; surcharge: number; remaining: number; status: 'available' | 'held' | 'sold_out' }
 export interface Option { id: string; groupId: string; name: string; price: number; hasPdf: boolean }
 export interface EventFrontImages { login: string | null; loginMobile: string | null; home: string | null }
-export interface OptionGroup { id: string; name: string; isRequired: boolean; minSelect: number; maxSelect: number; options: Option[] }
-export interface TravelerType { id: string; name: string; basePrice: number; isEmployeeSelf: boolean }
+export interface OptionGroup { id: string; name: string; isRequired: boolean; minSelect: number; maxSelect: number; preferenceCount: number; options: Option[] }
+export interface TravelerType { id: string; name: string; basePrice: number; isEmployeeSelf: boolean; note: string | null; occupiesBed: boolean }
 export interface Field { key: string; label: string; type: string; choices: string[] | null; isRequired: boolean; isSensitive: boolean }
 export interface Hold { id: string; sessionId: string; quantity: number; expiresAt: string }
 export interface Traveler {
   key: string;
   travelerTypeId: string;
   optionIds: string[];
+  roomTypeId: string | null;
+  preferences: Record<string, string[]>;
   name: string;
   fieldValues: Record<string, any>;
   requestedRoomNo: number | null;
@@ -41,7 +45,7 @@ export interface Registration {
   subsidyApplied: number;
   selfPayAmount: number;
   paymentStatus: string;
-  travelers: { name: string; travelerTypeName: string; basePrice: number; fieldValues: Record<string, any>; requestedRoomNo: number | null; options: { optionId: string; name: string; hasPdf: boolean; price: number }[] }[];
+  travelers: { name: string; travelerTypeName: string; basePrice: number; fieldValues: Record<string, any>; requestedRoomNo: number | null; roomType: { name: string; surcharge: number } | null; preferences: { rank: number; groupName: string; optionName: string }[]; options: { optionId: string; name: string; hasPdf: boolean; price: number }[] }[];
 }
 export interface EventState {
   agency: { name: string };

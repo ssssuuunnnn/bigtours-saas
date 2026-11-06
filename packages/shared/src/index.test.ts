@@ -7,6 +7,10 @@ describe('calculateFees', () => {
     const r = calculateFees([{ basePrice: 15000, optionPrices: [500] }, { basePrice: 12000, optionPrices: [500] }], 10000);
     expect(r).toMatchObject({ total: 28000, subsidyApplied: 10000, selfPay: 18000 });
   });
+  it('房型加價算進每位旅客費用', () => {
+    const r = calculateFees([{ basePrice: 15000, roomSurcharge: 3000, optionPrices: [500] }, { basePrice: 500, optionPrices: [] }], 10000);
+    expect(r).toMatchObject({ travelerTotals: [18500, 500], total: 19000, selfPay: 9000 });
+  });
   it('補助用不完時不找零', () => {
     expect(calculateFees([{ basePrice: 8000, optionPrices: [] }], 10000)).toMatchObject({ selfPay: 0, subsidyApplied: 8000 });
   });

@@ -236,6 +236,8 @@ a.primary-link { display: flex; align-items: center; justify-content: center; mi
 .admin-publish { display: grid; gap: 12px; padding: 16px; background: var(--paper); border-radius: 4px; }
 .admin-publish-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .preline { white-space: pre-line; }
+.type-note { display: block; font-weight: 400; }
+.preferences { display: grid; gap: 8px; padding: 10px 0 2px; }
 .admin-file-input, .admin-form .admin-file-input[type='file'] { position: absolute; width: 1px; height: 1px; min-height: 0; padding: 0; opacity: 0; }
 .admin-file-row { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
 .admin-file-row button.link { padding: 0; font-size: 14px; }
