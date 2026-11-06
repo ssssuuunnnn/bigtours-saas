@@ -11,6 +11,8 @@ import { PublicController } from './public.controller.ts';
 import { DomainError } from './errors.ts';
 import { RegistrationService } from './registration.service.ts';
 import { MailService } from './mail.service.ts';
+import { NotificationService } from './notification.service.ts';
+import { RegistrationAdminService } from './registration-admin.service.ts';
 import { RosterService } from './roster.service.ts';
 import { StorageService } from './storage.service.ts';
 
@@ -25,7 +27,7 @@ const parseFile = (parser: typeof pdfBody) => (req: Request, res: Response, next
 
 @Module({
   controllers: [AccountController, AgencyController, PublicController],
-  providers: [DatabaseService, EncryptionService, AccessService, AccountService, AgencyAdminService, RegistrationService, StorageService, MailService, RosterService],
+  providers: [DatabaseService, EncryptionService, AccessService, AccountService, AgencyAdminService, RegistrationService, StorageService, MailService, RosterService, NotificationService, RegistrationAdminService],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {

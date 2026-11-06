@@ -277,6 +277,38 @@ a.primary-link { display: flex; align-items: center; justify-content: center; mi
 .admin-file-button { display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; border: 2px solid var(--ink); border-radius: 4px; font-weight: 700; cursor: pointer; }
 .admin-file-input:focus-visible + .admin-file-button { outline: 3px solid var(--brand); outline-offset: 2px; }
 .admin-row-input { width: 20px; height: 20px; accent-color: var(--brand); display: block; }
+.admin-stat-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.admin-stat-cards > div { display: grid; gap: 4px; padding: 16px; background: var(--paper); border-radius: 4px; }
+.admin-stat-cards span { font-size: 14px; color: var(--ink-soft); }
+.admin-stat-cards strong { font-size: 24px; }
+.admin-stat-cards a { font-size: 14px; color: var(--brand-text); }
+.admin-pay.unpaid, .admin-reg.cancel_requested { color: #7A4B00; font-weight: 500; }
+.admin-pay.paid { color: #116149; font-weight: 500; }
+.admin-pay.not_required, .admin-reg.cancelled { color: var(--ink-soft); }
+.admin-pay.refunded { color: #B42318; font-weight: 500; }
+.admin-cancel-banner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; background: #FFF4E0; border-left: 4px solid #7A4B00; border-radius: 4px; }
+.admin-cancel-banner p { margin: 0; flex: 1 1 280px; }
+.admin-reg-grid { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 16px; align-items: start; }
+.admin-reg-grid > div { display: grid; gap: 16px; min-width: 0; }
+.admin-card { display: grid; gap: 10px; padding: 16px; background: var(--paper); border-radius: 4px; }
+.admin-card h2 { margin: 0; font-size: 16px; }
+.admin-card dl { margin: 0; display: grid; gap: 6px; }
+.admin-card dl div { display: flex; justify-content: space-between; gap: 12px; }
+.admin-card dt { color: var(--ink-soft); }
+.admin-card dd { margin: 0; font-weight: 500; }
+.admin-card .strong dt, .admin-card .strong dd { color: var(--ink); font-weight: 700; }
+.admin-radio-row { display: flex; flex-wrap: wrap; gap: 12px; }
+.admin-radio-row input { accent-color: var(--brand); }
+fieldset.admin-card { margin: 0; border: 0; min-width: 0; }
+.admin-panel > a { color: var(--brand-text); }
+.admin-radio-row label { display: flex; align-items: center; gap: 6px; min-height: 32px; cursor: pointer; }
+.admin-revisions { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; font-size: 14px; }
+.admin-revisions time { display: block; color: var(--ink-soft); font-size: 13px; }
+.admin-cell-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; font-size: 14px; }
+.admin-select-compact { min-width: 150px; }
+.admin-diff-up { color: #B42318; }
+.admin-diff-down { color: #116149; }
+@media (max-width: 900px) { .admin-reg-grid { grid-template-columns: minmax(0, 1fr); } }
 .admin-actions { white-space: nowrap; }
 .admin-actions button { margin-right: 10px; }
 .move { display: inline-flex; gap: 4px; }

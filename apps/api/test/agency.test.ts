@@ -6,6 +6,7 @@ import pg from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.ts';
+import { EncryptionService } from '../src/encryption.service.ts';
 import { MailService } from '../src/mail.service.ts';
 
 const PASSWORD = 'abcd1234';
@@ -1122,5 +1123,237 @@ describe('員工名單與帳號開通', () => {
     await api(a).post('/employees', emp()).expect(403);
     await api(a).post('/employees/account-emails', { allPending: true }).expect(403);
     await csv(a, '/preview', '員工編號,姓名\n').expect(403);
+  });
+});
+
+describe('報名管理、取消與改派', () => {
+  const mail = () => app.get(MailService);
+  const until = async (fn: () => boolean) => { for (let i = 0; i < 100; i++) { if (fn()) return; await new Promise((r) => setTimeout(r, 30)); } throw new Error('等待逾時'); };
+  const get = (a: Ag, path: string) => request(app.getHttpServer()).get(`/api/v1/agency/events/${a.eventId}${path}`).set('x-forwarded-host', a.host).set('cookie', a.cookie);
+  const ENC = () => app.get(EncryptionService);
+
+  const setup = async (role = 'admin') => {
+    const a = await makeAgency(role);
+    const s = (await q1(`INSERT INTO event_sessions (agency_id, event_id, name, capacity) VALUES ($1, $2, 'A 梯', 100) RETURNING id`, [a.agencyId, a.eventId])).id as string;
+    const type = (await q1(`INSERT INTO traveler_types (agency_id, event_id, name, base_price, is_employee_self) VALUES ($1, $2, '員工本人', 10000, true) RETURNING id`, [a.agencyId, a.eventId])).id as string;
+    const group = (await q1(`INSERT INTO option_groups (agency_id, event_id, name, max_select, preference_count) VALUES ($1, $2, '下午', 1, 3) RETURNING id`, [a.agencyId, a.eventId])).id as string;
+    const option = async (name: string, price: number, capacity: number | null) => {
+      const id = (await q1(`INSERT INTO options (agency_id, group_id, name, price) VALUES ($1, $2, $3, $4) RETURNING id`, [a.agencyId, group, name, price])).id as string;
+      const quota = capacity === null ? null : (await q1(`INSERT INTO option_session_quotas (agency_id, option_id, session_id, capacity) VALUES ($1, $2, $3, $4) RETURNING id`, [a.agencyId, id, s, capacity])).id as string;
+      return { id, quota };
+    };
+    return { a, s, type, group, option };
+  };
+  type Ctx = Awaited<ReturnType<typeof setup>>;
+  let seq = 0;
+  /** 直接建立一筆報名，名額計數也一起更新。 */
+  const book = async (c: Ctx, o: { option: { id: string; quota: string | null }; price: number; prefs?: string[]; email?: string | null; subsidy?: number; at?: string; payment?: string }) => {
+    seq += 1;
+    const no = `E${seq}`;
+    const emp = await q1(`INSERT INTO event_employees (agency_id, event_id, employee_no, name, email) VALUES ($1, $2, $3, $4, $5) RETURNING id`, [c.a.agencyId, c.a.eventId, no, `員工${seq}`, o.email ?? null]);
+    const total = 10000 + o.price;
+    const subsidy = o.subsidy ?? 0;
+    const reg = await q1(
+      `INSERT INTO registrations (agency_id, event_id, session_id, event_employee_id, total_amount, subsidy_amount, payment_status, terms_version_accepted, terms_accepted_at, submitted_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 1, now(), $8) RETURNING id`,
+      [c.a.agencyId, c.a.eventId, c.s, emp.id, total, subsidy, o.payment ?? (total > subsidy ? 'unpaid' : 'not_required'), o.at ?? new Date().toISOString()],
+    );
+    const t = await q1(`INSERT INTO travelers (agency_id, registration_id, traveler_type_id, is_employee_self, name, base_price_snapshot, sensitive_values_encrypted, sensitive_masks) VALUES ($1, $2, $3, true, $4, 10000, $5, $6) RETURNING id`,
+      [c.a.agencyId, reg.id, c.type, `員工${seq}`, ENC().encryptJson({ nid: 'A123456789' }), JSON.stringify({ nid: 'A1*******9' })]);
+    await admin.query(`INSERT INTO traveler_options (agency_id, traveler_id, option_id, price_snapshot) VALUES ($1, $2, $3, $4)`, [c.a.agencyId, t.id, o.option.id, o.price]);
+    for (const [i, optionId] of (o.prefs ?? []).entries()) {
+      await admin.query(`INSERT INTO traveler_option_preferences (agency_id, traveler_id, group_id, rank, option_id) VALUES ($1, $2, $3, $4, $5)`, [c.a.agencyId, t.id, c.group, i + 2, optionId]);
+    }
+    await admin.query(`UPDATE event_sessions SET sold_count = sold_count + 1 WHERE id = $1`, [c.s]);
+    if (o.option.quota) await admin.query(`UPDATE option_session_quotas SET sold_count = sold_count + 1 WHERE id = $1`, [o.option.quota]);
+    return { id: reg.id as string, travelerId: t.id as string, no, employeeId: emp.id as string };
+  };
+  const soldOf = async (quota: string) => (await q1(`SELECT sold_count FROM option_session_quotas WHERE id = $1`, [quota])).sold_count as number;
+
+  it('總覽與列表：統計、篩選，已取消預設不列出', async () => {
+    const c = await setup();
+    const o = await c.option('獨木舟', 1200, 20);
+    const r1 = await book(c, { option: o, price: 1200 });
+    const r2 = await book(c, { option: o, price: 1200, subsidy: 50000 });
+    const r3 = await book(c, { option: o, price: 1200 });
+    await admin.query(`UPDATE registrations SET status = 'cancel_requested', cancel_requested_at = now() WHERE id = $1`, [r2.id]);
+    await admin.query(`UPDATE registrations SET status = 'cancelled' WHERE id = $1`, [r3.id]);
+    const ov = (await get(c.a, '/overview').expect(200)).body;
+    expect(ov).toMatchObject({ roster: 3, registered: 2, pendingCancels: 1, unpaid: 1, travelers: 2 });
+    expect(ov.sessions[0]).toMatchObject({ name: 'A 梯', capacity: 100, sold: 3, held: 0, remaining: 97 });
+
+    const all = (await get(c.a, '/registrations').expect(200)).body;
+    expect(all).toMatchObject({ total: 2, registrations: 2, travelers: 2 });
+    expect(all.rows[0]).toMatchObject({ id: r2.id, status: 'cancel_requested', selfPayAmount: 0, paymentStatus: 'not_required', travelerCount: 1, sessionName: 'A 梯' });
+    expect((await get(c.a, '/registrations?status=cancelled').expect(200)).body.rows.map((r: any) => r.id)).toEqual([r3.id]);
+    expect((await get(c.a, '/registrations?payment=unpaid').expect(200)).body.rows.map((r: any) => r.id)).toEqual([r1.id]);
+    expect((await get(c.a, `/registrations?search=${r1.no}`).expect(200)).body.rows.map((r: any) => r.id)).toEqual([r1.id]);
+    expect((await get(c.a, `/registrations?session=${randomUUID()}`).expect(200)).body.total).toBe(0);
+    const other = await makeAgency('admin');
+    await request(app.getHttpServer()).get(`/api/v1/agency/events/${c.a.eventId}/registrations/${r1.id}`).set('x-forwarded-host', other.host).set('cookie', other.cookie).expect(404);
+  });
+
+  it('明細只顯示遮罩；完整個資限管理員且留下紀錄', async () => {
+    const c = await setup('admin');
+    const o = await c.option('獨木舟', 1200, 20);
+    const o2 = await c.option('手作', 0, null);
+    await admin.query(`INSERT INTO event_fields (agency_id, event_id, field_key, label, field_type, is_sensitive) VALUES ($1, $2, 'nid', '身分證', 'text', true)`, [c.a.agencyId, c.a.eventId]);
+    const r = await book(c, { option: o, price: 1200, prefs: [o2.id] });
+    const d = (await get(c.a, `/registrations/${r.id}`).expect(200)).body;
+    expect(d).toMatchObject({ employeeNo: r.no, totalAmount: 11200, canViewSensitive: true });
+    expect(d.travelers[0]).toMatchObject({ fee: 11200, options: [{ name: '獨木舟', price: 1200 }], preferences: [{ rank: 2, optionName: '手作' }] });
+    expect(d.travelers[0].fields).toEqual([{ key: 'nid', label: '身分證', value: 'A1*******9', sensitive: true }]);
+    expect(JSON.stringify(d)).not.toContain('A123456789');
+    const reveal = (await api(c.a).post(`/registrations/${r.id}/sensitive`, {}).expect(200)).body;
+    expect(reveal[r.travelerId]).toEqual({ nid: 'A123456789' });
+    const log = await q1(`SELECT actor_id IS NOT NULL AS actor FROM audit_logs WHERE action = 'registration.sensitive_viewed' AND target_id = $1`, [r.id]);
+    expect(log.actor).toBe(true);
+
+    const op = await setup('event_operator');
+    const o3 = await op.option('X', 0, null);
+    const r3 = await book(op, { option: o3, price: 0 });
+    expect((await get(op.a, `/registrations/${r3.id}`).expect(200)).body.canViewSensitive).toBe(false);
+    await api(op.a).post(`/registrations/${r3.id}/sensitive`, {}).expect(403);
+  });
+
+  it('營運人員可以處理報名，但看不到完整個資', async () => {
+    const c = await setup('operations');
+    const o = await c.option('X', 0, null);
+    const r = await book(c, { option: o, price: 0 });
+    await get(c.a, '/overview').expect(200);
+    await get(c.a, '/registrations').expect(200);
+    await api(c.a).put(`/registrations/${r.id}/payment`, { status: 'paid' }).expect(204);
+    await api(c.a).post(`/registrations/${r.id}/sensitive`, {}).expect(403);
+  });
+
+  it('付款狀態留下紀錄；自付 0 不能標記；調整費用要原因且會改付款狀態', async () => {
+    const c = await setup();
+    const o = await c.option('X', 0, null);
+    const r = await book(c, { option: o, price: 0, subsidy: 3000 });
+    await api(c.a).put(`/registrations/${r.id}/payment`, { status: 'not_required' }).expect(422);
+    await api(c.a).put(`/registrations/${r.id}/payment`, { status: 'paid' }).expect(204);
+    await api(c.a).put(`/registrations/${r.id}/payment`, { status: 'paid' }).expect(204);
+    let d = (await get(c.a, `/registrations/${r.id}`).expect(200)).body;
+    expect(d.paymentStatus).toBe('paid');
+    expect(d.revisions).toHaveLength(1);
+    expect(d.revisions[0]).toMatchObject({ actorName: 'A', summary: { action: 'payment', from: 'unpaid', to: 'paid' } });
+
+    await api(c.a).put(`/registrations/${r.id}/fee`, { totalAmount: 500, reason: '' }).expect(422);
+    await api(c.a).put(`/registrations/${r.id}/fee`, { totalAmount: 2000, reason: '改住單人房' }).expect(204);
+    d = (await get(c.a, `/registrations/${r.id}`).expect(200)).body;
+    expect(d).toMatchObject({ totalAmount: 2000, subsidyApplied: 2000, selfPayAmount: 0, paymentStatus: 'paid' });
+    expect(d.revisions[0].summary).toEqual({ action: 'fee_adjusted', from: 10000, to: 2000, reason: '改住單人房' });
+    expect((await api(c.a).put(`/registrations/${r.id}/payment`, { status: 'unpaid' }).expect(409)).body.code).toBe('PAYMENT_NOT_REQUIRED');
+
+    const r2 = await book(c, { option: o, price: 0, subsidy: 3000 });
+    await api(c.a).put(`/registrations/${r2.id}/fee`, { totalAmount: 100, reason: '折扣' }).expect(204);
+    expect((await get(c.a, `/registrations/${r2.id}`).expect(200)).body.paymentStatus).toBe('not_required');
+    await api(c.a).put(`/registrations/${r2.id}/fee`, { totalAmount: 9000, reason: '更正' }).expect(204);
+    expect((await get(c.a, `/registrations/${r2.id}`).expect(200)).body.paymentStatus).toBe('unpaid');
+  });
+
+  it('確認取消釋出名額並通知；退回後報名維持有效；不能重複處理', async () => {
+    const c = await setup();
+    const o = await c.option('X', 1000, 5);
+    const stamp = randomUUID().slice(0, 8);
+    const r = await book(c, { option: o, price: 1000, email: `cancel-${stamp}@example.com` });
+    expect((await api(c.a).post(`/registrations/${r.id}/cancel/confirm`, {}).expect(409)).body.code).toBe('NOT_CANCELLABLE');
+    await admin.query(`UPDATE registrations SET status = 'cancel_requested', cancel_requested_at = now() WHERE id = $1`, [r.id]);
+    await api(c.a).post(`/registrations/${r.id}/cancel/reject`, {}).expect(204);
+    let d = (await get(c.a, `/registrations/${r.id}`).expect(200)).body;
+    expect(d).toMatchObject({ status: 'confirmed', cancelRequestedAt: null });
+    await until(() => mail().sent.some((m) => m.to === `cancel-${stamp}@example.com` && m.subject.includes('未通過')));
+
+    await admin.query(`UPDATE registrations SET status = 'cancel_requested', cancel_requested_at = now() WHERE id = $1`, [r.id]);
+    await api(c.a).post(`/registrations/${r.id}/cancel/confirm`, {}).expect(204);
+    d = (await get(c.a, `/registrations/${r.id}`).expect(200)).body;
+    expect(d.status).toBe('cancelled');
+    expect(d.revisions[0].summary.action).toBe('cancel_confirmed');
+    expect(await soldOf(o.quota!)).toBe(0);
+    expect((await q1(`SELECT sold_count FROM event_sessions WHERE id = $1`, [c.s])).sold_count).toBe(0);
+    await until(() => mail().sent.some((m) => m.to === `cancel-${stamp}@example.com` && m.subject.includes('已取消')));
+    expect((await api(c.a).post(`/registrations/${r.id}/cancel/reject`, {}).expect(409)).body.code).toBe('NOT_CANCELLABLE');
+    expect((await api(c.a).put(`/registrations/${r.id}/fee`, { totalAmount: 1, reason: 'x' }).expect(409)).body.code).toBe('REGISTRATION_CANCELLED');
+  });
+
+  it('改派預填依報名先後、志願與剩餘名額；已滿或沒填志願留待選擇', async () => {
+    const c = await setup();
+    const src = await c.option('獨木舟', 1200, 20);
+    const a = await c.option('手作', 600, 1);
+    const b = await c.option('步道', 0, null);
+    const first = await book(c, { option: src, price: 1200, prefs: [a.id, b.id], at: '2026-01-01T00:00:00Z' });
+    const second = await book(c, { option: src, price: 1200, prefs: [a.id, b.id], at: '2026-01-02T00:00:00Z' });
+    const third = await book(c, { option: src, price: 1200, prefs: [a.id], at: '2026-01-03T00:00:00Z' });
+    const fourth = await book(c, { option: src, price: 1200, at: '2026-01-04T00:00:00Z' });
+    expect((await get(c.a, '/reassign/sources').expect(200)).body).toEqual([expect.objectContaining({ sessionId: c.s, optionId: src.id, optionName: '獨木舟', travelers: 4 })]);
+    const plan = (await get(c.a, `/reassign/plan?sessionId=${c.s}&optionId=${src.id}`).expect(200)).body;
+    expect(plan.targets.map((t: any) => [t.name, t.remaining])).toEqual([['手作', 1], ['步道', null]]);
+    expect(plan.travelers.map((t: any) => t.suggested)).toEqual([a.id, b.id, null, null]);
+    expect(plan.travelers.map((t: any) => t.id)).toEqual([first.travelerId, second.travelerId, third.travelerId, fourth.travelerId]);
+    await get(c.a, `/reassign/plan?sessionId=${c.s}&optionId=${randomUUID()}`).expect(404);
+  });
+
+  it('確認改派：名額搬動、費用重算、付款狀態、志願調整、修改紀錄與通知', async () => {
+    const c = await setup();
+    const src = await c.option('獨木舟', 1200, 20);
+    const a = await c.option('手作', 600, 2);
+    const b = await c.option('步道', 0, null);
+    const stamp = randomUUID().slice(0, 8);
+    const r1 = await book(c, { option: src, price: 1200, prefs: [a.id, b.id], email: `ra-${stamp}@example.com` });
+    const r2 = await book(c, { option: src, price: 1200, subsidy: 10000, prefs: [b.id] });
+    const stay = await book(c, { option: src, price: 1200 });
+    await api(c.a).post('/reassign', { sessionId: c.s, optionId: src.id, reason: '', assignments: [] }).expect(422);
+    const res = await api(c.a).post('/reassign', {
+      sessionId: c.s, optionId: src.id, reason: '天候不佳',
+      assignments: [{ travelerId: r1.travelerId, toOptionId: a.id }, { travelerId: r2.travelerId, toOptionId: b.id }],
+    }).expect(200);
+    expect(res.body).toEqual({ moved: 2, registrations: 2 });
+    expect(await soldOf(src.quota!)).toBe(1);
+    expect(await soldOf(a.quota!)).toBe(1);
+
+    const d1 = (await get(c.a, `/registrations/${r1.id}`).expect(200)).body;
+    expect(d1.totalAmount).toBe(10600);
+    expect(d1.travelers[0].options).toEqual([{ name: '手作', price: 600 }]);
+    expect(d1.travelers[0].preferences).toEqual([{ rank: 2, optionName: '步道' }]);
+    expect(d1.revisions[0].summary).toMatchObject({ action: 'reassigned', from: 11200, to: 10600, reason: '天候不佳' });
+    const d2 = (await get(c.a, `/registrations/${r2.id}`).expect(200)).body;
+    expect(d2).toMatchObject({ totalAmount: 10000, selfPayAmount: 0, paymentStatus: 'not_required' });
+    expect((await get(c.a, `/registrations/${stay.id}`).expect(200)).body.totalAmount).toBe(11200);
+
+    await until(() => mail().sent.some((m) => m.to === `ra-${stamp}@example.com`));
+    const sent = mail().sent.find((m) => m.to === `ra-${stamp}@example.com`)!;
+    expect(sent.text).toContain('天候不佳');
+    expect(sent.text).toContain('獨木舟 → 手作');
+    expect(sent.text).toContain('$10,600');
+  });
+
+  it('改派名額不足時整批不生效；不能指派不屬於這個行程或同群組的資料', async () => {
+    const c = await setup();
+    const src = await c.option('獨木舟', 1200, 20);
+    const a = await c.option('手作', 600, 1);
+    const b = await c.option('步道', 0, null);
+    const r1 = await book(c, { option: src, price: 1200 });
+    const r2 = await book(c, { option: src, price: 1200 });
+    const r3 = await book(c, { option: a, price: 600 });
+    const full = await api(c.a).post('/reassign', { sessionId: c.s, optionId: src.id, reason: 'x', assignments: [{ travelerId: r1.travelerId, toOptionId: a.id }, { travelerId: r2.travelerId, toOptionId: a.id }] }).expect(409);
+    expect(full.body.code).toBe('OPTION_FULL');
+    expect(await soldOf(src.quota!)).toBe(2);
+    expect((await get(c.a, `/registrations/${r1.id}`).expect(200)).body.travelers[0].options[0].name).toBe('獨木舟');
+    await api(c.a).post('/reassign', { sessionId: c.s, optionId: src.id, reason: 'x', assignments: [{ travelerId: r3.travelerId, toOptionId: b.id }] }).expect(422);
+    await api(c.a).post('/reassign', { sessionId: c.s, optionId: src.id, reason: 'x', assignments: [{ travelerId: r1.travelerId, toOptionId: src.id }] }).expect(422);
+    await api(c.a).post('/reassign', { sessionId: c.s, optionId: src.id, reason: 'x', assignments: [{ travelerId: r1.travelerId, toOptionId: randomUUID() }] }).expect(422);
+  });
+
+  it('員工申請取消會留在修改紀錄', async () => {
+    const c = await setup();
+    const o = await c.option('X', 0, null);
+    const r = await book(c, { option: o, price: 0 });
+    const token = generateToken();
+    await admin.query(`INSERT INTO employee_sessions (agency_id, event_employee_id, token_hash, expires_at) VALUES ($1, $2, $3, now() + interval '1 hour')`, [c.a.agencyId, r.employeeId, hashToken(process.env.TOKEN_HASH_KEY!, token)]);
+    await admin.query(`UPDATE events SET page_is_open = true WHERE id = $1`, [c.a.eventId]);
+    await request(app.getHttpServer()).post('/api/v1/public/events/evt/registrations/current/cancel-request').set('x-forwarded-host', c.a.host).set('cookie', `bt_session=${token}`).expect(200);
+    const d = (await get(c.a, `/registrations/${r.id}`).expect(200)).body;
+    expect(d.status).toBe('cancel_requested');
+    expect(d.revisions[0]).toMatchObject({ actorType: 'employee', summary: { action: 'cancel_requested' } });
   });
 });

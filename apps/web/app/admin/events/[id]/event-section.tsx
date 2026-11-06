@@ -10,14 +10,16 @@ import { BasicPanel } from './basic-panel';
 import { ContactsPanel } from './contacts-panel';
 import { FieldsPanel } from './fields-panel';
 import { OptionsPanel } from './options-panel';
+import { OverviewPanel } from './overview-panel';
 import { PaymentTermsPanel } from './payment-terms-panel';
 import { PublishPanel } from './publish-panel';
+import { RegistrationsPanel } from './registrations-panel';
 import { RosterPanel } from './roster-panel';
 import { SchedulePanel } from './schedule-panel';
 import { SessionsPanel } from './sessions-panel';
 import { TypesPanel } from './types-panel';
 
-const BUILT: EventNavKey[] = ['basic', 'schedule', 'sessions', 'types', 'options', 'fields', 'payment-terms', 'contacts', 'publish', 'roster'];
+const BUILT: EventNavKey[] = ['basic', 'schedule', 'sessions', 'types', 'options', 'fields', 'payment-terms', 'contacts', 'publish', 'roster', 'overview', 'registrations'];
 
 export function EventSection({ id, section }: { id: string; section: EventNavKey }) {
   const me = useAdminMe();
@@ -43,6 +45,8 @@ export function EventSection({ id, section }: { id: string; section: EventNavKey
       {section === 'contacts' && <ContactsPanel event={event} />}
       {section === 'publish' && <PublishPanel event={event} onPublished={load} />}
       {section === 'roster' && <RosterPanel event={event} />}
+      {section === 'overview' && <OverviewPanel event={event} />}
+      {section === 'registrations' && <RegistrationsPanel event={event} />}
       {!BUILT.includes(section) && <p className="muted">{a.comingSoon}</p>}
     </main>
   );

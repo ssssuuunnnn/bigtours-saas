@@ -13,6 +13,7 @@ import type { EmployeeContext } from './access.service.ts';
 import { DatabaseService, type Tx } from './database.service.ts';
 import { EncryptionService } from './encryption.service.ts';
 import { DomainError } from './errors.ts';
+import { addRevision } from './registration-log.ts';
 
 const HOLD_MINUTES = 15;
 
@@ -354,8 +355,8 @@ export class RegistrationService {
       );
       await tx.query(`DELETE FROM registration_drafts WHERE event_employee_id = $1`, [ctx.employee.id]);
       await tx.query(
-        `INSERT INTO registration_revisions (agency_id, registration_id, revision_no, actor_type, actor_id, changed_fields, after_encrypted)
-         VALUES ($1, $2, 1, 'employee', $3, '{created}', $4)`,
+        `INSERT INTO registration_revisions (agency_id, registration_id, revision_no, actor_type, actor_id, changed_fields, after_encrypted, summary)
+         VALUES ($1, $2, 1, 'employee', $3, '{created}', $4, '{"action":"created"}')`,
         [ctx.agency.id, registrationId, ctx.employee.id, this.encryption.encryptJson(details)],
       );
       return this.loadRegistration(tx, ctx.employee.id, config);
@@ -366,18 +367,19 @@ export class RegistrationService {
 
   async requestCancel(ctx: EmployeeContext) {
     return this.db.withTenant(ctx.agency.id, async (tx) => {
-      const { rowCount } = await tx.query(
+      const { rows } = await tx.query(
         `UPDATE registrations SET status = 'cancel_requested', cancel_requested_at = now(), updated_at = now()
-          WHERE event_employee_id = $1 AND status = 'confirmed'`,
+          WHERE event_employee_id = $1 AND status = 'confirmed' RETURNING id`,
         [ctx.employee.id],
       );
-      if (!rowCount) throw new DomainError('NOT_CANCELLABLE');
+      if (!rows[0]) throw new DomainError('NOT_CANCELLABLE');
+      await addRevision(tx, ctx.agency.id, rows[0].id, { type: 'employee', id: ctx.employee.id }, { action: 'cancel_requested' });
       const config = await this.loadConfig(tx, ctx.event.id);
       return this.loadRegistration(tx, ctx.employee.id, config);
     });
   }
 
-  /** 旅行社確認取消後才生效並釋出名額。後台權限完成後再開放 HTTP 介面。 */
+  /** 旅行社確認取消後才生效並釋出名額。 */
   async confirmCancel(agencyId: string, registrationId: string, actorId: string | null) {
     await this.db.withTenant(agencyId, async (tx) => {
       const found = await tx.query(`SELECT id, event_id, session_id FROM registrations WHERE id = $1`, [registrationId]);
@@ -406,6 +408,7 @@ export class RegistrationService {
         [registrationId, actorId],
       );
       if (!updated.rowCount) throw new DomainError('NOT_CANCELLABLE');
+      await addRevision(tx, agencyId, registrationId, { type: 'agency_user', id: actorId }, { action: 'cancel_confirmed' });
 
       const count = await tx.query(`SELECT count(*)::int AS n FROM travelers WHERE registration_id = $1`, [registrationId]);
       await tx.query(`UPDATE event_sessions SET sold_count = sold_count - $1 WHERE id = $2`, [

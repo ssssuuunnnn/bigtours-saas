@@ -1,9 +1,10 @@
 import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Put, Query, Req, Res } from '@nestjs/common';
-import { agencyLoginRequest, accountEmailRequest, companyInput, contactsRequest, createEventRequest, employeeInput, rosterCopyRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
+import { agencyLoginRequest, accountEmailRequest, companyInput, contactsRequest, createEventRequest, employeeInput, feeAdjustRequest, paymentStatusRequest, reassignRequest, rosterCopyRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
 import type { Request, Response } from 'express';
 import type { ZodType } from 'zod';
 import { AgencyAdminService } from './agency-admin.service.ts';
 import { DomainError } from './errors.ts';
+import { RegistrationAdminService } from './registration-admin.service.ts';
 import { RosterService } from './roster.service.ts';
 import { assertSameOrigin, cookieValue, requestHost, sendImage, sendPdf, type RequestHeaders } from './http.ts';
 
@@ -27,6 +28,7 @@ export class AgencyController {
   constructor(
     @Inject(AgencyAdminService) private readonly admin: AgencyAdminService,
     @Inject(RosterService) private readonly roster: RosterService,
+    @Inject(RegistrationAdminService) private readonly regs: RegistrationAdminService,
   ) {}
 
   private ctx(h: RequestHeaders) {
@@ -43,6 +45,10 @@ export class AgencyController {
   /** 活動設定類操作。 */
   private configurer(h: RequestHeaders) {
     return this.allowed(h, 'configureEvents');
+  }
+
+  private operator(h: RequestHeaders) {
+    return this.allowed(h, 'operateEvents');
   }
 
   @Post('session')
@@ -356,6 +362,68 @@ export class AgencyController {
   @Post('events/:eventId/employees/:employeeId/password-link')
   async passwordLink(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('employeeId') employeeId: string) {
     return this.roster.issueLink(await this.configurer(h), eventId, employeeId);
+  }
+
+  @Get('events/:eventId/overview')
+  async overview(@Headers() h: RequestHeaders, @Param('eventId') eventId: string) {
+    return this.regs.overview(await this.operator(h), eventId);
+  }
+
+  @Get('events/:eventId/registrations')
+  async registrations(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Query() q: Record<string, unknown>) {
+    const text = (v: unknown) => (typeof v === 'string' ? v : undefined);
+    return this.regs.list(await this.operator(h), eventId, { search: text(q.search), session: text(q.session), payment: text(q.payment), status: text(q.status), page: Number(q.page) || 1 });
+  }
+
+  @Get('events/:eventId/registrations/:registrationId')
+  async registration(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('registrationId') registrationId: string) {
+    return this.regs.detail(await this.operator(h), eventId, registrationId);
+  }
+
+  @Post('events/:eventId/registrations/:registrationId/sensitive')
+  @HttpCode(200)
+  async sensitive(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('registrationId') registrationId: string) {
+    return this.regs.revealSensitive(await this.allowed(h, 'viewSensitiveData'), eventId, registrationId);
+  }
+
+  @Put('events/:eventId/registrations/:registrationId/payment')
+  @HttpCode(204)
+  async payment(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('registrationId') registrationId: string, @Body() body: unknown) {
+    await this.regs.setPayment(await this.operator(h), eventId, registrationId, parse(paymentStatusRequest, body).status);
+  }
+
+  @Put('events/:eventId/registrations/:registrationId/fee')
+  @HttpCode(204)
+  async fee(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('registrationId') registrationId: string, @Body() body: unknown) {
+    await this.regs.adjustFee(await this.operator(h), eventId, registrationId, parse(feeAdjustRequest, body));
+  }
+
+  @Post('events/:eventId/registrations/:registrationId/cancel/confirm')
+  @HttpCode(204)
+  async confirmCancel(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('registrationId') registrationId: string) {
+    await this.regs.confirmCancel(await this.operator(h), eventId, registrationId);
+  }
+
+  @Post('events/:eventId/registrations/:registrationId/cancel/reject')
+  @HttpCode(204)
+  async rejectCancel(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('registrationId') registrationId: string) {
+    await this.regs.rejectCancel(await this.operator(h), eventId, registrationId);
+  }
+
+  @Get('events/:eventId/reassign/sources')
+  async reassignSources(@Headers() h: RequestHeaders, @Param('eventId') eventId: string) {
+    return this.regs.reassignSources(await this.operator(h), eventId);
+  }
+
+  @Get('events/:eventId/reassign/plan')
+  async reassignPlan(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Query('sessionId') sessionId: unknown, @Query('optionId') optionId: unknown) {
+    return this.regs.reassignPlan(await this.operator(h), eventId, String(sessionId), String(optionId));
+  }
+
+  @Post('events/:eventId/reassign')
+  @HttpCode(200)
+  async reassign(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    return this.regs.reassign(await this.operator(h), eventId, parse(reassignRequest, body));
   }
 
   @Get('events/:eventId/contacts')

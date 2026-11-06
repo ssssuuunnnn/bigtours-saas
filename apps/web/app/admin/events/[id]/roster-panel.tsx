@@ -1,5 +1,6 @@
 'use client';
 
+import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { adminApi, type AccountState, type AdminEmployee, type AdminEvent, type EmployeeValues, type ImportPreview, type PasswordLink, type RosterPage } from '../../../../lib/admin-api';
 import { a } from '../../../../messages/admin';
@@ -27,7 +28,7 @@ function ListView({ event, note, onNote, onImport, onCopy }: { event: AdminEvent
   const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
   const [account, setAccount] = useState('');
-  const [registration, setRegistration] = useState('');
+  const [registration, setRegistration] = useState(useSearchParams().get('registration') ?? '');
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<string[]>([]);
   const [editing, setEditing] = useState<AdminEmployee | 'new' | null>(null);
