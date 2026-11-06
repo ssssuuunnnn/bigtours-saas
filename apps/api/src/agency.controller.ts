@@ -1,9 +1,10 @@
 import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Put, Query, Req, Res } from '@nestjs/common';
-import { agencyLoginRequest, accountEmailRequest, agencyModifyRequest, companyInput, contactsRequest, createEventRequest, employeeInput, feeAdjustRequest, paymentStatusRequest, reassignRequest, rosterCopyRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
+import { emailResendRequest, emailTemplateInput, notifyEmailsRequest, agencyLoginRequest, accountEmailRequest, agencyModifyRequest, companyInput, contactsRequest, createEventRequest, employeeInput, feeAdjustRequest, paymentStatusRequest, reassignRequest, rosterCopyRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
 import type { Request, Response } from 'express';
 import type { ZodType } from 'zod';
 import { AgencyAdminService } from './agency-admin.service.ts';
 import { DomainError } from './errors.ts';
+import { EmailAdminService } from './email-admin.service.ts';
 import { RegistrationAdminService } from './registration-admin.service.ts';
 import { RosterService } from './roster.service.ts';
 import { assertSameOrigin, cookieValue, requestHost, sendImage, sendPdf, type RequestHeaders } from './http.ts';
@@ -29,6 +30,7 @@ export class AgencyController {
     @Inject(AgencyAdminService) private readonly admin: AgencyAdminService,
     @Inject(RosterService) private readonly roster: RosterService,
     @Inject(RegistrationAdminService) private readonly regs: RegistrationAdminService,
+    @Inject(EmailAdminService) private readonly emails: EmailAdminService,
   ) {}
 
   private ctx(h: RequestHeaders) {
@@ -378,6 +380,47 @@ export class AgencyController {
   @Get('events/:eventId/registrations/:registrationId')
   async registration(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('registrationId') registrationId: string) {
     return this.regs.detail(await this.operator(h), eventId, registrationId);
+  }
+
+  // ===== Email 通知 =====
+
+  @Get('events/:eventId/emails')
+  async emailOverview(@Headers() h: RequestHeaders, @Param('eventId') eventId: string) {
+    return this.emails.overview(await this.configurer(h), eventId);
+  }
+
+  @Put('events/:eventId/emails/notify-emails')
+  @HttpCode(204)
+  async saveNotifyEmails(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    await this.emails.saveNotifyEmails(await this.configurer(h), eventId, parse(notifyEmailsRequest, body).emails);
+  }
+
+  @Put('events/:eventId/emails/templates/:key')
+  @HttpCode(204)
+  async saveEmailTemplate(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('key') key: string, @Body() body: unknown) {
+    await this.emails.saveTemplate(await this.configurer(h), eventId, key, parse(emailTemplateInput, body));
+  }
+
+  @Delete('events/:eventId/emails/templates/:key')
+  @HttpCode(204)
+  async resetEmailTemplate(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('key') key: string) {
+    await this.emails.resetTemplate(await this.configurer(h), eventId, key);
+  }
+
+  @Post('events/:eventId/emails/templates/:key/test')
+  async testEmailTemplate(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('key') key: string, @Body() body: unknown) {
+    return this.emails.sendTest(await this.configurer(h), eventId, key, parse(emailTemplateInput, body));
+  }
+
+  @Post('events/:eventId/emails/deadline-reminder')
+  async sendReminder(@Headers() h: RequestHeaders, @Param('eventId') eventId: string) {
+    return this.emails.sendReminder(await this.configurer(h), eventId);
+  }
+
+  @Post('events/:eventId/emails/messages/:messageId/resend')
+  @HttpCode(204)
+  async resendEmail(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('messageId') messageId: string, @Body() body: unknown) {
+    await this.emails.resend(await this.configurer(h), eventId, messageId, parse(emailResendRequest, body).email);
   }
 
   @Get('events/:eventId/registrations/:registrationId/revisions/:no')

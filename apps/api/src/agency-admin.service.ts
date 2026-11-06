@@ -254,6 +254,12 @@ export class AgencyAdminService {
            FROM events s WHERE t.id = $1 AND s.id = $2`,
         [id, sourceId],
       );
+      await tx.query(`UPDATE events t SET notify_emails = s.notify_emails FROM events s WHERE t.id = $1 AND s.id = $2`, [id, sourceId]);
+      await tx.query(
+        `INSERT INTO email_templates (agency_id, event_id, template_key, subject, body, sender_name)
+         SELECT agency_id, $1, template_key, subject, body, sender_name FROM email_templates WHERE event_id = $2`,
+        [id, sourceId],
+      );
       await tx.query(
         `INSERT INTO traveler_types (agency_id, event_id, name, base_price, is_employee_self, note, occupies_bed, sort_order)
          SELECT agency_id, $1, name, base_price, is_employee_self, note, occupies_bed, sort_order FROM traveler_types WHERE event_id = $2`,

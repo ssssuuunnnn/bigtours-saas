@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { publicImages, StorageService } from './storage.service.ts';
 import {
   calculateFees,
@@ -57,6 +57,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 @Injectable()
 export class RegistrationService {
+  private readonly logger = new Logger(RegistrationService.name);
+
   constructor(
     @Inject(DatabaseService) private readonly db: DatabaseService,
     @Inject(EncryptionService) private readonly encryption: EncryptionService,
@@ -247,6 +249,29 @@ export class RegistrationService {
   // ===== 送出報名 =====
 
   async submit(ctx: EmployeeContext, req: SubmitRequest) {
+    const registration = await this.createRegistration(ctx, req);
+    if (registration) void this.mailRegistered(ctx, registration);
+    return registration;
+  }
+
+  /** 寄信失敗不影響已完成的報名。 */
+  private async mailRegistered(ctx: EmployeeContext, r: { sessionId: string; travelers: unknown[]; totalAmount: number; subsidyAmount: number; selfPayAmount: number }) {
+    try {
+      const { event, email, sessionName } = await this.db.withTenant(ctx.agency.id, async (tx) => {
+        const emp = await tx.query(`SELECT email FROM event_employees WHERE id = $1`, [ctx.employee.id]);
+        const session = await tx.query(`SELECT name FROM event_sessions WHERE id = $1`, [r.sessionId]);
+        return { event: await this.notifications.mailEvent(tx, ctx.event.id), email: emp.rows[0]?.email as string | null, sessionName: session.rows[0]?.name as string };
+      });
+      if (!email) return;
+      await this.notifications.deliver(ctx.agency.id, ctx.event.id, event, { id: ctx.employee.id, name: ctx.employee.name, email }, {
+        key: 'registration_success', sessionName, travelers: r.travelers.length, total: r.totalAmount, subsidy: r.subsidyAmount, selfPay: r.selfPayAmount, paymentInstructions: ctx.event.paymentInstructions,
+      });
+    } catch (err) {
+      this.logger.error(`報名成功通知失敗：${(err as Error).message}`);
+    }
+  }
+
+  private async createRegistration(ctx: EmployeeContext, req: SubmitRequest) {
     this.assertOpen(ctx);
     return this.db.withTenant(ctx.agency.id, async (tx) => {
       const config = await this.loadConfig(tx, ctx.event.id);
@@ -423,7 +448,7 @@ export class RegistrationService {
   /** 送出前原報名不變；倒數結束只讓這次修改失效。 */
   async submitModification(ctx: EmployeeContext, req: ModifyRequest) {
     this.assertOpen(ctx);
-    let mail: { event: MailEvent; total: number; selfPay: number } | null = null;
+    let mail: { event: MailEvent; total: number; selfPay: number; from: number } | null = null;
     const result = await this.db.withTenant(ctx.agency.id, async (tx) => {
       const config = await this.loadConfig(tx, ctx.event.id);
       this.validateSelection(await this.modificationRules(tx, ctx), config, req.travelers);
@@ -456,9 +481,15 @@ export class RegistrationService {
       const r = await this.applyModification(tx, ctx.agency.id, found.modifies_registration_id, found.session_id, config, merged, full, { type: 'employee', id: ctx.employee.id });
       await tx.query(`UPDATE seat_holds SET status = 'converted', registration_id = $1, closed_at = now() WHERE id = $2`, [found.modifies_registration_id, found.id]);
       await tx.query(`DELETE FROM registration_drafts WHERE event_employee_id = $1`, [ctx.employee.id]);
-      mail = { event: await this.notifications.mailEvent(tx, ctx.event.id), total: r.total, selfPay: r.selfPay };
+      mail = { event: await this.notifications.mailEvent(tx, ctx.event.id), total: r.total, selfPay: r.selfPay, from: r.from };
       return this.loadRegistration(tx, ctx.employee.id, config);
     });
+    if (mail && result) {
+      const before: { event: MailEvent; total: number; selfPay: number; from?: number } = mail;
+      void this.notifications.notifyAgency(ctx.agency.id, ctx.event.id, {
+        key: 'agency_modified', employeeName: ctx.employee.name, employeeNo: ctx.employee.employeeNo, from: before.from ?? before.total, to: before.total, eventId: ctx.event.id, registrationId: result.id,
+      });
+    }
     const email = await this.employeeEmail(ctx.agency.id, ctx.employee.id);
     if (mail && email) {
       const m: { event: MailEvent; total: number; selfPay: number } = mail;
@@ -711,12 +742,23 @@ export class RegistrationService {
     );
     const after = await this.snapshot(tx, registrationId, config);
     await addRevision(tx, agencyId, registrationId, actor, { action: 'modified', from: reg.total_amount, to: total }, { before: this.encryption.encryptJson(before), after: this.encryption.encryptJson(after) });
-    return { total, selfPay };
+    return { total, selfPay, from: reg.total_amount as number };
   }
 
   // ===== 取消 =====
 
   async requestCancel(ctx: EmployeeContext) {
+    const r = await this.markCancelRequested(ctx);
+    if (r) {
+      const sessionName = await this.db.withTenant(ctx.agency.id, async (tx) => (await tx.query(`SELECT name FROM event_sessions WHERE id = $1`, [r.sessionId])).rows[0]?.name as string);
+      void this.notifications.notifyAgency(ctx.agency.id, ctx.event.id, {
+        key: 'agency_cancel_requested', employeeName: ctx.employee.name, employeeNo: ctx.employee.employeeNo, sessionName, eventId: ctx.event.id, registrationId: r.id,
+      });
+    }
+    return r;
+  }
+
+  private markCancelRequested(ctx: EmployeeContext) {
     return this.db.withTenant(ctx.agency.id, async (tx) => {
       const { rows } = await tx.query(
         `UPDATE registrations SET status = 'cancel_requested', cancel_requested_at = now(), updated_at = now()

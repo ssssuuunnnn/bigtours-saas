@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.ts';
 import { EncryptionService } from '../src/encryption.service.ts';
 import { MailService } from '../src/mail.service.ts';
+import { composeMail, NotificationService } from '../src/notification.service.ts';
 
 const PASSWORD = 'abcd1234';
 let app: INestApplication;
@@ -1427,5 +1428,154 @@ describe('報名管理、取消與改派', () => {
     const d = (await get(c.a, `/registrations/${r.id}`).expect(200)).body;
     expect(d.status).toBe('cancel_requested');
     expect(d.revisions[0]).toMatchObject({ actorType: 'employee', summary: { action: 'cancel_requested' } });
+  });
+});
+
+describe('Email 通知', () => {
+  const mail = () => app.get(MailService);
+  const until = async (fn: () => boolean) => { for (let i = 0; i < 100; i++) { if (fn()) return; await new Promise((r) => setTimeout(r, 30)); } throw new Error('等待逾時'); };
+  const employee = async (a: Ag, no: string, email: string | null) => (await q1(`INSERT INTO event_employees (agency_id, event_id, employee_no, name, email) VALUES ($1, $2, $3, $4, $5) RETURNING id`, [a.agencyId, a.eventId, no, `員工${no}`, email])).id as string;
+  const body = { senderName: '山海旅遊', subject: '【[活動名稱]】提醒', body: '[員工姓名] 您好\n\n請在 [截止時間] 前報名：[報名網站連結]' };
+  const openEvent = (a: Ag) => admin.query(`UPDATE events SET status = 'published', registration_opens_at = now() - interval '1 day', registration_closes_at = now() + interval '3 days' WHERE id = $1`, [a.eventId]);
+
+  it('範本未自訂時用預設；儲存後只影響這個活動，可還原', async () => {
+    const a = await makeAgency('admin');
+    const before = (await api(a).get('/emails').expect(200)).body;
+    const t = before.templates.find((x: any) => x.key === 'deadline_reminder');
+    expect(t).toMatchObject({ customized: false, senderName: null });
+    expect(before.templates.map((x: any) => x.label)).toContain('新的取消申請（寄給旅行社）');
+    await api(a).put('/emails/templates/deadline_reminder', body).expect(204);
+    const after = (await api(a).get('/emails').expect(200)).body.templates.find((x: any) => x.key === 'deadline_reminder');
+    expect(after).toMatchObject({ customized: true, subject: body.subject, senderName: '山海旅遊' });
+    await api(a).del('/emails/templates/deadline_reminder').expect(204);
+    expect((await api(a).get('/emails').expect(200)).body.templates.find((x: any) => x.key === 'deadline_reminder').customized).toBe(false);
+  });
+
+  it('不認得的欄位或少了必要欄位不能儲存；不存在的範本回 404', async () => {
+    const a = await makeAgency('admin');
+    const bad = await api(a).put('/emails/templates/deadline_reminder', { ...body, body: '[身分證字號] 您好' }).expect(400);
+    expect(bad.body).toMatchObject({ code: 'TEMPLATE_INVALID', detail: { unknown: ['身分證字號'] } });
+    const missing = await api(a).put('/emails/templates/account', { ...body, subject: '帳號', body: '請設定密碼' }).expect(400);
+    expect(missing.body.detail.missing).toEqual(['設定密碼連結']);
+    await api(a).put('/emails/templates/nope', body).expect(404);
+  });
+
+  it('測試信用未儲存的內容寄給操作者，不留紀錄', async () => {
+    const a = await makeAgency('admin');
+    const email = (await q1(`SELECT u.email FROM agency_users u WHERE u.agency_id = $1 LIMIT 1`, [a.agencyId])).email;
+    const res = await api(a).post('/emails/templates/deadline_reminder/test', body).expect(201);
+    expect(res.body.to).toBe(email);
+    const sent = mail().sent.filter((m) => m.to === email).at(-1)!;
+    expect(sent.subject).toContain('［測試］');
+    expect(sent.fromName).toBe('山海旅遊');
+    expect(sent.text).toContain('1/29 18:00');
+    expect((await q1(`SELECT count(*)::int AS n FROM email_messages WHERE event_id = $1`, [a.eventId])).n).toBe(0);
+  });
+
+  it('截止前提醒只寄給有信箱且未報名的員工，並套用自訂範本；截止後不能寄', async () => {
+    const a = await makeAgency('admin');
+    await openEvent(a);
+    await api(a).put('/emails/templates/deadline_reminder', body).expect(204);
+    const tag = randomUUID().slice(0, 8);
+    await employee(a, 'P1', `p1-${tag}@example.com`);
+    await employee(a, 'P2', null);
+    const done = await employee(a, 'P3', `p3-${tag}@example.com`);
+    const session = (await q1(`INSERT INTO event_sessions (agency_id, event_id, name, capacity) VALUES ($1, $2, 'A', 10) RETURNING id`, [a.agencyId, a.eventId])).id;
+    await admin.query(`INSERT INTO registrations (agency_id, event_id, session_id, event_employee_id, total_amount, subsidy_amount, payment_status, terms_version_accepted, terms_accepted_at) VALUES ($1, $2, $3, $4, 100, 0, 'unpaid', 1, now())`, [a.agencyId, a.eventId, session, done]);
+
+    expect((await api(a).get('/emails').expect(200)).body.reminder).toMatchObject({ pending: 1, noEmail: 1, sendable: true, lastSentAt: null });
+    expect((await api(a).post('/emails/deadline-reminder', {}).expect(201)).body.queued).toBe(1);
+    await until(() => mail().sent.some((m) => m.to === `p1-${tag}@example.com`));
+    expect(mail().sent.some((m) => m.to === `p3-${tag}@example.com`)).toBe(false);
+    const sent = mail().sent.find((m) => m.to === `p1-${tag}@example.com`)!;
+    expect(sent.text).toContain('員工P1 您好');
+    expect(sent.fromName).toBe('山海旅遊');
+    expect((await api(a).get('/emails').expect(200)).body.reminder.lastSentAt).not.toBeNull();
+
+    await admin.query(`UPDATE events SET registration_closes_at = now() - interval '1 minute' WHERE id = $1`, [a.eventId]);
+    expect((await api(a).post('/emails/deadline-reminder', {}).expect(409)).body.code).toBe('REGISTRATION_CLOSED');
+  });
+
+  it('寄送失敗列出原因，可修正信箱後重寄，重寄後不再列出', async () => {
+    const a = await makeAgency('admin');
+    await openEvent(a);
+    const tag = randomUUID().slice(0, 8);
+    const bad = `bad-${tag}@example.com`;
+    const id = await employee(a, 'F1', bad);
+    mail().failFor.add(bad);
+    await api(a).post('/emails/deadline-reminder', {}).expect(201);
+    const failed = async () => (await api(a).get('/emails').expect(200)).body;
+    for (let i = 0; i < 100 && (await failed()).failures.length === 0; i++) await new Promise((r) => setTimeout(r, 30));
+    const view = await failed();
+    expect(view.stats).toMatchObject({ total: 1, failed: 1 });
+    expect(view.failures[0]).toMatchObject({ employeeName: '員工F1', employeeNo: 'F1', label: '截止前提醒', email: bad, isEmployee: true });
+
+    const good = `good-${tag}@example.com`;
+    await api(a).post(`/emails/messages/${view.failures[0].id}/resend`, { email: good }).expect(204);
+    await until(() => mail().sent.some((m) => m.to === good));
+    expect(mail().sent.find((m) => m.to === good)!.text).toContain('截止');
+    expect((await failed()).failures).toEqual([]);
+    expect((await q1(`SELECT email FROM event_employees WHERE id = $1`, [id])).email).toBe(good);
+    await api(a).post(`/emails/messages/${view.failures[0].id}/resend`, {}).expect(404);
+    mail().failFor.delete(bad);
+  });
+
+  it('帳號信重寄會重新產生連結，失敗紀錄不存連結', async () => {
+    const a = await makeAgency('admin');
+    const tag = randomUUID().slice(0, 8);
+    const bad = `acc-${tag}@example.com`;
+    const id = await employee(a, 'A1', bad);
+    mail().failFor.add(bad);
+    await api(a).post('/employees/account-emails', { employeeIds: [id] });
+    const failed = async () => (await api(a).get('/emails').expect(200)).body.failures;
+    for (let i = 0; i < 100 && (await failed()).length === 0; i++) await new Promise((r) => setTimeout(r, 30));
+    const [f] = await failed();
+    expect((await q1(`SELECT payload FROM email_messages WHERE id = $1`, [f.id])).payload).toBeNull();
+    const good = `acc2-${tag}@example.com`;
+    await api(a).post(`/emails/messages/${f.id}/resend`, { email: good }).expect(204);
+    await until(() => mail().sent.some((m) => m.to === good));
+    expect(mail().sent.find((m) => m.to === good)!.text).toContain('/set-password/');
+    mail().failFor.delete(bad);
+  });
+
+  it('通知信箱：新的取消申請與員工修改寄給設定的信箱，沒設定就不寄', async () => {
+    const a = await makeAgency('admin');
+    const service = app.get(NotificationService);
+    const tag = randomUUID().slice(0, 8);
+    const before = mail().sent.length;
+    const template = { key: 'agency_cancel_requested', employeeName: '王', employeeNo: 'E9', sessionName: 'A', eventId: a.eventId, registrationId: randomUUID() } as const;
+    await service.notifyAgency(a.agencyId, a.eventId, template);
+    expect(mail().sent.length).toBe(before);
+    await api(a).put('/emails/notify-emails', { emails: [`ops-${tag}@example.com`, `OPS-${tag}@example.com`, `tc-${tag}@example.com`] }).expect(204);
+    expect((await api(a).get('/emails').expect(200)).body.notifyEmails).toEqual([`ops-${tag}@example.com`, `tc-${tag}@example.com`]);
+    await service.notifyAgency(a.agencyId, a.eventId, template);
+    const got = mail().sent.filter((m) => m.to.endsWith(`-${tag}@example.com`));
+    expect(got).toHaveLength(2);
+    expect(got[0]!.text).toContain(`/admin/events/${a.eventId}/registrations?registration=`);
+    await api(a).put('/emails/notify-emails', { emails: ['not-an-email'] }).expect(422);
+  });
+
+  it('信中的文字會跳脫，沒有值的段落不留空', async () => {
+    const m = composeMail({ name: 'E<1>', slug: 's', agency_code: 'c', agency_name: 'A' }, { id: null, name: '王', email: 'x@example.com' }, { key: 'registration_success', sessionName: 'A', travelers: 1, total: 100, subsidy: 100, selfPay: 0, paymentInstructions: '請匯款' });
+    expect(m.html).toContain('E&lt;1&gt;');
+    expect(m.text).not.toContain('請匯款');
+    expect(m.text).not.toContain('\n\n\n');
+    expect(m.html).toContain('<a href="');
+  });
+
+  it('權限與資料隔離：營運人員不能管理，別家旅行社看不到；複製活動帶入範本', async () => {
+    const ops = await makeAgency('operations');
+    await api(ops).get('/emails').expect(403);
+    const a = await makeAgency('admin');
+    const other = await makeAgency('admin');
+    await request(app.getHttpServer()).get(`/api/v1/agency/events/${a.eventId}/emails`).set('x-forwarded-host', other.host).set('cookie', other.cookie).expect(404);
+    await api(a).put('/emails/templates/deadline_reminder', body).expect(204);
+    await api(a).put('/emails/notify-emails', { emails: ['team@example.com'] }).expect(204);
+    await admin.query(`INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason) SELECT agency_id, pricing_tier_id, 1, 'grant' FROM events WHERE id = $1`, [a.eventId]);
+    const ev = await q1(`SELECT company_id, pricing_tier_id FROM events WHERE id = $1`, [a.eventId]);
+    const copy = await api(a).post('/copy', { companyId: ev.company_id, pricingTierId: ev.pricing_tier_id, name: '複製活動', slug: `copy-${randomUUID().slice(0, 6)}` }).expect(201);
+    const copied = await request(app.getHttpServer()).get(`/api/v1/agency/events/${copy.body.id}/emails`).set('x-forwarded-host', a.host).set('cookie', a.cookie).expect(200);
+    expect(copied.body.notifyEmails).toEqual(['team@example.com']);
+    expect(copied.body.templates.find((x: any) => x.key === 'deadline_reminder')).toMatchObject({ customized: true, senderName: '山海旅遊' });
   });
 });

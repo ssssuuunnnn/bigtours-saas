@@ -50,6 +50,18 @@ export interface RegistrationDetail {
   coworkers: { requestedRoomNo: number; name: string }[];
   revisions: { no: number; hasContent: boolean; at: string; actorName: string | null; actorType: string; summary: RevisionSummary }[];
 }
+export interface EmailTemplateView {
+  key: string; label: string; audience: 'employee' | 'agency'; placeholders: string[]; required: string[];
+  defaultSubject: string; defaultBody: string; subject: string; body: string; senderName: string | null; customized: boolean;
+}
+export interface EmailOverview {
+  notifyEmails: string[];
+  templates: EmailTemplateView[];
+  stats: { total: number; failed: number };
+  failures: { id: string; templateKey: string; label: string; email: string; employeeName: string | null; employeeNo: string | null; isEmployee: boolean; reason: 'mailbox' | 'server'; at: string }[];
+  reminder: { pending: number; noEmail: number; lastSentAt: string | null; sendable: boolean };
+}
+export interface EmailTemplateValues { senderName: string | null; subject: string; body: string }
 export interface RevisionSnapshot {
   session: string;
   total: number;
@@ -169,6 +181,13 @@ export const adminApi = {
   },
   registration: (id: string, rid: string) => call<RegistrationDetail>('GET', `/events/${id}/registrations/${rid}`),
   revealSensitive: (id: string, rid: string) => call<Record<string, Record<string, unknown>>>('POST', `/events/${id}/registrations/${rid}/sensitive`, {}),
+  emails: (id: string) => call<EmailOverview>('GET', `/events/${id}/emails`),
+  saveNotifyEmails: (id: string, emails: string[]) => call<void>('PUT', `/events/${id}/emails/notify-emails`, { emails }),
+  saveEmailTemplate: (id: string, key: string, body: EmailTemplateValues) => call<void>('PUT', `/events/${id}/emails/templates/${key}`, body),
+  resetEmailTemplate: (id: string, key: string) => call<void>('DELETE', `/events/${id}/emails/templates/${key}`),
+  testEmailTemplate: (id: string, key: string, body: EmailTemplateValues) => call<{ to: string }>('POST', `/events/${id}/emails/templates/${key}/test`, body),
+  sendDeadlineReminder: (id: string) => call<{ queued: number }>('POST', `/events/${id}/emails/deadline-reminder`, {}),
+  resendEmail: (id: string, messageId: string, email?: string) => call<void>('POST', `/events/${id}/emails/messages/${messageId}/resend`, email ? { email } : {}),
   registrationEdit: (id: string, rid: string) => call<RegistrationEditData>('GET', `/events/${id}/registrations/${rid}/edit`),
   modifyRegistration: (id: string, rid: string, body: unknown) => call<void>('PUT', `/events/${id}/registrations/${rid}`, body),
   registrationRevision: (id: string, rid: string, no: number) => call<{ before: RevisionSnapshot; after: RevisionSnapshot }>('GET', `/events/${id}/registrations/${rid}/revisions/${no}`),
