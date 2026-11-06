@@ -12,6 +12,7 @@ import { EncryptionService } from '../src/encryption.service.ts';
 import { ExportService } from '../src/export.service.ts';
 import { RegistrationService } from '../src/registration.service.ts';
 import { MailService } from '../src/mail.service.ts';
+import { StaffService } from '../src/staff.service.ts';
 import { StorageService } from '../src/storage.service.ts';
 import { composeMail, NotificationService } from '../src/notification.service.ts';
 
@@ -2126,5 +2127,124 @@ describe('企業窗口', () => {
     expect(preview.body.newCount).toBe(1);
     await http().post(`/api/v1/company${base}/import`).set('x-forwarded-host', a.host).set('cookie', c.cookie).set('content-type', 'text/csv').send(csv).expect(200);
     expect((await c.get(base).expect(200)).body.rosterTotal).toBe(2);
+  });
+});
+
+describe('人員管理與旅行社設定', () => {
+  const http = () => request(app.getHttpServer());
+  const mail = () => app.get(MailService);
+  const ag = (a: Ag) => ({
+    get: (p: string) => http().get(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie),
+    post: (p: string, b: object = {}) => http().post(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie).send(b),
+    patch: (p: string, b: object) => http().patch(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie).send(b),
+    put: (p: string, b: object) => http().put(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie).send(b),
+    del: (p: string) => http().delete(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie),
+  });
+  const tokenFrom = (to: string) => mail().sent.filter((m) => m.to === to).at(-1)!.text.match(/set-password\/([\w-]+)/)![1]!;
+  const invite = async (a: Ag, role = 'event_operator') => {
+    const email = `s-${randomUUID().slice(0, 8)}@example.com`;
+    const { id } = (await ag(a).post('/staff', { name: '新人', email, role }).expect(201)).body;
+    return { id: id as string, email };
+  };
+  const activate = async (a: Ag, email: string) => {
+    await http().post(`/api/v1/agency/password-links/${tokenFrom(email)}`).set('x-forwarded-host', a.host).send({ password: 'staff12345' }).expect(204);
+    const res = await http().post('/api/v1/agency/session').set('x-forwarded-host', a.host).send({ email, password: 'staff12345' }).expect(204);
+    return { ...a, cookie: (res.headers['set-cookie'] as unknown as string[]).find((c) => c.startsWith('bt_agency_session='))!.split(';')[0]! };
+  };
+
+  it('邀請信開通後能登入並記錄最後登入；連結只能用一次；開通前不能登入', async () => {
+    const a = await makeAgency('admin');
+    const n = await invite(a);
+    const pending = (await ag(a).get('/staff').expect(200)).body.find((u: any) => u.id === n.id);
+    expect(pending).toMatchObject({ activated: false, lastLoginAt: null, isSelf: false, role: 'event_operator' });
+    await http().post('/api/v1/agency/session').set('x-forwarded-host', a.host).send({ email: n.email, password: 'staff12345' }).expect(401);
+    expect(mail().sent.filter((m) => m.to === n.email).at(-1)!.text).toContain('活動操作員');
+    const token = tokenFrom(n.email);
+    expect((await http().get(`/api/v1/agency/password-links/${token}`).set('x-forwarded-host', a.host).expect(200)).body.name).toBe('新人');
+    const b = await activate(a, n.email);
+    expect((await ag(b).get('/me').expect(200)).body.user.role).toBe('event_operator');
+    await http().get(`/api/v1/agency/password-links/${token}`).set('x-forwarded-host', a.host).expect(410);
+    const after = (await ag(a).get('/staff').expect(200)).body.find((u: any) => u.id === n.id);
+    expect(after.activated).toBe(true);
+    expect(after.lastLoginAt).not.toBeNull();
+  });
+
+  it('只有管理員能管理；Email 不能和窗口或其他人員重複；重設讓舊連結失效且登出', async () => {
+    const op = await makeAgency('event_operator');
+    await ag(op).get('/staff').expect(403);
+    await ag(op).post('/staff', { name: 'x', email: 'x@example.com', role: 'admin' }).expect(403);
+    await ag(op).get('/settings').expect(403);
+    const a = await makeAgency('admin');
+    const cid = (await q1(`SELECT company_id FROM events WHERE id = $1`, [a.eventId])).company_id;
+    await ag(a).post(`/companies/${cid}/contacts`, { name: 'c', email: 'dup-contact@example.com' }).expect(201);
+    expect((await ag(a).post('/staff', { name: 'x', email: 'DUP-contact@example.com', role: 'admin' }).expect(409)).body.code).toBe('EMAIL_TAKEN');
+    const n = await invite(a);
+    expect((await ag(a).post('/staff', { name: 'x', email: n.email, role: 'admin' }).expect(409)).body.code).toBe('EMAIL_TAKEN');
+    await ag(a).post('/staff', { name: 'x', email: 'bad-role@example.com', role: 'root' }).expect(422);
+
+    const b = await activate(a, n.email);
+    await ag(a).post(`/staff/${n.id}/link`).expect(204);
+    const first = tokenFrom(n.email);
+    expect(mail().sent.filter((m) => m.to === n.email).at(-1)!.subject).toContain('重設');
+    await ag(a).post(`/staff/${n.id}/link`).expect(204);
+    await http().get(`/api/v1/agency/password-links/${first}`).set('x-forwarded-host', a.host).expect(410);
+    await activate(a, n.email);
+    await ag(b).get('/me').expect(401);
+  });
+
+  it('不能變更自己；至少保留一位已開通的管理員；尚未開通的管理員不算', async () => {
+    const a = await makeAgency('admin');
+    const me = (await ag(a).get('/staff').expect(200)).body[0];
+    expect(me.isSelf).toBe(true);
+    expect((await ag(a).patch(`/staff/${me.id}/role`, { role: 'operations' }).expect(409)).body.code).toBe('CANNOT_CHANGE_SELF');
+    expect((await ag(a).patch(`/staff/${me.id}/status`, { status: 'disabled' }).expect(409)).body.code).toBe('CANNOT_CHANGE_SELF');
+
+    const other = await invite(a, 'admin');
+    const b = await activate(a, other.email);
+    // 另一位管理員把第一位降級後，他自己就是唯一的管理員
+    await ag(b).patch(`/staff/${me.id}/role`, { role: 'operations' }).expect(204);
+    await ag(a).get('/staff').expect(403);
+    const pendingAdmin = await invite(b, 'admin');
+    // 尚未開通的管理員不算，所以不能靠他停用目前唯一的管理員：直接模擬兩人互相操作的最後一步
+    expect((await app.get(StaffService).setStatus({ agencyId: a.agencyId, agencyName: 'T', user: { id: pendingAdmin.id, name: 'p', role: 'admin', pinnedNavItems: [] } } as never, other.id, 'disabled').catch((e) => e)).code).toBe('LAST_ADMIN');
+    expect((await app.get(StaffService).changeRole({ agencyId: a.agencyId, agencyName: 'T', user: { id: pendingAdmin.id, name: 'p', role: 'admin', pinnedNavItems: [] } } as never, other.id, 'operations').catch((e) => e)).code).toBe('LAST_ADMIN');
+  });
+
+  it('停用後立即登出、連結失效；重新啟用後能登入；改角色立即生效；別家旅行社看不到', async () => {
+    const a = await makeAgency('admin');
+    const n = await invite(a, 'operations');
+    const b = await activate(a, n.email);
+    await ag(b).get('/data-log').expect(403);
+    await ag(a).patch(`/staff/${n.id}/role`, { role: 'admin' }).expect(204);
+    await ag(b).get('/data-log').expect(200);
+    await ag(a).patch(`/staff/${n.id}/status`, { status: 'disabled' }).expect(204);
+    await ag(b).get('/me').expect(401);
+    await http().post('/api/v1/agency/session').set('x-forwarded-host', a.host).send({ email: n.email, password: 'staff12345' }).expect(401);
+    await ag(a).post(`/staff/${n.id}/link`).expect(404);
+    await ag(a).patch(`/staff/${n.id}/status`, { status: 'active' }).expect(204);
+    await http().post('/api/v1/agency/session').set('x-forwarded-host', a.host).send({ email: n.email, password: 'staff12345' }).expect(204);
+    const logs = await admin.query(`SELECT action FROM audit_logs WHERE agency_id = $1 AND target_id = $2 AND action LIKE 'staff.%'`, [a.agencyId, n.id]);
+    expect(logs.rows.map((r) => r.action)).toEqual(expect.arrayContaining(['staff.link_sent', 'staff.password_set', 'staff.role_changed', 'staff.status_changed']));
+
+    const other = await makeAgency('admin');
+    await ag(other).patch(`/staff/${n.id}/status`, { status: 'disabled' }).expect(404);
+    await ag(other).patch(`/staff/${n.id}/role`, { role: 'admin' }).expect(404);
+  });
+
+  it('旅行社設定：改名、上傳 Logo，登入前的頁面看得到；不是圖片不能上傳', async () => {
+    const a = await makeAgency('admin');
+    const code = a.host.split('.')[0];
+    expect((await ag(a).get('/settings').expect(200)).body).toEqual({ name: 'T', code, logoUrl: null });
+    await ag(a).put('/settings/name', { name: '山海旅行社' }).expect(204);
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16)]);
+    await http().put('/api/v1/agency/settings/logo').set('x-forwarded-host', a.host).set('cookie', a.cookie).set('content-type', 'image/png').send(png).expect(200);
+    const pub = (await http().get('/api/v1/agency/branding').set('x-forwarded-host', a.host).expect(200)).body;
+    expect(pub.name).toBe('山海旅行社');
+    expect(pub.logoUrl).toContain('/api/v1/agency/branding/logo');
+    const img = await http().get('/api/v1/agency/branding/logo').set('x-forwarded-host', a.host).expect(200);
+    expect(img.headers['content-type']).toContain('image/png');
+    await http().put('/api/v1/agency/settings/logo').set('x-forwarded-host', a.host).set('cookie', a.cookie).set('content-type', 'image/png').send(Buffer.from('<svg/>')).expect(422);
+    await ag(a).del('/settings/logo').expect(204);
+    await http().get('/api/v1/agency/branding/logo').set('x-forwarded-host', a.host).expect(404);
   });
 });

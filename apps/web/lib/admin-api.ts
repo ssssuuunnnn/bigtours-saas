@@ -80,6 +80,8 @@ export interface DataLogRow {
   travelerCount: number | null; name: string | null; sessionName: string | null; rows: number | null; fields: string[];
 }
 export interface DataLogPage { rows: DataLogRow[]; hasMore: boolean; events: { id: string; name: string }[]; actors: { id: string; name: string }[] }
+export interface StaffMember { id: string; name: string; email: string; role: string; status: 'active' | 'disabled'; activated: boolean; lastLoginAt: string | null; isSelf: boolean }
+export interface AgencySettings { name: string; code: string; logoUrl: string | null }
 export interface CompanyContact { id: string; name: string; email: string; status: 'active' | 'disabled'; activated: boolean }
 export interface EmailTemplateView {
   key: string; label: string; audience: 'employee' | 'agency'; placeholders: string[]; required: string[];
@@ -200,6 +202,18 @@ export const adminApi = {
   quota: () => call<QuotaTier[]>('GET', '/quota'),
   companies: () => call<AdminCompany[]>('GET', '/companies'),
   createCompany: (name: string) => call<AdminCompany>('POST', '/companies', { name }),
+  staff: () => call<StaffMember[]>('GET', '/staff'),
+  createStaff: (v: { name: string; email: string; role: string }) => call<{ id: string }>('POST', '/staff', v),
+  sendStaffLink: (id: string) => call<void>('POST', `/staff/${id}/link`, {}),
+  setStaffRole: (id: string, role: string) => call<void>('PATCH', `/staff/${id}/role`, { role }),
+  setStaffStatus: (id: string, status: 'active' | 'disabled') => call<void>('PATCH', `/staff/${id}/status`, { status }),
+  staffLink: (token: string) => call<{ name: string; agencyName: string }>('GET', `/password-links/${encodeURIComponent(token)}`),
+  staffSetPassword: (token: string, password: string) => call<void>('POST', `/password-links/${encodeURIComponent(token)}`, { password }),
+  settings: () => call<AgencySettings>('GET', '/settings'),
+  saveAgencyName: (name: string) => call<void>('PUT', '/settings/name', { name }),
+  uploadLogo: (file: File) => upload<{ ok: boolean }>('/settings/logo', file, file.type),
+  removeLogo: () => call<void>('DELETE', '/settings/logo'),
+  branding: () => call<{ name: string; logoUrl: string | null }>('GET', '/branding'),
   companyContacts: (companyId: string) => call<CompanyContact[]>('GET', `/companies/${companyId}/contacts`),
   createContact: (companyId: string, v: { name: string; email: string }) => call<{ id: string }>('POST', `/companies/${companyId}/contacts`, v),
   sendContactLink: (companyId: string, id: string) => call<void>('POST', `/companies/${companyId}/contacts/${id}/link`, {}),

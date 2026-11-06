@@ -6,6 +6,7 @@ import { AccountService } from './account.service.ts';
 import { AgencyAdminService } from './agency-admin.service.ts';
 import { AgencyController } from './agency.controller.ts';
 import { ContactController } from './contact.controller.ts';
+import { StaffService } from './staff.service.ts';
 import { ContactService } from './contact.service.ts';
 import { DataLogService } from './data-log.service.ts';
 import { ExportService } from './export.service.ts';
@@ -33,7 +34,7 @@ const parseFile = (parser: typeof pdfBody) => (req: Request, res: Response, next
 
 @Module({
   controllers: [ContactController, AccountController, AgencyController, PublicController],
-  providers: [ContactService, DataLogService, ExportService, RoomService, EmailAdminService, DatabaseService, EncryptionService, AccessService, AccountService, AgencyAdminService, RegistrationService, StorageService, MailService, RosterService, NotificationService, RegistrationAdminService],
+  providers: [StaffService, ContactService, DataLogService, ExportService, RoomService, EmailAdminService, DatabaseService, EncryptionService, AccessService, AccountService, AgencyAdminService, RegistrationService, StorageService, MailService, RosterService, NotificationService, RegistrationAdminService],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
@@ -47,6 +48,6 @@ export class AppModule implements NestModule {
       { path: 'api/v1/company/events/:eventId/employees/import', method: RequestMethod.POST },
       { path: 'api/v1/company/events/:eventId/employees/import/preview', method: RequestMethod.POST },
     );
-    consumer.apply(parseFile(imageBody)).forRoutes({ path: 'api/v1/agency/events/:eventId/images/:kind', method: RequestMethod.PUT });
+    consumer.apply(parseFile(imageBody)).forRoutes({ path: 'api/v1/agency/events/:eventId/images/:kind', method: RequestMethod.PUT }, { path: 'api/v1/agency/settings/logo', method: RequestMethod.PUT });
   }
 }
