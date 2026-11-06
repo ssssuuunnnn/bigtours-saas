@@ -788,6 +788,7 @@ export const a = {
   fixed: '固定',
   fixedName: '姓名',
   errors: {
+    CONTRACT_EXPIRED: '合約已到期，不能建立新活動，請聯繫平台。',
     LAST_ADMIN: '旅行社至少要保留一位啟用中的管理員。',
     CANNOT_CHANGE_SELF: '不能變更自己的帳號，請請其他管理員協助。',
     EMAIL_TAKEN: '這個 Email 已被旅行社人員或其他窗口使用。',

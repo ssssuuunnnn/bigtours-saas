@@ -41,6 +41,7 @@ docker compose up --build
 | 停止，保留資料 | `docker compose down` |
 | 停止並清除所有資料 | `docker compose down -v` |
 | 重設示範資料 | `docker compose run --rm migrate pnpm exec tsx db/seed.ts` |
+| 建立平台人員帳號 | `docker compose run --rm migrate pnpm exec tsx db/create-platform-user.ts <email> <姓名>` |
 | 執行測試（需先啟動） | `docker compose run --rm --no-deps api pnpm --filter @bigtours/shared --filter @bigtours/api test` |
 | 檢查型別 | `docker compose run --rm --no-deps api pnpm -r typecheck` |
 | 新增或更新套件後 | `docker compose up --build` |
