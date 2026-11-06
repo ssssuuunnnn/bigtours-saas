@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Put, Query, Req, Res } from '@nestjs/common';
-import { agencyLoginRequest, accountEmailRequest, companyInput, contactsRequest, createEventRequest, employeeInput, feeAdjustRequest, paymentStatusRequest, reassignRequest, rosterCopyRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
+import { agencyLoginRequest, accountEmailRequest, agencyModifyRequest, companyInput, contactsRequest, createEventRequest, employeeInput, feeAdjustRequest, paymentStatusRequest, reassignRequest, rosterCopyRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
 import type { Request, Response } from 'express';
 import type { ZodType } from 'zod';
 import { AgencyAdminService } from './agency-admin.service.ts';
@@ -378,6 +378,22 @@ export class AgencyController {
   @Get('events/:eventId/registrations/:registrationId')
   async registration(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('registrationId') registrationId: string) {
     return this.regs.detail(await this.operator(h), eventId, registrationId);
+  }
+
+  @Get('events/:eventId/registrations/:registrationId/revisions/:no')
+  async revision(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('registrationId') registrationId: string, @Param('no') no: string) {
+    return this.regs.revision(await this.operator(h), eventId, registrationId, Number(no));
+  }
+
+  @Get('events/:eventId/registrations/:registrationId/edit')
+  async registrationEdit(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('registrationId') registrationId: string) {
+    return this.regs.editData(await this.operator(h), eventId, registrationId);
+  }
+
+  @Put('events/:eventId/registrations/:registrationId')
+  @HttpCode(204)
+  async modifyRegistration(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('registrationId') registrationId: string, @Body() body: unknown) {
+    await this.regs.modify(await this.operator(h), eventId, registrationId, parse(agencyModifyRequest, body));
   }
 
   @Post('events/:eventId/registrations/:registrationId/sensitive')

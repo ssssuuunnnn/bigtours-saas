@@ -44,6 +44,15 @@ export const submitRequest = draftRequest.extend({
 });
 export type SubmitRequest = z.infer<typeof submitRequest>;
 
+/** 修改已送出的報名：旅客用原本的 ID 當 key；敏感欄位留空表示不變更。 */
+export const modifyHoldRequest = holdRequest;
+export const modifyRequest = draftRequest.extend({
+  travelers: z.array(travelerDetails).min(1).max(50),
+});
+export type ModifyRequest = z.infer<typeof modifyRequest>;
+export const agencyModifyRequest = modifyRequest.extend({ sessionId: z.string().uuid() });
+export type AgencyModifyRequest = z.infer<typeof agencyModifyRequest>;
+
 export type SeatStatus = 'available' | 'held' | 'sold_out';
 
 /** 已額滿：全部售出；名額保留中：尚有人保留未送出，之後可能釋出。 */
@@ -88,7 +97,7 @@ export const ERROR_CODES = [
   'UNAUTHENTICATED', 'INVALID_CREDENTIALS', 'PAGE_CLOSED', 'FORBIDDEN_ORIGIN', 'LINK_INVALID', 'INVALID_PASSWORD',
   'INVALID_INPUT', 'CAPACITY_BELOW_SOLD', 'TIER_LIMIT_EXCEEDED', 'SESSION_IN_USE', 'FIELD_LOCKED',
   'FORBIDDEN', 'QUOTA_EMPTY', 'SLUG_TAKEN', 'EVENT_NOT_DRAFT', 'EVENT_NOT_PUBLISHED', 'PAGE_MODE_MISMATCH',
-  'DUPLICATE_NAME', 'TRAVELER_TYPE_IN_USE', 'ROOM_TYPE_IN_USE', 'OPTION_IN_USE', 'QUOTA_IN_USE', 'PAYMENT_NOT_REQUIRED', 'REGISTRATION_CANCELLED', 'ROOM_FULL',
+  'DUPLICATE_NAME', 'TRAVELER_TYPE_IN_USE', 'ROOM_TYPE_IN_USE', 'OPTION_IN_USE', 'QUOTA_IN_USE', 'NOT_MODIFIABLE', 'PAYMENT_NOT_REQUIRED', 'REGISTRATION_CANCELLED', 'ROOM_FULL',
   'DUPLICATE_EMPLOYEE_NO', 'EMPLOYEE_NO_LOCKED', 'EMPLOYEE_HAS_REGISTRATION', 'CSV_BAD_HEADER', 'CSV_TOO_MANY_ROWS',
   'PUBLISH_BLOCKED', 'PUBLISH_REQUIREMENT', 'INVALID_FILE', 'FILE_TOO_LARGE',
 ] as const;

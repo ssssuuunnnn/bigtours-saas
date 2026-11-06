@@ -385,12 +385,49 @@ export const a = {
       case 'cancel_confirmed': return '確認取消';
       case 'cancel_rejected': return '退回取消申請';
       case 'payment': return `付款狀態 ${({ unpaid: '未付', paid: '已付', refunded: '已退款', not_required: '無需付款' } as Record<string, string>)[String(s.from)]} → ${({ unpaid: '未付', paid: '已付', refunded: '已退款', not_required: '無需付款' } as Record<string, string>)[String(s.to)]}`;
+      case 'modified': return `修改報名內容，整筆 ${m(s.from)} → ${m(s.to)}`;
       case 'fee_adjusted': return `調整費用 ${m(s.from)} → ${m(s.to)}，原因：${s.reason}`;
       case 'reassigned': return `行程改派（${s.reason}）：${(s.changes ?? []).map((c) => `${c.traveler} ${c.from} → ${c.to}`).join('、')}，整筆 ${m(s.from)} → ${m(s.to)}`;
       default: return s.action;
     }
   },
   systemActor: '系統',
+  // 修改報名
+  modifyRegistration: '修改報名',
+  modifyHint: '修改後立即生效並通知員工。報名截止後仍可修改，不受眷屬上限限制；名額不足時無法儲存。',
+  modifySession: '梯次',
+  modifySessionOption: (name: string, remaining: number) => `${name}（剩 ${remaining} 位）`,
+  modifyTraveler: (n: number) => `旅客 ${n}`,
+  modifyName: '姓名',
+  modifyType: '旅客類型',
+  modifyRoomType: '房型',
+  modifyRoomChoose: '請選擇',
+  modifyRoomNo: '要住第幾間',
+  modifyRoomN: (n: number) => `第 ${n} 間`,
+  modifyPreference: (rank: number) => `第${['', '一', '二', '三'][rank]}志願`,
+  modifyPreferenceNone: '不填',
+  modifySelect: '請選擇',
+  modifySensitiveHint: (mask: string) => `目前為 ${mask}，留空表示不變更`,
+  modifyAdd: '新增旅客',
+  modifyRemove: '移除',
+  modifyCoworker: (n: number) => `第 ${n} 間想同住的同事`,
+  modifyRooms: '住宿意願',
+  modifyOriginal: '原整筆費用',
+  modifyNew: '修改後整筆費用',
+  modifySelf: '修改後自付',
+  modifyPaidNote: '已付款的報名付款狀態維持已付，差額請另外處理。',
+  modifySave: '儲存修改',
+  modifySaved: '報名內容已修改。',
+  revisionView: '查看前後內容',
+  revisionHide: '收起前後內容',
+  revisionBefore: '修改前',
+  revisionAfter: '修改後',
+  revisionSession: '梯次',
+  revisionTotal: '整筆費用',
+  revisionRoom: '房型',
+  revisionPreference: '其他志願',
+  paymentDiffShort: (n: number) => (n > 0 ? `差額 +$${n.toLocaleString('en-US')}` : `差額 −$${(-n).toLocaleString('en-US')}`),
+  paymentDiffNote: (paid: number, n: number) => `已付 $${paid.toLocaleString('en-US')}，${n > 0 ? `還需補收 $${n.toLocaleString('en-US')}` : `需退還 $${(-n).toLocaleString('en-US')}`}。付款狀態不會自動變更，處理後請調整。`,
   // 行程改派
   reassignTitle: '行程改派',
   reassignNoSources: '還沒有旅客選擇自選行程，不需要改派。',
@@ -496,6 +533,11 @@ export const a = {
   fixed: '固定',
   fixedName: '姓名',
   errors: {
+    NOT_MODIFIABLE: '已取消的報名不能修改。',
+    SESSION_FULL: '這個梯次的名額不足。',
+    ROOM_FULL: '選擇的房型床位不足。',
+    INVALID_DETAILS: '有旅客資料尚未填寫完整，請再確認。',
+    INVALID_SELECTION: '選擇的內容不符合活動規則，請檢查必選項目與房型。',
     INVALID_INPUT: '有欄位尚未填寫或格式不正確，請再確認。',
     CAPACITY_BELOW_SOLD: '名額不能低於已報名與保留中的人數。',
     TIER_LIMIT_EXCEEDED: '梯次名額合計超過活動級距上限。',

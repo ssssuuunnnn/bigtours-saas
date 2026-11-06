@@ -3,9 +3,10 @@
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
-import { adminApi, type AdminEvent, type ReassignPlan, type ReassignSource, type RegistrationDetail, type RegistrationPage } from '../../../../lib/admin-api';
+import { adminApi, type AdminEvent, type ReassignPlan, type ReassignSource, type RegistrationDetail, type RegistrationPage, type RevisionSnapshot } from '../../../../lib/admin-api';
 import { a } from '../../../../messages/admin';
 import { adminError } from '../../admin-shell';
+import { RegistrationEdit } from './registration-edit';
 
 const money = (n: number) => `$${n.toLocaleString('en-US')}`;
 const when = (iso: string) => new Date(iso).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
@@ -16,7 +17,8 @@ export function RegistrationsPanel({ event }: { event: AdminEvent }) {
   const id = params.get('registration');
   const [note, setNote] = useState<string | null>(null);
   if (params.get('view') === 'reassign') return <ReassignView event={event} onDone={setNote} />;
-  if (id) return <DetailView key={id} event={event} id={id} />;
+  if (id && params.get('view') === 'edit') return <RegistrationEdit key={id} event={event} id={id} onDone={setNote} />;
+  if (id) return <DetailView key={id} event={event} id={id} note={note} />;
   return <ListView event={event} note={note} initialStatus={params.get('status') ?? ''} initialPayment={params.get('payment') ?? ''} />;
 }
 
@@ -92,7 +94,7 @@ function ListView({ event, note, initialStatus, initialPayment }: { event: Admin
                   <td>{money(r.totalAmount)}</td>
                   <td>{money(r.subsidyAmount)}</td>
                   <td>{money(r.selfPayAmount)}</td>
-                  <td className="admin-nowrap"><span className={`admin-pay ${r.paymentStatus}`}>{a.paymentStates[r.paymentStatus]}</span></td>
+                  <td className="admin-nowrap"><span className={`admin-pay ${r.paymentStatus}`}>{a.paymentStates[r.paymentStatus]}</span>{r.paymentDiff !== 0 && <><br /><small className="admin-diff-tag">{a.paymentDiffShort(r.paymentDiff)}</small></>}</td>
                   <td className="admin-nowrap"><span className={`admin-reg ${r.status}`}>{a.regStates[r.status]}</span></td>
                 </tr>
               ))}
@@ -111,7 +113,7 @@ function ListView({ event, note, initialStatus, initialPayment }: { event: Admin
   );
 }
 
-function DetailView({ event, id }: { event: AdminEvent; id: string }) {
+function DetailView({ event, id, note }: { event: AdminEvent; id: string; note: string | null }) {
   const [r, setR] = useState<RegistrationDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<Record<string, Record<string, unknown>> | null>(null);
@@ -158,8 +160,14 @@ function DetailView({ event, id }: { event: AdminEvent; id: string }) {
   return (
     <section className="admin-panel">
       {back}
-      <h2>{a.regTitle(r.employeeName, r.employeeNo)}</h2>
-      <p className="muted">{a.regSubtitle(r.sessionName, r.travelers.length)}</p>
+      <div className="admin-panel-head">
+        <div>
+          <h2>{a.regTitle(r.employeeName, r.employeeNo)}</h2>
+          <p className="muted">{a.regSubtitle(r.sessionName, r.travelers.length)}</p>
+        </div>
+        {!cancelled && <Link className="ghost-link" href={`/admin/events/${event.id}/registrations?registration=${id}&view=edit`}>{a.modifyRegistration}</Link>}
+      </div>
+      {note && <p className="admin-note" role="status">{note}</p>}
       {error && <p className="error" role="alert">{error}</p>}
       {r.status === 'cancel_requested' && (
         <div className="admin-cancel-banner" role="status">
@@ -207,7 +215,7 @@ function DetailView({ event, id }: { event: AdminEvent; id: string }) {
             <h2>{a.revisionsTitle}</h2>
             <ol className="admin-revisions">
               {r.revisions.map((v, i) => (
-                <li key={i}><time dateTime={v.at}>{when(v.at)}・{v.actorName ?? a.systemActor}</time>{a.revisionText(v.summary)}</li>
+                <li key={i}><time dateTime={v.at}>{when(v.at)}・{v.actorName ?? a.systemActor}</time>{a.revisionText(v.summary)}{v.hasContent && <RevisionContent eventId={event.id} registrationId={id} no={v.no} />}</li>
               ))}
             </ol>
           </div>
@@ -235,6 +243,7 @@ function DetailView({ event, id }: { event: AdminEvent; id: string }) {
           <fieldset className="admin-card">
             <legend className="sr-only">{a.paymentTitle2}</legend>
             <h2>{a.paymentTitle2}</h2>
+            {r.paymentDiff !== 0 && r.paidAmount !== null && <p className="admin-note" role="status">{a.paymentDiffNote(r.paidAmount, r.paymentDiff)}</p>}
             {r.selfPayAmount === 0 && r.paymentStatus === 'not_required' ? <p className="muted">{a.paymentNotRequiredHint}</p> : (
               <div className="admin-radio-row">
                 {(['unpaid', 'paid', 'refunded'] as const).map((s) => (
@@ -246,6 +255,57 @@ function DetailView({ event, id }: { event: AdminEvent; id: string }) {
         </div>
       </div>
     </section>
+  );
+}
+
+type SnapshotTraveler = RevisionSnapshot['travelers'][number];
+const travelerLines = (t: SnapshotTraveler) => [
+  `${t.name}（${t.type}）${money(t.basePrice)}`,
+  ...t.fields.map((f) => `${f.label}：${f.value}`),
+  ...t.options.map((o) => `${o.name}${o.price ? `（+${money(o.price)}）` : ''}`),
+  ...(t.roomType ? [`${a.revisionRoom}：${t.roomType}${t.roomSurcharge ? `（+${money(t.roomSurcharge)}）` : ''}`] : []),
+  ...(t.preferences.length ? [`${a.revisionPreference}：${t.preferences.join('、')}`] : []),
+];
+const headLines = (s: RevisionSnapshot) => [`${a.revisionSession}：${s.session}`, `${a.revisionTotal}：${money(s.total)}`];
+
+/** 只有修改報名的紀錄有前後內容；全部列出並標出差異，同一位旅客用 ID 對照，改名時其他欄位才不會被當成變動。 */
+function RevisionContent({ eventId, registrationId, no }: { eventId: string; registrationId: string; no: number }) {
+  const [content, setContent] = useState<{ before: RevisionSnapshot; after: RevisionSnapshot } | null>(null);
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const toggle = async () => {
+    if (!content) {
+      try {
+        setContent(await adminApi.registrationRevision(eventId, registrationId, no));
+      } catch (e) {
+        setError(adminError(e));
+        return;
+      }
+    }
+    setOpen(!open);
+  };
+  const list = (lines: string[], other: string[]) => <ul className="admin-cell-list">{lines.map((l) => <li key={l} className={other.includes(l) ? undefined : 'admin-diff-changed'}>{l}</li>)}</ul>;
+  const column = (title: string, mine: RevisionSnapshot, other: RevisionSnapshot) => (
+    <div>
+      <h3>{title}</h3>
+      {list(headLines(mine), headLines(other))}
+      {mine.travelers.map((t) => {
+        const match = other.travelers.find((x) => x.id === t.id);
+        return <div className="admin-diff-traveler" key={t.id}>{list(travelerLines(t), match ? travelerLines(match) : [])}</div>;
+      })}
+    </div>
+  );
+  return (
+    <div>
+      <button type="button" className="link" aria-expanded={open} onClick={toggle}>{open ? a.revisionHide : a.revisionView}</button>
+      {error && <p className="error" role="alert">{error}</p>}
+      {open && content && (
+        <div className="admin-diff">
+          {column(a.revisionBefore, content.before, content.after)}
+          {column(a.revisionAfter, content.after, content.before)}
+        </div>
+      )}
+    </div>
   );
 }
 

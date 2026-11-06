@@ -5,15 +5,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { ApiError, createClient, type EventState, type Field, type Registration, type SessionAvailability, type Traveler } from '../../lib/api';
 import { formatDateTime, money, t } from '../../messages/zh-TW';
 import { brandStyle } from '../../lib/brand';
-
-/** crypto.randomUUID 只能在 HTTPS 使用；本機以 http://*.lvh.me 開發時改用 getRandomValues。 */
-function uuid(): string {
-  const b = crypto.getRandomValues(new Uint8Array(16));
-  b[6] = (b[6]! & 0x0f) | 0x40;
-  b[8] = (b[8]! & 0x3f) | 0x80;
-  const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
-}
+import { modifiedFees, uuid } from '../../lib/fees';
 
 const newTraveler = (typeId: string, optionIds: string[]): Traveler => ({
   key: uuid(),
@@ -51,6 +43,11 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
   const [termsError, setTermsError] = useState(false);
   const [registration, setRegistration] = useState<Registration | null>(null);
   const [saved, setSaved] = useState(false);
+  // 修改已送出的報名：沒保留到新內容的名額前，目標梯次先放在 pendingSessionId。
+  const [modifying, setModifying] = useState(false);
+  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     api.state().then((s) => {
@@ -67,7 +64,19 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
         const first = self ?? s.travelerTypes[0];
         if (first) setTravelers([{ ...newTraveler(first.id, defaultOptions(s)), name: self ? s.employee.name : '' }]);
       }
-      if (s.hold) {
+      // 修改到一半重新整理：還在保留就回到修改頁，已逾時就問要不要重新保留。
+      if (s.registration?.status === 'confirmed' && s.event.openState === 'open' && s.draft?.travelers.length) {
+        setRestored(false);
+        setModifying(true);
+        if (s.hold?.modifying) {
+          setSessionId(s.hold.sessionId);
+          setExpiresAt(new Date(s.hold.expiresAt).getTime());
+          setStep('fill');
+        } else {
+          setSessionId(s.modificationSessionId ?? s.registration.sessionId);
+          setStep('expired');
+        }
+      } else if (s.hold) {
         setSessionId(s.hold.sessionId);
         setExpiresAt(new Date(s.hold.expiresAt).getTime());
         if (s.draft?.travelers.length) setStep('fill');
@@ -120,17 +129,44 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
   const dependents = travelers.filter((x) => !selfTypeIds.has(x.travelerTypeId)).length;
   const dependentLeft = state.employee.dependentLimit - dependents;
   const firstDependentType = state.travelerTypes.find((x) => !x.isEmployeeSelf);
-  const session = availability.find((s) => s.id === sessionId) ?? null;
+  const session = availability.find((s) => s.id === (pendingSessionId ?? sessionId)) ?? null;
+  const ownIds = new Set(modifying && registration ? registration.travelers.flatMap((x) => [...x.options.map((o) => o.optionId), ...(x.roomTypeId ? [x.roomTypeId] : [])]) : []);
 
   const logout = () => api.logout().catch(() => undefined).then(onSignedOut);
   const masthead = <Masthead state={state} onLogout={logout} />;
 
   const refreshAvailability = () => api.availability().then(setAvailability).catch(() => undefined);
 
+  const seatsComplete = (list: Traveler[], target: SessionAvailability | null) =>
+    !target?.roomTypes.length || list.every((x) => !occupiesBed(state, x) || x.roomTypeId);
+
+  /** 修改中：內容完整才保留名額，還沒選好房型時先留在畫面上；保留時間不會重新計算。 */
+  const applyModification = async (next: Traveler[], target: string) => {
+    const previous = travelers;
+    const alreadyHeld = target === sessionId && !pendingSessionId;
+    setError(null);
+    setTravelers(next);
+    if (!seatsComplete(next, availability.find((s) => s.id === target) ?? null)) { setPendingSessionId(target); return; }
+    if (alreadyHeld && JSON.stringify(previous.map(selectionOf)) === JSON.stringify(next.map(selectionOf))) return;
+    try {
+      const hold = alreadyHeld ? await api.updateHold(next.map(selectionOf)) : await api.modificationHold(target, next.map(selectionOf));
+      setSessionId(target);
+      setPendingSessionId(null);
+      setExpiresAt(new Date(hold.expiresAt).getTime());
+    } catch (e) {
+      setError(errorText(e));
+      if (alreadyHeld) setTravelers(previous);
+      else setPendingSessionId(target);
+      await refreshAvailability();
+      if (e instanceof ApiError && e.code === 'HOLD_EXPIRED') onExpired();
+    }
+  };
+
   /** 填寫中修改人數或選項時同步更新保留，不重新計時；失敗時還原。 */
   const changeTravelers = async (next: Traveler[]) => {
     setError(null);
     if (step !== 'fill') { setTravelers(next); return; }
+    if (modifying) { await applyModification(next, pendingSessionId ?? sessionId!); return; }
     const previous = travelers;
     setTravelers(next);
     const before = JSON.stringify(previous.map(selectionOf));
@@ -149,9 +185,12 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
     if (session?.roomTypes.length && travelers.some((x) => occupiesBed(state, x) && !x.roomTypeId)) { setError(t.roomTypeRequired); return; }
     setBusy(true); setError(null);
     try {
-      const hold = await api.hold(sessionId, travelers.map(selectionOf));
+      const target = pendingSessionId ?? sessionId;
+      const hold = modifying ? await api.modificationHold(target, travelers.map(selectionOf)) : await api.hold(sessionId, travelers.map(selectionOf));
       setExpiresAt(new Date(hold.expiresAt).getTime());
       await api.saveDraft(draftBody(travelers, rooms));
+      setSessionId(target);
+      setPendingSessionId(null);
       setStep('fill');
       window.scrollTo({ top: 0 });
     } catch (e) {
@@ -167,6 +206,65 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
     await api.releaseHold().catch(() => undefined);
     await refreshAvailability();
     setExpiresAt(null); setStep('choose'); setBusy(false); setError(null);
+    setModifying(false); setPendingSessionId(null);
+  };
+
+  /** 開始修改：先保留目前內容（不佔新名額），之後改動才計算差額。 */
+  const startModify = async () => {
+    const r = registration!;
+    const next: Traveler[] = r.travelers.map((x) => ({
+      key: x.id,
+      travelerTypeId: x.travelerTypeId,
+      optionIds: x.options.map((o) => o.optionId),
+      roomTypeId: x.roomTypeId,
+      preferences: x.preferenceIds,
+      name: x.name,
+      fieldValues: x.plainValues,
+      requestedRoomNo: x.requestedRoomNo ?? 1,
+      masks: x.masks,
+    }));
+    const nextRooms = Object.fromEntries(r.roomPreferences.map((p) => [p.requestedRoomNo, p.preferredCoworkerName ?? '']));
+    const hold = await api.modificationHold(r.sessionId, next.map(selectionOf));
+    await api.saveDraft(draftBody(next, nextRooms));
+    await refreshAvailability();
+    lastSaved.current = '';
+    setTravelers(next);
+    setRooms(nextRooms);
+    setSessionId(r.sessionId);
+    setPendingSessionId(null);
+    setExpanded(new Set());
+    setExpiresAt(new Date(hold.expiresAt).getTime());
+    setError(null);
+    setNotice(null);
+    setFieldErrors(new Set());
+    setModifying(true);
+    setStep('fill');
+    window.scrollTo({ top: 0 });
+  };
+
+  const submitModification = async () => {
+    if (pendingSessionId) { setError(t.modify.needRoom); return; }
+    setBusy(true); setError(null); setFieldErrors(new Set());
+    try {
+      const reg = await api.submitModification(draftBody(travelers, rooms));
+      setRegistration(reg);
+      await refreshAvailability();
+      setModifying(false);
+      setExpiresAt(null);
+      setStep('choose');
+      setNotice(t.modify.done);
+      window.scrollTo({ top: 0 });
+    } catch (e) {
+      setError(errorText(e));
+      if (e instanceof ApiError && e.code === 'INVALID_DETAILS' && Array.isArray(e.detail?.errors)) {
+        const invalid: { key: string; field: string }[] = e.detail.errors;
+        setFieldErrors(new Set(invalid.map((x) => `${x.key}:${x.field}`)));
+        setExpanded(new Set([...expanded, ...invalid.map((x) => x.key)]));
+      }
+      if (e instanceof ApiError && e.code === 'HOLD_EXPIRED') onExpired();
+    } finally {
+      setBusy(false);
+    }
   };
 
   const submit = async () => {
@@ -187,7 +285,7 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
     }
   };
 
-  if (registration) {
+  if (registration && !modifying) {
     return (
       <div style={brand}>
         {masthead}
@@ -198,6 +296,9 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
           session={availability.find((s) => s.id === registration.sessionId)}
           fields={state.fields}
           onCancel={async () => setRegistration(await api.requestCancel())}
+          notice={notice}
+          modifyUntil={state.event.openState === 'open' && registration.status === 'confirmed' ? formatDateTime(state.event.registrationClosesAt) : null}
+          onModify={startModify}
         />
       </div>
     );
@@ -213,6 +314,7 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
           traveler={traveler}
           state={state}
           session={session}
+          ownIds={ownIds}
           canApplyToAll={travelers.length > 1}
           onChange={(next) => changeTravelers(travelers.map((x) => (x.key === next.key ? roomRule(state, session, next) : x)))}
           onRemove={() => changeTravelers(travelers.filter((x) => x.key !== traveler.key))}
@@ -229,6 +331,27 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
       ) : <p className="muted">{t.noDependent}</p>}
     </section>
   );
+
+  if (step === 'expired' && modifying && registration) {
+    const current = availability.find((s) => s.id === registration.sessionId);
+    return (
+      <div style={brand}>
+        {masthead}
+        <main className="page">
+          <section className="block expired" role="alert">
+            <h2>{t.modify.expiredTitle}</h2>
+            <p>{t.modify.expiredHint}</p>
+            <dl className="summary">
+              <div><dt>{t.modify.effective}</dt><dd>{t.modify.effectiveLine(current?.name ?? '', registration.travelers.length, money(registration.selfPayAmount))}</dd></div>
+            </dl>
+            {error && <p className="error">{error}</p>}
+            <button type="button" className="primary wide" disabled={busy} onClick={startHold}>{t.modify.rehold}</button>
+            <button type="button" className="ghost wide" disabled={busy} onClick={abandon}>{t.modify.abandon}</button>
+          </section>
+        </main>
+      </div>
+    );
+  }
 
   if (step === 'expired') {
     return (
@@ -247,8 +370,170 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
     );
   }
 
+  const usedRooms = [...new Set(travelers.map((x) => x.requestedRoomNo ?? 1))].sort((a, b) => a - b);
+  const travelerForm = (traveler: Traveler) => (
+    <>
+      <TextField
+        label={t.name}
+        required
+        invalid={fieldErrors.has(`${traveler.key}:name`)}
+        value={traveler.name}
+        onChange={(name) => setTravelers(travelers.map((x) => (x.key === traveler.key ? { ...x, name } : x)))}
+      />
+      {state.fields.map((field) => (
+        <FieldInput
+          key={field.key}
+          field={field}
+          traveler={traveler}
+          invalid={fieldErrors.has(`${traveler.key}:${field.key}`)}
+          onChange={(value) => setTravelers(travelers.map((x) => (x.key === traveler.key ? { ...x, fieldValues: { ...x.fieldValues, [field.key]: value } } : x)))}
+        />
+      ))}
+      {traveler.roomTypeId && <p className="muted">{t.roomType}：{session?.roomTypes.find((r) => r.id === traveler.roomTypeId)?.name}</p>}
+      <label className="field">
+        <span>{t.roomOf}</span>
+        <select
+          value={traveler.requestedRoomNo ?? 1}
+          onChange={(e) => setTravelers(travelers.map((x) => (x.key === traveler.key ? { ...x, requestedRoomNo: Number(e.target.value) } : x)))}
+        >
+          {travelers.map((_, i) => <option key={i} value={i + 1}>{t.roomN(i + 1)}</option>)}
+        </select>
+      </label>
+    </>
+  );
+  const roomsBlock = (
+    <section className="block">
+      <h2>{t.rooms}</h2>
+      <p className="muted">{t.roomsHint}</p>
+      {mismatchedRooms(state, session, travelers).map((no) => <p key={no} className="notice" role="status">{t.roomMismatch(no)}</p>)}
+      {usedRooms.map((no) => (
+        <TextField key={no} label={t.coworker(no)} value={rooms[no] ?? ''} onChange={(v) => setRooms({ ...rooms, [no]: v })} />
+      ))}
+    </section>
+  );
+
+  if (step === 'fill' && modifying && registration) {
+    const allOptions = state.optionGroups.flatMap((g) => g.options);
+    const nextFees = modifiedFees(registration, travelers, {
+      types: new Map(state.travelerTypes.map((x) => [x.id, x.basePrice])),
+      rooms: new Map(availability.flatMap((s) => s.roomTypes).map((r) => [r.id, r.surcharge])),
+      options: new Map(allOptions.map((o) => [o.id, o.price])),
+    });
+    const toggle = (key: string) => {
+      const next = new Set(expanded);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      setExpanded(next);
+    };
+    const addType = (typeId: string) => {
+      const added = roomRule(state, session, newTraveler(typeId, defaultOptions(state)));
+      setExpanded(new Set([...expanded, added.key]));
+      void changeTravelers([...travelers, added]);
+    };
+    const removeTraveler = (traveler: Traveler) => {
+      if (traveler.name && !window.confirm(t.modify.removeConfirm(traveler.name))) return;
+      void changeTravelers(travelers.filter((x) => x.key !== traveler.key));
+    };
+    return (
+      <div style={brand}>
+        <Countdown expiresAt={expiresAt} skew={clockSkew} onExpired={onExpired} session={session} />
+        <main className="page has-bar">
+          <h1 className="fill-title">{t.modify.title}</h1>
+          <p className="notice">{t.modify.banner}</p>
+          {error && <p className="error" role="alert">{error}</p>}
+          <details className="edit-picks" open={!!pendingSessionId || undefined}>
+            <summary>{session ? t.modify.current(session.name, travelers.length) : ''}<span className="edit-picks-action">{t.modify.changeParty}</span></summary>
+            <Board
+              sessions={availability}
+              selected={pendingSessionId ?? sessionId}
+              ownSessionId={registration.sessionId}
+              onSelect={(id) => {
+                const next = availability.find((s) => s.id === id) ?? null;
+                void applyModification(travelers.map((x) => roomRule(state, next, x)), id);
+              }}
+              disabled={false}
+              hideSeats={false}
+            />
+            <section className="block">
+              <h2>{t.changeCount}</h2>
+              <p className="muted">{t.modify.partyHint}</p>
+              {state.travelerTypes.filter((x) => !x.isEmployeeSelf).map((type) => {
+                const ofType = travelers.filter((x) => x.travelerTypeId === type.id);
+                return (
+                  <div className="stepper-row" key={type.id}>
+                    <span>{type.name}<small className="muted"> {money(type.basePrice)}</small></span>
+                    <span className="stepper">
+                      <button type="button" className="ghost" aria-label={t.decrease(type.name)} disabled={ofType.length === 0 || travelers.length === 1} onClick={() => removeTraveler(ofType[ofType.length - 1]!)}>−</button>
+                      <b aria-live="polite">{ofType.length}</b>
+                      <button type="button" className="ghost" aria-label={t.increase(type.name)} disabled={dependentLeft <= 0} onClick={() => addType(type.id)}>+</button>
+                    </span>
+                  </div>
+                );
+              })}
+              <p className="muted">{t.dependentLeft(Math.max(dependentLeft, 0))}</p>
+            </section>
+          </details>
+          <section className="block">
+            <h2>{t.modify.travelers}</h2>
+            {travelers.map((traveler, index) => {
+              const type = state.travelerTypes.find((x) => x.id === traveler.travelerTypeId);
+              const open = expanded.has(traveler.key);
+              const optionLine = [
+                ...traveler.optionIds.map((id) => allOptions.find((o) => o.id === id)?.name),
+                session?.roomTypes.find((r) => r.id === traveler.roomTypeId)?.name,
+              ].filter(Boolean).join('・');
+              const preferenceLine = Object.values(traveler.preferences).flatMap((ids) => ids.map((id, i) => `${t.preferenceN(i + 2).replace('（選填）', '')} ${allOptions.find((o) => o.id === id)?.name ?? ''}`)).join('、');
+              return (
+                <div className="modify-traveler" key={traveler.key}>
+                  <div className="traveler-head">
+                    <h3>{traveler.name || t.travelerN(index + 1)}<small className="muted">（{type?.name}）</small></h3>
+                    <button type="button" className="link" aria-expanded={open} onClick={() => toggle(traveler.key)}>{open ? t.modify.collapse : t.modify.edit}</button>
+                  </div>
+                  {open ? (
+                    <>
+                      <TravelerPicks
+                        index={index}
+                        traveler={traveler}
+                        state={state}
+                        session={session}
+                        ownIds={ownIds}
+                        canApplyToAll={travelers.length > 1}
+                        onChange={(next) => changeTravelers(travelers.map((x) => (x.key === next.key ? roomRule(state, session, next) : x)))}
+                        onRemove={() => removeTraveler(traveler)}
+                        onApplyAll={() => changeTravelers(travelers.map((x) => ({ ...x, optionIds: traveler.optionIds, preferences: traveler.preferences })))}
+                      />
+                      {travelerForm(traveler)}
+                    </>
+                  ) : (
+                    <>
+                      {optionLine && <p>{optionLine}</p>}
+                      {preferenceLine && <p className="muted">{preferenceLine}</p>}
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </section>
+          {roomsBlock}
+          <section className="block">
+            <dl className="summary">
+              <div><dt>{t.modify.originalTotal}</dt><dd>{money(registration.totalAmount)}</dd></div>
+              <div><dt>{t.modify.newTotal}</dt><dd>{money(nextFees.total)}</dd></div>
+              <div><dt>{t.subsidyLine}</dt><dd>-{money(nextFees.subsidyApplied)}</dd></div>
+              <div className="strong"><dt>{t.modify.newSelfPay}</dt><dd>{money(nextFees.selfPay)}</dd></div>
+            </dl>
+            <p className="muted">{nextFees.diff > 0 ? t.modify.more(money(nextFees.diff)) : nextFees.diff < 0 ? t.modify.less(money(-nextFees.diff)) : t.modify.same}</p>
+            {nextFees.diff !== 0 && <p className="muted">{t.modify.paidNote(state.agency.name)}</p>}
+            <button type="button" className="ghost wide abandon" disabled={busy} onClick={abandon}>{t.modify.abandon}</button>
+          </section>
+        </main>
+        <FeeBar fees={nextFees} error={error}>
+          <button type="button" className="primary" disabled={busy} onClick={submitModification}>{busy ? t.modify.submitting : t.modify.submit}</button>
+        </FeeBar>
+      </div>
+    );
+  }
+
   if (step === 'fill') {
-    const usedRooms = [...new Set(travelers.map((x) => x.requestedRoomNo ?? 1))].sort((a, b) => a - b);
     return (
       <div style={brand}>
         <Countdown expiresAt={expiresAt} skew={clockSkew} onExpired={onExpired} session={session} />
@@ -262,42 +547,10 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
           {travelers.map((traveler, index) => (
             <section className="block" key={traveler.key}>
               <h2>{t.travelerN(index + 1)}</h2>
-              <TextField
-                label={t.name}
-                required
-                invalid={fieldErrors.has(`${traveler.key}:name`)}
-                value={traveler.name}
-                onChange={(name) => setTravelers(travelers.map((x) => (x.key === traveler.key ? { ...x, name } : x)))}
-              />
-              {state.fields.map((field) => (
-                <FieldInput
-                  key={field.key}
-                  field={field}
-                  traveler={traveler}
-                  invalid={fieldErrors.has(`${traveler.key}:${field.key}`)}
-                  onChange={(value) => setTravelers(travelers.map((x) => (x.key === traveler.key ? { ...x, fieldValues: { ...x.fieldValues, [field.key]: value } } : x)))}
-                />
-              ))}
-              {traveler.roomTypeId && <p className="muted">{t.roomType}：{session?.roomTypes.find((r) => r.id === traveler.roomTypeId)?.name}</p>}
-              <label className="field">
-                <span>{t.roomOf}</span>
-                <select
-                  value={traveler.requestedRoomNo ?? 1}
-                  onChange={(e) => setTravelers(travelers.map((x) => (x.key === traveler.key ? { ...x, requestedRoomNo: Number(e.target.value) } : x)))}
-                >
-                  {travelers.map((_, i) => <option key={i} value={i + 1}>{t.roomN(i + 1)}</option>)}
-                </select>
-              </label>
+              {travelerForm(traveler)}
             </section>
           ))}
-          <section className="block">
-            <h2>{t.rooms}</h2>
-            <p className="muted">{t.roomsHint}</p>
-            {mismatchedRooms(state, session, travelers).map((no) => <p key={no} className="notice" role="status">{t.roomMismatch(no)}</p>)}
-            {usedRooms.map((no) => (
-              <TextField key={no} label={t.coworker(no)} value={rooms[no] ?? ''} onChange={(v) => setRooms({ ...rooms, [no]: v })} />
-            ))}
-          </section>
+          {roomsBlock}
           <section className="block">
             <label className="check">
               <input type="checkbox" checked={termsAccepted} onChange={(e) => { setTermsAccepted(e.target.checked); setTermsError(false); }} />
@@ -429,12 +682,13 @@ function Itinerary({ state }: { state: EventState }) {
 }
 
 /** 出發看板：這個頁面唯一的重點視覺。 */
-function Board({ sessions, selected, onSelect, disabled, hideSeats }: { sessions: SessionAvailability[]; selected: string | null; onSelect: (id: string) => void; disabled: boolean; hideSeats: boolean }) {
+function Board({ sessions, selected, onSelect, disabled, hideSeats, ownSessionId }: { sessions: SessionAvailability[]; selected: string | null; onSelect: (id: string) => void; disabled: boolean; hideSeats: boolean; ownSessionId?: string }) {
   return (
     <section className="board" aria-label={t.departures}>
       <h2>{t.departures}</h2>
       {sessions.map((s) => {
-        const blocked = disabled || s.status !== 'available';
+        // 修改時，自己目前報名的梯次即使額滿也能選回來。
+        const blocked = disabled || (s.status !== 'available' && s.id !== ownSessionId);
         return (
           <button key={s.id} type="button" className="board-row" aria-pressed={selected === s.id} disabled={blocked} onClick={() => onSelect(s.id)}>
             <span className="board-name">{s.name}</span>
@@ -460,8 +714,8 @@ function Leg({ label, date, time, flight }: { label: string; date: string | null
   return <span className="board-leg"><b>{label}</b> {detail.join(' ')}</span>;
 }
 
-function TravelerPicks({ index, traveler, state, session, canApplyToAll, onChange, onRemove, onApplyAll }: {
-  index: number; traveler: Traveler; state: EventState; session: SessionAvailability | null; canApplyToAll: boolean;
+function TravelerPicks({ index, traveler, state, session, ownIds, canApplyToAll, onChange, onRemove, onApplyAll }: {
+  index: number; traveler: Traveler; state: EventState; session: SessionAvailability | null; ownIds: Set<string>; canApplyToAll: boolean;
   onChange: (t: Traveler) => void; onRemove: () => void; onApplyAll: () => void;
 }) {
   const type = state.travelerTypes.find((x) => x.id === traveler.travelerTypeId);
@@ -504,7 +758,7 @@ function TravelerPicks({ index, traveler, state, session, canApplyToAll, onChang
             <select value={traveler.roomTypeId ?? ''} onChange={(e) => onChange({ ...traveler, roomTypeId: e.target.value || null })}>
               <option value="">{t.roomTypeChoose}</option>
               {session.roomTypes.map((r) => {
-                const blocked = r.status !== 'available' && r.id !== traveler.roomTypeId;
+                const blocked = r.status !== 'available' && r.id !== traveler.roomTypeId && !ownIds.has(r.id);
                 const side = r.status === 'sold_out' ? ` ${t.soldOut}` : r.status === 'held' ? ` ${t.optionHeld}` : ` ${t.remaining(r.remaining)}`;
                 return <option key={r.id} value={r.id} disabled={blocked}>{t.roomTypeOption(r.name, r.capacity, r.surcharge ? t.plusPrice(money(r.surcharge)) : '', side)}</option>;
               })}
@@ -517,7 +771,7 @@ function TravelerPicks({ index, traveler, state, session, canApplyToAll, onChang
           {group.options.map((option) => {
             const quota = session?.options.find((q) => q.optionId === option.id);
             const checked = traveler.optionIds.includes(option.id);
-            const blocked = !checked && !!quota && quota.status !== 'available';
+            const blocked = !checked && !!quota && quota.status !== 'available' && !ownIds.has(option.id);
             return (
               <Fragment key={option.id}>
               <label className={`choice${checked ? ' on' : ''}${blocked ? ' off' : ''}`}>
@@ -658,12 +912,19 @@ function FeeBar({ fees, error, note, children }: { fees: { total: number; subsid
   );
 }
 
-function Done({ registration: r, session, fields, paymentInstructions, slug: slug, onCancel }: { registration: Registration; paymentInstructions: string | null; slug: string; session?: SessionAvailability; fields: Field[]; onCancel: () => Promise<void> }) {
+function Done({ registration: r, session, fields, paymentInstructions, slug: slug, onCancel, notice, modifyUntil, onModify }: { registration: Registration; paymentInstructions: string | null; slug: string; session?: SessionAvailability; fields: Field[]; onCancel: () => Promise<void>; notice: string | null; modifyUntil: string | null; onModify: () => Promise<void> }) {
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
   const requested = r.status === 'cancel_requested';
+  const modify = async () => {
+    setStarting(true); setError(null);
+    await onModify().catch((e) => setError(errorText(e)));
+    setStarting(false);
+  };
   return (
     <main className="page">
+      {notice && <p className="notice" role="status">{notice}</p>}
       <section className="block done">
         <h2>{requested ? t.cancelRequestedTitle : t.doneTitle}</h2>
         {requested && <p>{t.cancelRequestedHint}</p>}
@@ -699,6 +960,12 @@ function Done({ registration: r, session, fields, paymentInstructions, slug: slu
       {!requested && (
         <section className="block">
           {error && <p className="error" role="alert">{error}</p>}
+          {modifyUntil && !confirming && (
+            <>
+              <p className="muted">{t.modify.until(modifyUntil)}</p>
+              <button type="button" className="primary wide" disabled={starting} onClick={modify}>{t.modify.action}</button>
+            </>
+          )}
           {confirming ? (
             <>
               <p>{t.cancelWarning}</p>

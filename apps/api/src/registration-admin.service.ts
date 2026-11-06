@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import type { FeeAdjustInput, ReassignInput } from '@bigtours/shared';
+import type { AgencyModifyRequest, FeeAdjustInput, ReassignInput } from '@bigtours/shared';
 import type { AgencyUserContext } from './agency-admin.service.ts';
 import { DatabaseService, type Tx } from './database.service.ts';
 import { EncryptionService } from './encryption.service.ts';
@@ -103,7 +103,7 @@ export class RegistrationAdminService {
       if (q.status && ['confirmed', 'cancel_requested', 'cancelled'].includes(q.status)) add((n) => `r.status = $${n}`, q.status);
       else where.push(`r.status <> 'cancelled'`);
       const { rows } = await tx.query(
-        `SELECT r.id, r.status, r.total_amount, r.subsidy_amount, r.self_pay_amount, r.payment_status, r.submitted_at,
+        `SELECT r.id, r.status, r.total_amount, r.subsidy_amount, r.self_pay_amount, r.payment_status, r.paid_amount, r.submitted_at,
                 m.name AS employee_name, m.employee_no, s.name AS session_name,
                 (SELECT count(*)::int FROM travelers x WHERE x.registration_id = r.id) AS traveler_count,
                 count(*) OVER()::int AS total_count
@@ -132,6 +132,7 @@ export class RegistrationAdminService {
           subsidyAmount: r.subsidy_amount,
           selfPayAmount: r.self_pay_amount,
           paymentStatus: r.payment_status,
+          paymentDiff: r.payment_status === 'paid' && r.paid_amount !== null ? r.self_pay_amount - r.paid_amount : 0,
           status: r.status,
           submittedAt: r.submitted_at,
         })),
@@ -175,7 +176,7 @@ export class RegistrationAdminService {
         [registrationId],
       );
       const { rows: revisions } = await tx.query(
-        `SELECT v.created_at, v.actor_type, v.changed_fields, v.summary,
+        `SELECT v.revision_no, v.after_encrypted IS NOT NULL AND v.before_encrypted IS NOT NULL AS has_content, v.created_at, v.actor_type, v.changed_fields, v.summary,
                 CASE v.actor_type
                   WHEN 'employee' THEN (SELECT name FROM event_employees e WHERE e.id = v.actor_id)
                   WHEN 'agency_user' THEN (SELECT name FROM agency_users u WHERE u.id = v.actor_id)
@@ -194,6 +195,8 @@ export class RegistrationAdminService {
         subsidyApplied: Math.min(r.total_amount, r.subsidy_amount),
         selfPayAmount: r.self_pay_amount,
         paymentStatus: r.payment_status,
+        paidAmount: r.paid_amount,
+        paymentDiff: r.payment_status === 'paid' && r.paid_amount !== null ? r.self_pay_amount - r.paid_amount : 0,
         submittedAt: r.submitted_at,
         cancelRequestedAt: r.cancel_requested_at,
         cancelledAt: r.cancelled_at,
@@ -216,6 +219,8 @@ export class RegistrationAdminService {
         })),
         coworkers: coworkers.map((c) => ({ requestedRoomNo: c.requested_room_no, name: c.preferred_coworker_name })),
         revisions: revisions.map((v) => ({
+          no: v.revision_no,
+          hasContent: v.has_content,
           at: v.created_at,
           actorName: v.actor_name,
           actorType: v.actor_type,
@@ -223,6 +228,30 @@ export class RegistrationAdminService {
         })),
       };
     });
+  }
+
+  /** 修改前後的內容：敏感欄位在快照裡就只有遮罩。 */
+  revision(ctx: AgencyUserContext, eventId: string, registrationId: string, no: number) {
+    if (!UUID.test(registrationId) || !Number.isInteger(no)) throw new DomainError('NOT_FOUND');
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      const { rows } = await tx.query(
+        `SELECT v.before_encrypted, v.after_encrypted FROM registration_revisions v JOIN registrations r ON r.id = v.registration_id
+          WHERE v.registration_id = $1 AND r.event_id = $2 AND v.revision_no = $3 AND v.before_encrypted IS NOT NULL`,
+        [registrationId, eventId, no],
+      );
+      if (!rows[0]) throw new DomainError('NOT_FOUND');
+      return { before: this.encryption.decryptJson(rows[0].before_encrypted), after: this.encryption.decryptJson(rows[0].after_encrypted) };
+    });
+  }
+
+  editData(ctx: AgencyUserContext, eventId: string, registrationId: string) {
+    if (!UUID.test(registrationId)) throw new DomainError('NOT_FOUND');
+    return this.registrations.editData(ctx.agencyId, eventId, registrationId);
+  }
+
+  modify(ctx: AgencyUserContext, eventId: string, registrationId: string, input: AgencyModifyRequest) {
+    if (!UUID.test(registrationId)) throw new DomainError('NOT_FOUND');
+    return this.registrations.modifyByAgency(ctx.agencyId, eventId, registrationId, ctx.user.id, input);
   }
 
   /** 完整個資：只有管理員看得到，每次都留下紀錄。 */
@@ -245,7 +274,8 @@ export class RegistrationAdminService {
       const r = await this.lockRegistration(tx, eventId, registrationId);
       if (r.self_pay_amount === 0) throw new DomainError('PAYMENT_NOT_REQUIRED');
       if (r.payment_status === to) return;
-      await tx.query(`UPDATE registrations SET payment_status = $2, updated_at = now() WHERE id = $1`, [registrationId, to]);
+      // 記下已付金額，之後費用變動才知道差額。
+      await tx.query(`UPDATE registrations SET payment_status = $2, paid_amount = $3, updated_at = now() WHERE id = $1`, [registrationId, to, to === 'paid' ? r.self_pay_amount : null]);
       await addRevision(tx, ctx.agencyId, registrationId, { type: 'agency_user', id: ctx.user.id }, { action: 'payment', from: r.payment_status, to });
     });
   }
