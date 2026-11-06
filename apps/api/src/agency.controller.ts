@@ -7,6 +7,7 @@ import { DomainError } from './errors.ts';
 import { EmailAdminService } from './email-admin.service.ts';
 import { RegistrationAdminService } from './registration-admin.service.ts';
 import { RoomService } from './rooms.service.ts';
+import { DataLogService, type DataLogQuery } from './data-log.service.ts';
 import { ExportService } from './export.service.ts';
 import { RosterService } from './roster.service.ts';
 import { assertSameOrigin, cookieValue, requestHost, sendImage, sendPdf, sendXlsx, type RequestHeaders } from './http.ts';
@@ -34,6 +35,7 @@ export class AgencyController {
     @Inject(RegistrationAdminService) private readonly regs: RegistrationAdminService,
     @Inject(EmailAdminService) private readonly emails: EmailAdminService,
     @Inject(RoomService) private readonly rooms: RoomService,
+    @Inject(DataLogService) private readonly dataLog: DataLogService,
     @Inject(ExportService) private readonly exports: ExportService,
   ) {}
 
@@ -95,6 +97,11 @@ export class AgencyController {
   @Get('events/:eventId')
   async event(@Headers() h: RequestHeaders, @Param('eventId') eventId: string) {
     return this.admin.getEvent(await this.ctx(h), eventId);
+  }
+
+  @Get('data-log')
+  async dataLogList(@Headers() h: RequestHeaders, @Query() query: DataLogQuery) {
+    return this.dataLog.list(await this.allowed(h, 'viewSensitiveData'), query);
   }
 
   @Get('quota')

@@ -1902,3 +1902,67 @@ describe('資料匯出', () => {
     await expect(app.get(StorageService).get(key)).rejects.toThrow();
   });
 });
+
+describe('個資紀錄', () => {
+  const root = (a: Ag) => (p: string) => request(app.getHttpServer()).get(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie);
+  const setup = async (role = 'admin') => {
+    const a = await makeAgency(role);
+    const session = (await q1(`INSERT INTO event_sessions (agency_id, event_id, name, capacity) VALUES ($1, $2, 'A 梯', 10) RETURNING id`, [a.agencyId, a.eventId])).id as string;
+    const type = (await q1(`INSERT INTO traveler_types (agency_id, event_id, name, base_price, is_employee_self) VALUES ($1, $2, '本人', 100, true) RETURNING id`, [a.agencyId, a.eventId])).id as string;
+    await admin.query(`INSERT INTO event_fields (agency_id, event_id, field_key, label, field_type, is_sensitive) VALUES ($1, $2, 'nid', '身分證字號', 'text', true)`, [a.agencyId, a.eventId]);
+    const emp = (await q1(`INSERT INTO event_employees (agency_id, event_id, employee_no, name) VALUES ($1, $2, 'E7', '王小明') RETURNING id`, [a.agencyId, a.eventId])).id;
+    const reg = (await q1(`INSERT INTO registrations (agency_id, event_id, session_id, event_employee_id, total_amount, subsidy_amount, payment_status, terms_version_accepted, terms_accepted_at) VALUES ($1, $2, $3, $4, 100, 0, 'unpaid', 1, now()) RETURNING id`, [a.agencyId, a.eventId, session, emp])).id as string;
+    await admin.query(`INSERT INTO travelers (agency_id, registration_id, traveler_type_id, is_employee_self, name, base_price_snapshot, sensitive_values_encrypted) VALUES ($1, $2, $3, true, '王小明', 100, $4)`, [a.agencyId, reg, type, app.get(EncryptionService).encryptJson({ nid: 'A123456789' })]);
+    return { a, reg, session };
+  };
+
+  it('查看完整個資與匯出都會列出，內容不含個資；可篩選', async () => {
+    const c = await setup();
+    await api(c.a).post(`/registrations/${c.reg}/sensitive`, {}).expect(200);
+    const { id } = (await api(c.a).post('/exports', { name: '保險名單', scope: 'travelers', sessionId: c.session, columns: ['traveler_name', 'field:nid'] }).expect(201)).body;
+    for (let i = 0; i < 100; i++) {
+      if ((await api(c.a).get('/exports').expect(200)).body.jobs.find((j: any) => j.id === id).status === 'completed') break;
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    await api(c.a).get(`/exports/${id}/download`).expect(200);
+
+    const log = (await root(c.a)('/data-log').expect(200)).body;
+    expect(log.rows.map((r: any) => r.action)).toEqual(['export_sensitive_download', 'export_sensitive', 'registration.sensitive_viewed']);
+    expect(JSON.stringify(log)).not.toContain('A123456789');
+    expect(log.rows[1]).toMatchObject({ name: '保險名單', sessionName: 'A 梯', rows: 1, fields: ['身分證字號'], eventName: expect.any(String), actorName: expect.any(String) });
+    expect(log.rows[2]).toMatchObject({ employeeName: '王小明', employeeNo: 'E7', travelerCount: 1, fields: ['身分證字號'] });
+    expect(log.actors).toHaveLength(1);
+
+    const only = (await root(c.a)('/data-log?action=registration.sensitive_viewed').expect(200)).body.rows;
+    expect(only).toHaveLength(1);
+    expect((await root(c.a)(`/data-log?event=${randomUUID()}`).expect(200)).body.rows).toEqual([]);
+    expect((await root(c.a)(`/data-log?actor=${randomUUID()}`).expect(200)).body.rows).toEqual([]);
+
+    await admin.query(`UPDATE audit_logs SET created_at = now() - interval '40 days' WHERE agency_id = $1 AND action = 'export_sensitive'`, [c.a.agencyId]);
+    expect((await root(c.a)('/data-log').expect(200)).body.rows).toHaveLength(2);
+    expect((await root(c.a)('/data-log?days=90').expect(200)).body.rows).toHaveLength(3);
+    expect((await root(c.a)('/data-log?days=all').expect(200)).body.rows).toHaveLength(3);
+  });
+
+  it('只有管理員能看，別家旅行社的紀錄看不到，一般操作不會列入', async () => {
+    const ops = await setup('operations');
+    await root(ops.a)('/data-log').expect(403);
+    const c = await setup();
+    const other = await setup();
+    await api(c.a).post(`/registrations/${c.reg}/sensitive`, {}).expect(200);
+    expect((await root(other.a)('/data-log').expect(200)).body.rows).toEqual([]);
+    await admin.query(`INSERT INTO audit_logs (agency_id, actor_type, action) VALUES ($1, 'system', 'something_else')`, [c.a.agencyId]);
+    expect((await root(c.a)('/data-log').expect(200)).body.rows).toHaveLength(1);
+  });
+
+  it('超過一頁時可以載入更多', async () => {
+    const c = await setup();
+    for (let i = 0; i < 51; i++) await admin.query(`INSERT INTO audit_logs (agency_id, actor_type, action, target_type, target_id, metadata) VALUES ($1, 'agency_user', 'export_sensitive', 'event', $2, $3)`, [c.a.agencyId, c.a.eventId, JSON.stringify({ name: `第${i}`, rows: 1, fields: [] })]);
+    const first = (await root(c.a)('/data-log').expect(200)).body;
+    expect(first.rows).toHaveLength(50);
+    expect(first.hasMore).toBe(true);
+    const next = (await root(c.a)('/data-log?offset=50').expect(200)).body;
+    expect(next.rows).toHaveLength(1);
+    expect(next.hasMore).toBe(false);
+  });
+});

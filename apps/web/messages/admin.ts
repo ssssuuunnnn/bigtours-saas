@@ -392,6 +392,23 @@ export const a = {
     }
   },
   systemActor: '系統',
+  // 個資紀錄
+  dataLogHint: '誰在什麼時候查看或匯出了敏感個資。只有管理員能看到這一頁。',
+  dataLogEvent: '活動',
+  dataLogEventAll: '所有活動',
+  dataLogAction: '動作',
+  dataLogActionAll: '所有動作',
+  dataLogActions: { 'registration.sensitive_viewed': '查看完整個資', export_sensitive: '匯出個資', export_sensitive_download: '下載個資檔案' } as Record<string, string>,
+  dataLogActor: '人員',
+  dataLogActorAll: '所有人員',
+  dataLogPeriod: '期間',
+  dataLogPeriods: { '30': '近 30 天', '90': '近 90 天', all: '全部' } as Record<string, string>,
+  dataLogCols: { at: '時間', actor: '人員', action: '動作', event: '活動', target: '對象與範圍', fields: '欄位' },
+  dataLogTargetRegistration: (name: string, no: string, n: number) => `${name}（${no}）的報名，${n} 位旅客`,
+  dataLogTargetExport: (name: string, session: string | null, rows: number | null) => `${name}，${session ?? '所有梯次'}${rows === null ? '' : ` ${rows} 筆`}`,
+  dataLogEmpty: '這段期間沒有紀錄。',
+  dataLogMore: '載入更多',
+  dataLogFoot: '紀錄由系統自動留下，不能修改或刪除，也不會顯示個資內容本身。',
   // 資料匯出
   exportHint: '選擇範本與欄位，產生後可在右側下載。匯出範本由貴社所有活動共用；檔案保留 7 天後自動刪除。',
   exportHintLimited: '你可以匯出不含敏感個資的資料，產生後可在右側下載。檔案保留 7 天後自動刪除。',
