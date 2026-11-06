@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import ExcelJS from 'exceljs';
 import { hashPassword, generateToken, hashToken } from '@bigtours/shared/crypto';
 import pg from 'pg';
 import request from 'supertest';
@@ -8,8 +9,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.ts';
 import { DatabaseService } from '../src/database.service.ts';
 import { EncryptionService } from '../src/encryption.service.ts';
+import { ExportService } from '../src/export.service.ts';
 import { RegistrationService } from '../src/registration.service.ts';
 import { MailService } from '../src/mail.service.ts';
+import { StorageService } from '../src/storage.service.ts';
 import { composeMail, NotificationService } from '../src/notification.service.ts';
 
 const PASSWORD = 'abcd1234';
@@ -1738,5 +1741,164 @@ describe('分房', () => {
     await api(c.a).put('/rooms/assignments', { sessionId: other.id, roomId: free.id, travelerIds: [p.ids[0]] }).expect(404);
     const stranger = await makeAgency('admin');
     await request(app.getHttpServer()).post(`/api/v1/agency/events/${c.a.eventId}/rooms/draft`).set('x-forwarded-host', stranger.host).set('cookie', stranger.cookie).send({ sessionId: c.s }).expect(404);
+  });
+});
+
+describe('資料匯出', () => {
+  const loginAs = async (a: Ag, role: string) => {
+    const user = (await q1(`INSERT INTO agency_users (agency_id, email, password_hash, name, role) VALUES ($1, $2, $3, '第二人', $4) RETURNING id`, [a.agencyId, `${role}@example.com`, hash, role])).id;
+    const token = generateToken();
+    await admin.query(`INSERT INTO agency_user_sessions (agency_id, agency_user_id, token_hash, expires_at) VALUES ($1, $2, $3, now() + interval '1 hour')`, [a.agencyId, user, hashToken(process.env.TOKEN_HASH_KEY!, token)]);
+    return { cookie: `bt_agency_session=${token}` };
+  };
+  const ENC = () => app.get(EncryptionService);
+  const setup = async (role = 'admin') => {
+    const a = await makeAgency(role);
+    const s = (await q1(`INSERT INTO event_sessions (agency_id, event_id, name, capacity, sort_order, departs_on) VALUES ($1, $2, 'A 梯', 50, 0, '2027-03-01') RETURNING id`, [a.agencyId, a.eventId])).id as string;
+    const s2 = (await q1(`INSERT INTO event_sessions (agency_id, event_id, name, capacity, sort_order) VALUES ($1, $2, 'B 梯', 50, 1) RETURNING id`, [a.agencyId, a.eventId])).id as string;
+    const room = (await q1(`INSERT INTO session_room_types (agency_id, session_id, name, capacity, bed_quota) VALUES ($1, $2, '二人房', 2, 50) RETURNING id`, [a.agencyId, s])).id as string;
+    const type = (await q1(`INSERT INTO traveler_types (agency_id, event_id, name, base_price, is_employee_self) VALUES ($1, $2, '本人', 10000, true) RETURNING id`, [a.agencyId, a.eventId])).id as string;
+    const group = (await q1(`INSERT INTO option_groups (agency_id, event_id, name, max_select) VALUES ($1, $2, '第二天', 1) RETURNING id`, [a.agencyId, a.eventId])).id as string;
+    const option = (await q1(`INSERT INTO options (agency_id, group_id, name, price) VALUES ($1, $2, '水族館', 500) RETURNING id`, [a.agencyId, group])).id as string;
+    await admin.query(`INSERT INTO event_fields (agency_id, event_id, field_key, label, field_type, is_sensitive, sort_order) VALUES ($1, $2, 'nid', '身分證字號', 'text', true, 0), ($1, $2, 'diet', '飲食需求', 'text', false, 1), ($1, $2, 'birth', '生日', 'date', false, 2)`, [a.agencyId, a.eventId]);
+    const book = async (session: string, no: string, name: string, status = 'confirmed') => {
+      const emp = (await q1(`INSERT INTO event_employees (agency_id, event_id, employee_no, name, department) VALUES ($1, $2, $3, $4, '資訊部') RETURNING id`, [a.agencyId, a.eventId, no, name])).id;
+      const reg = (await q1(`INSERT INTO registrations (agency_id, event_id, session_id, event_employee_id, total_amount, subsidy_amount, payment_status, terms_version_accepted, terms_accepted_at, status) VALUES ($1, $2, $3, $4, 10500, 3000, 'unpaid', 1, now(), $5) RETURNING id`, [a.agencyId, a.eventId, session, emp, status])).id as string;
+      const t = (await q1(`INSERT INTO travelers (agency_id, registration_id, traveler_type_id, is_employee_self, name, base_price_snapshot, field_values, sensitive_values_encrypted, sensitive_masks, session_room_type_id) VALUES ($1, $2, $3, true, $4, 10000, $5, $6, $7, $8) RETURNING id`,
+        [a.agencyId, reg, type, name, JSON.stringify({ diet: '素食' }), ENC().encryptJson({ nid: '0123456789' }), JSON.stringify({ nid: '01*******9' }), session === s ? room : null])).id as string;
+      await admin.query(`INSERT INTO traveler_options (agency_id, traveler_id, option_id, price_snapshot) VALUES ($1, $2, $3, 500)`, [a.agencyId, t, option]);
+      return { reg, t };
+    };
+    return { a, s, s2, room, book };
+  };
+  const run = async (a: Ag, body: object) => {
+    const { id } = (await api(a).post('/exports', body).expect(201)).body;
+    let job: any;
+    for (let i = 0; i < 100; i++) {
+      job = (await api(a).get('/exports').expect(200)).body.jobs.find((j: any) => j.id === id);
+      if (job.status === 'completed' || job.status === 'failed') break;
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    return job;
+  };
+  const read = async (a: Ag, id: string) => {
+    const res = await api(a).get(`/exports/${id}/download`).buffer(true).parse((r, cb) => { const c: Buffer[] = []; r.on('data', (d: Buffer) => c.push(d)); r.on('end', () => cb(null, Buffer.concat(c))); }).expect(200);
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.load(res.body as never);
+    const sheet = book.worksheets[0]!;
+    const rows: unknown[][] = [];
+    sheet.eachRow((row) => rows.push((row.values as unknown[]).slice(1)));
+    return { rows, res };
+  };
+
+  it('內建四種範本，範本欄位依權限；旅客總表每位旅客一列，已取消不列入', async () => {
+    const c = await setup();
+    await c.book(c.s, 'E1', '王小明');
+    await c.book(c.s, 'E2', '已取消', 'cancelled');
+    const view = (await api(c.a).get('/exports').expect(200)).body;
+    expect(view.templates.map((t: any) => t.name)).toEqual(['旅客總表', '分房表', '保險名單', '費用報表']);
+    expect(view.canExportSensitive).toBe(true);
+    const all = view.templates[0];
+    expect(all.columns).toContain('field:diet');
+    expect(all.columns).not.toContain('field:nid');
+    expect(view.templates[2].columns).toContain('field:nid');
+    expect(view.templates[2].columns).toContain('field:birth');
+    expect(view.templates[2].columns).not.toContain('field:diet');
+
+    const job = await run(c.a, { name: all.name, scope: all.scope, sessionId: null, columns: all.columns });
+    expect(job).toMatchObject({ status: 'completed', rowCount: 1, containsSensitive: false, createdByName: expect.any(String) });
+    const { rows, res } = await read(c.a, job.id);
+    expect(res.headers['content-disposition']).toContain("filename*=UTF-8''");
+    expect(rows[0]).toContain('旅客姓名');
+    expect(rows[1]).toContain('王小明');
+    expect(rows[1]).toContain('素食');
+    expect(rows[1]).toContain('水族館');
+    expect(rows[1]).toContain(10500);
+  });
+
+  it('含個資的匯出：解密寫入、保留開頭的 0、留下產生與下載紀錄；未選時不解密', async () => {
+    const c = await setup();
+    await c.book(c.s, 'E1', '王小明');
+    const job = await run(c.a, { name: '保險名單', scope: 'travelers', sessionId: null, columns: ['traveler_name', 'field:nid'] });
+    expect(job.containsSensitive).toBe(true);
+    const { rows } = await read(c.a, job.id);
+    expect(rows[1]).toEqual(['王小明', '0123456789']);
+    const logs = await admin.query(`SELECT action, metadata FROM audit_logs WHERE agency_id = $1 AND action LIKE 'export_sensitive%' ORDER BY id`, [c.a.agencyId]);
+    expect(logs.rows.map((r) => r.action)).toEqual(['export_sensitive', 'export_sensitive_download']);
+    expect(logs.rows[0].metadata).toMatchObject({ name: '保險名單', rows: 1, fields: ['身分證字號'] });
+    expect(JSON.stringify(logs.rows)).not.toContain('0123456789');
+
+    const plain = await run(c.a, { name: '不含', scope: 'travelers', sessionId: null, columns: ['traveler_name', 'field:diet'] });
+    expect(plain.containsSensitive).toBe(false);
+    expect(JSON.stringify((await read(c.a, plain.id)).rows)).not.toContain('0123456789');
+  });
+
+  it('沒有權限的人不能選敏感欄位，看不到別人的匯出，也下載不了', async () => {
+    const c = await setup('admin');
+    await c.book(c.s, 'E1', '王小明');
+    const secret = await run(c.a, { name: '保險名單', scope: 'travelers', sessionId: null, columns: ['field:nid'] });
+    const ops = { ...c.a, ...(await loginAs(c.a, 'operations')) };
+    const view = (await api(ops).get('/exports').expect(200)).body;
+    expect(view.canExportSensitive).toBe(false);
+    expect(view.catalog.travelers.map((x: any) => x.key)).not.toContain('field:nid');
+    expect(view.jobs).toEqual([]);
+    expect((await api(ops).post('/exports', { name: 'x', scope: 'travelers', sessionId: null, columns: ['field:nid'] }).expect(403)).body.code).toBe('FORBIDDEN');
+    await api(ops).post('/export-templates', { name: 'x', scope: 'travelers', columns: ['field:nid'] }).expect(403);
+    await api(ops).get(`/exports/${secret.id}/download`).expect(404);
+
+    const own = await run(ops, { name: '費用', scope: 'registrations', sessionId: null, columns: ['employee_no', 'total'] });
+    expect(own.status).toBe('completed');
+    await read(ops, own.id);
+    expect((await api(c.a).get('/exports').expect(200)).body.jobs.map((j: any) => j.id)).toContain(own.id);
+
+    const stranger = await makeAgency('admin');
+    await request(app.getHttpServer()).get(`/api/v1/agency/events/${c.a.eventId}/exports/${own.id}/download`).set('x-forwarded-host', stranger.host).set('cookie', stranger.cookie).expect(404);
+  });
+
+  it('費用報表每筆報名一列，可篩梯次；分房表依房號排並列出同房', async () => {
+    const c = await setup();
+    const b1 = await c.book(c.s, 'E2', '乙');
+    const b2 = await c.book(c.s, 'E1', '甲');
+    await c.book(c.s2, 'E3', '丙');
+    await admin.query(`UPDATE registrations SET payment_status = 'paid', paid_amount = 7000 WHERE id = $1`, [b1.reg]);
+    const fee = await run(c.a, { name: '費用報表', scope: 'registrations', sessionId: c.s, columns: ['employee_no', 'total', 'subsidy', 'self_pay', 'payment_status', 'payment_diff'] });
+    expect(fee.rowCount).toBe(2);
+    const { rows } = await read(c.a, fee.id);
+    expect(rows[1]).toEqual(['E1', 10500, 3000, 7500, '未付', '']);
+    expect(rows[2]).toEqual(['E2', 10500, 3000, 7500, '已付', 500]);
+
+    const r = (await q1(`INSERT INTO rooms (agency_id, session_id, label, session_room_type_id, capacity) VALUES ($1, $2, 'A-001', $3, 2) RETURNING id`, [c.a.agencyId, c.s, c.room])).id;
+    for (const t of [b1.t, b2.t]) await admin.query(`INSERT INTO room_assignments (traveler_id, agency_id, room_id) VALUES ($1, $2, $3)`, [t, c.a.agencyId, r]);
+    const rooms = await run(c.a, { name: '分房表', scope: 'travelers', sessionId: null, columns: ['session', 'final_room', 'final_room_type', 'traveler_name', 'roommates'] });
+    const out = (await read(c.a, rooms.id)).rows;
+    expect(out[1]).toEqual(['A 梯', 'A-001', '二人房', '甲', '乙']);
+    expect(out[2]).toEqual(['A 梯', 'A-001', '二人房', '乙', '甲']);
+    expect(out[3]).toEqual(['B 梯', '', '', '丙', '']);
+  });
+
+  it('自訂範本全旅行社共用，別的活動只帶入有的欄位；不存在的欄位不能用', async () => {
+    const c = await setup();
+    const saved = (await api(c.a).post('/export-templates', { name: '航空公司名單', scope: 'travelers', columns: ['traveler_name', 'field:nid', 'group:第二天'] }).expect(201)).body;
+    expect((await api(c.a).get('/exports').expect(200)).body.templates.find((t: any) => t.id === saved.id)).toMatchObject({ builtin: false, columns: ['traveler_name', 'field:nid', 'group:第二天'] });
+    await api(c.a).post('/export-templates', { name: '航空公司名單', scope: 'travelers', columns: ['traveler_name'] }).expect(201);
+    expect((await api(c.a).get('/exports').expect(200)).body.templates.filter((t: any) => t.name === '航空公司名單')).toHaveLength(1);
+    await api(c.a).post('/exports', { name: 'x', scope: 'travelers', sessionId: null, columns: ['nope'] }).expect(422);
+    await api(c.a).post('/exports', { name: 'x', scope: 'registrations', sessionId: null, columns: ['traveler_name'] }).expect(422);
+    await api(c.a).post('/exports', { name: 'x', scope: 'travelers', sessionId: randomUUID(), columns: ['traveler_name'] }).expect(404);
+    await api(c.a).del(`/export-templates/${saved.id}`).expect(204);
+    await api(c.a).del(`/export-templates/${saved.id}`).expect(404);
+  });
+
+  it('到期的檔案會刪除，也不能再下載', async () => {
+    const c = await setup();
+    await c.book(c.s, 'E1', '王小明');
+    const job = await run(c.a, { name: '費用', scope: 'registrations', sessionId: null, columns: ['employee_no'] });
+    await read(c.a, job.id);
+    await admin.query(`UPDATE export_jobs SET expires_at = now() - interval '1 minute' WHERE id = $1`, [job.id]);
+    await api(c.a).get(`/exports/${job.id}/download`).expect(404);
+    expect((await api(c.a).get('/exports').expect(200)).body.jobs).toEqual([]);
+    const key = (await q1(`SELECT result_object_key AS k FROM export_jobs WHERE id = $1`, [job.id])).k;
+    expect(await app.get(ExportService).cleanup(c.a.agencyId)).toBe(1);
+    await expect(app.get(StorageService).get(key)).rejects.toThrow();
   });
 });

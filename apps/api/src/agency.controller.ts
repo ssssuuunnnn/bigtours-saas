@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Put, Query, Req, Res } from '@nestjs/common';
-import { assignRoomRequest, createRoomRequest, roomSessionRequest, updateRoomRequest, emailResendRequest, emailTemplateInput, notifyEmailsRequest, agencyLoginRequest, accountEmailRequest, agencyModifyRequest, companyInput, contactsRequest, createEventRequest, employeeInput, feeAdjustRequest, paymentStatusRequest, reassignRequest, rosterCopyRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
+import { exportRequest, exportTemplateInput, assignRoomRequest, createRoomRequest, roomSessionRequest, updateRoomRequest, emailResendRequest, emailTemplateInput, notifyEmailsRequest, agencyLoginRequest, accountEmailRequest, agencyModifyRequest, companyInput, contactsRequest, createEventRequest, employeeInput, feeAdjustRequest, paymentStatusRequest, reassignRequest, rosterCopyRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
 import type { Request, Response } from 'express';
 import type { ZodType } from 'zod';
 import { AgencyAdminService } from './agency-admin.service.ts';
@@ -7,8 +7,9 @@ import { DomainError } from './errors.ts';
 import { EmailAdminService } from './email-admin.service.ts';
 import { RegistrationAdminService } from './registration-admin.service.ts';
 import { RoomService } from './rooms.service.ts';
+import { ExportService } from './export.service.ts';
 import { RosterService } from './roster.service.ts';
-import { assertSameOrigin, cookieValue, requestHost, sendImage, sendPdf, type RequestHeaders } from './http.ts';
+import { assertSameOrigin, cookieValue, requestHost, sendImage, sendPdf, sendXlsx, type RequestHeaders } from './http.ts';
 
 const COOKIE = 'bt_agency_session';
 const cookieOptions = () => ({
@@ -33,6 +34,7 @@ export class AgencyController {
     @Inject(RegistrationAdminService) private readonly regs: RegistrationAdminService,
     @Inject(EmailAdminService) private readonly emails: EmailAdminService,
     @Inject(RoomService) private readonly rooms: RoomService,
+    @Inject(ExportService) private readonly exports: ExportService,
   ) {}
 
   private ctx(h: RequestHeaders) {
@@ -382,6 +384,35 @@ export class AgencyController {
   @Get('events/:eventId/registrations/:registrationId')
   async registration(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('registrationId') registrationId: string) {
     return this.regs.detail(await this.operator(h), eventId, registrationId);
+  }
+
+  // ===== 資料匯出 =====
+
+  @Get('events/:eventId/exports')
+  async exportOverview(@Headers() h: RequestHeaders, @Param('eventId') eventId: string) {
+    return this.exports.overview(await this.operator(h), eventId);
+  }
+
+  @Post('events/:eventId/exports')
+  async createExport(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    return this.exports.create(await this.operator(h), eventId, parse(exportRequest, body));
+  }
+
+  @Get('events/:eventId/exports/:jobId/download')
+  async downloadExport(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('jobId') jobId: string, @Res() res: Response) {
+    const file = await this.exports.download(await this.operator(h), eventId, jobId);
+    sendXlsx(res, file.name, file.content);
+  }
+
+  @Post('events/:eventId/export-templates')
+  async saveExportTemplate(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    return this.exports.saveTemplate(await this.operator(h), eventId, parse(exportTemplateInput, body));
+  }
+
+  @Delete('events/:eventId/export-templates/:templateId')
+  @HttpCode(204)
+  async deleteExportTemplate(@Headers() h: RequestHeaders, @Param('templateId') templateId: string) {
+    await this.exports.deleteTemplate(await this.operator(h), templateId);
   }
 
   // ===== 分房 =====

@@ -1,7 +1,7 @@
 'use client';
 
 import type { EventNavKey } from '@bigtours/shared';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, Suspense } from 'react';
 import { adminApi, type AdminEvent } from '../../../../lib/admin-api';
 import { canSeeEventSection } from '../../../../lib/admin-nav';
 import { a } from '../../../../messages/admin';
@@ -14,6 +14,7 @@ import { OverviewPanel } from './overview-panel';
 import { PaymentTermsPanel } from './payment-terms-panel';
 import { PublishPanel } from './publish-panel';
 import { EmailsPanel } from './emails-panel';
+import { ExportPanel } from './export-panel';
 import { RoomsPanel } from './rooms-panel';
 import { RegistrationsPanel } from './registrations-panel';
 import { RosterPanel } from './roster-panel';
@@ -21,7 +22,7 @@ import { SchedulePanel } from './schedule-panel';
 import { SessionsPanel } from './sessions-panel';
 import { TypesPanel } from './types-panel';
 
-const BUILT: EventNavKey[] = ['basic', 'schedule', 'sessions', 'types', 'options', 'fields', 'payment-terms', 'contacts', 'publish', 'roster', 'overview', 'registrations', 'emails', 'rooms'];
+const BUILT: EventNavKey[] = ['basic', 'schedule', 'sessions', 'types', 'options', 'fields', 'payment-terms', 'contacts', 'publish', 'roster', 'overview', 'registrations', 'emails', 'rooms', 'export'];
 
 export function EventSection({ id, section }: { id: string; section: EventNavKey }) {
   const me = useAdminMe();
@@ -51,6 +52,7 @@ export function EventSection({ id, section }: { id: string; section: EventNavKey
       {section === 'registrations' && <RegistrationsPanel event={event} />}
       {section === 'emails' && <EmailsPanel event={event} />}
       {section === 'rooms' && <RoomsPanel event={event} />}
+      {section === 'export' && <Suspense><ExportPanel event={event} /></Suspense>}
       {!BUILT.includes(section) && <p className="muted">{a.comingSoon}</p>}
     </main>
   );

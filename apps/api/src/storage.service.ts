@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -62,5 +62,9 @@ export class StorageService {
 
   get(key: string) {
     return readFile(join(this.dir, key));
+  }
+
+  delete(key: string) {
+    return rm(join(this.dir, key), { force: true });
   }
 }
