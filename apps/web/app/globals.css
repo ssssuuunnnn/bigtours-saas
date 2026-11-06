@@ -34,6 +34,13 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .masthead { background: var(--board); color: var(--board-text); padding: 24px 16px 20px; }
 .masthead > * { max-width: 600px; margin-inline: auto; }
 .agency { font-size: 14px; opacity: .75; }
+.masthead .company-brand { display: flex; align-items: center; gap: 8px; opacity: 1; font-weight: 500; }
+.masthead .company-brand img { height: 32px; max-width: 140px; object-fit: contain; background: #fff; border-radius: 4px; padding: 2px 4px; }
+.service-contacts { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.service-contacts li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center; }
+.service-contacts a { min-height: 44px; display: inline-flex; align-items: center; color: var(--brand-text); }
+.service-contacts small { grid-column: 1 / -1; }
+.admin-file-button { display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; border: 1px solid currentColor; border-radius: 4px; cursor: pointer; }
 .masthead h1 { font-size: 26px; line-height: 1.3; margin-top: 4px; text-wrap: balance; }
 .who { margin-top: 12px; font-size: 15px; display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .who span { color: var(--flap); }

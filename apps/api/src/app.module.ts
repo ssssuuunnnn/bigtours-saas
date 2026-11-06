@@ -28,6 +28,7 @@ import { StorageService } from './storage.service.ts';
 const pdfBody = raw({ type: 'application/pdf', limit: '10mb' });
 const csvBody = raw({ type: 'text/csv', limit: '5mb' });
 const imageBody = raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: '5mb' });
+const logoBody = raw({ type: ['image/png', 'image/svg+xml'], limit: '2mb' });
 
 /** 超過上限時回傳明確的錯誤代碼，而不是通用的錯誤。 */
 const parseFile = (parser: typeof pdfBody) => (req: Request, res: Response, next: NextFunction) => {
@@ -50,6 +51,7 @@ export class AppModule implements NestModule {
       { path: 'api/v1/company/events/:eventId/employees/import', method: RequestMethod.POST },
       { path: 'api/v1/company/events/:eventId/employees/import/preview', method: RequestMethod.POST },
     );
+    consumer.apply(parseFile(logoBody)).forRoutes({ path: 'api/v1/agency/companies/:companyId/logo', method: RequestMethod.PUT });
     consumer.apply(parseFile(imageBody)).forRoutes({ path: 'api/v1/agency/events/:eventId/images/:kind', method: RequestMethod.PUT }, { path: 'api/v1/agency/settings/logo', method: RequestMethod.PUT });
   }
 }

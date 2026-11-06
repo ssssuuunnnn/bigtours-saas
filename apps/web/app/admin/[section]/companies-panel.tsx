@@ -37,6 +37,7 @@ export function CompaniesPanel() {
           </table>
         </div>
       )}
+      {openId && companies?.find((c) => c.id === openId) && <CompanyBrandCard key={`brand-${openId}`} company={companies.find((c) => c.id === openId)!} onChanged={load} />}
       {openId && companies?.find((c) => c.id === openId) && <ContactsCard key={openId} company={companies.find((c) => c.id === openId)!} />}
       <form className="admin-form" onSubmit={submit}>
         <label className="field span-3"><span>{a.addCompany}</span><input type="text" required maxLength={100} value={name} onChange={(e) => setName(e.target.value)} /></label>
@@ -113,6 +114,55 @@ function ContactsCard({ company }: { company: AdminCompany }) {
         <button type="submit" className="primary" disabled={busy}>{a.contactAdd}</button>
       </form>
       <small className="muted">{a.personsHint}</small>
+    </div>
+  );
+}
+
+function CompanyBrandCard({ company, onChanged }: { company: AdminCompany; onChanged: () => Promise<unknown> | void }) {
+  const [name, setName] = useState(company.name);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true); setError(null); setNote(null);
+    try {
+      await fn();
+      await onChanged();
+      setNote(a.companySaved);
+    } catch (e) {
+      setError(adminError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const choose = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const chosen = e.target.files?.[0];
+    e.target.value = '';
+    if (!chosen) return;
+    if (chosen.size > 2 * 1024 * 1024) { setError(a.errors.FILE_TOO_LARGE ?? a.errors.fallback!); return; }
+    void run(() => adminApi.uploadCompanyLogo(company.id, chosen));
+  };
+  return (
+    <div className="admin-card">
+      <h2>{a.companyBrand(company.name)}</h2>
+      {error && <p className="error" role="alert">{error}</p>}
+      {note && <p className="admin-note" role="status">{note}</p>}
+      <div>
+        <span>{a.companyLogo}</span>
+        {company.logoUrl ? <img className="admin-settings-logo" src={company.logoUrl} alt={a.companyLogoAlt(company.name)} /> : <p className="muted">{a.companyLogoNone}</p>}
+      </div>
+      <div className="admin-file-row">
+        <label className="ghost admin-file-button">
+          {a.companyLogoChange}
+          <input className="admin-file-input" type="file" accept="image/png,image/svg+xml" aria-label={a.companyLogoChange} hidden disabled={busy} onChange={choose} />
+        </label>
+        {company.logoUrl && <button type="button" className="link" disabled={busy} onClick={() => run(() => adminApi.removeCompanyLogo(company.id))}>{a.companyLogoRemove}</button>}
+        <small className="muted">{a.companyLogoHint}</small>
+      </div>
+      <form className="admin-export-saveas" onSubmit={(e) => { e.preventDefault(); void run(() => adminApi.renameCompany(company.id, name)); }}>
+        <label className="field"><span>{a.companyName}</span><input type="text" required maxLength={100} value={name} onChange={(e) => setName(e.target.value)} /></label>
+        <button type="submit" className="primary" disabled={busy}>{a.save}</button>
+      </form>
     </div>
   );
 }

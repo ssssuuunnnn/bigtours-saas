@@ -123,7 +123,7 @@ export interface ContactValues { id: string | null; name: string; phone: string;
 export type PublishCheckKey = 'basic' | 'heroImage' | 'schedule' | 'sessions' | 'types' | 'options' | 'fields' | 'terms' | 'payment' | 'contacts' | 'roster';
 export interface PublishCheck { key: PublishCheckKey; state: 'ok' | 'warn' | 'block' | 'confirm'; data: Record<string, any> }
 export interface QuotaTier { id: string; minTravelers: number; maxTravelers: number; price: number; remaining: number }
-export interface AdminCompany { id: string; name: string; eventCount: number }
+export interface AdminCompany { id: string; name: string; eventCount: number; logoUrl: string | null }
 export interface AdminMe { agencyName: string; user: { name: string; role: string }; pinnedNavItems: EventNavKey[] }
 export interface SessionValues {
   name: string;
@@ -203,6 +203,9 @@ export const adminApi = {
   event: (id: string) => call<AdminEvent>('GET', `/events/${id}`),
   quota: () => call<QuotaTier[]>('GET', '/quota'),
   companies: () => call<AdminCompany[]>('GET', '/companies'),
+  renameCompany: (id: string, name: string) => call<void>('PATCH', `/companies/${id}`, { name }),
+  uploadCompanyLogo: (id: string, file: File) => upload<void>(`/companies/${id}/logo`, file, file.type),
+  removeCompanyLogo: (id: string) => call<void>('DELETE', `/companies/${id}/logo`),
   createCompany: (name: string) => call<AdminCompany>('POST', '/companies', { name }),
   staff: () => call<StaffMember[]>('GET', '/staff'),
   createStaff: (v: { name: string; email: string; role: string }) => call<{ id: string }>('POST', '/staff', v),

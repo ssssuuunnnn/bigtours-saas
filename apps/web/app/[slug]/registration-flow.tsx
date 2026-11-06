@@ -290,6 +290,7 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
       <div style={brand}>
         {masthead}
         <Done
+          serviceContacts={state.serviceContacts}
           paymentInstructions={state.event.paymentInstructions}
           slug={state.event.slug}
           registration={registration}
@@ -576,6 +577,7 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
       <main className="page has-bar">
         {restored && <p className="notice">{t.draftRestored}</p>}
         <Itinerary state={state} />
+        <ServiceContacts contacts={state.serviceContacts} />
         <Board sessions={availability} selected={sessionId} onSelect={(id) => {
           setSessionId(id); setError(null);
           const next = availability.find((s) => s.id === id) ?? null;
@@ -654,7 +656,10 @@ function draftBody(travelers: Traveler[], rooms: Record<number, string>) {
 function Masthead({ state, onLogout }: { state: EventState; onLogout: () => void }) {
   return (
     <header className="masthead">
-      <p className="agency">{state.agency.name}</p>
+      <p className="agency company-brand">
+        {state.company.logoUrl && <img src={state.company.logoUrl} alt="" />}
+        {state.company.name}
+      </p>
       <h1>{state.event.name}</h1>
       <p className="who">
         {t.greeting(state.employee.name)}
@@ -662,6 +667,24 @@ function Masthead({ state, onLogout }: { state: EventState; onLogout: () => void
         <button type="button" className="logout" onClick={onLogout}>{t.logout}</button>
       </p>
     </header>
+  );
+}
+
+function ServiceContacts({ contacts }: { contacts: EventState['serviceContacts'] }) {
+  if (contacts.length === 0) return null;
+  return (
+    <section className="block">
+      <h2>{t.serviceContacts}</h2>
+      <ul className="service-contacts">
+        {contacts.map((c, i) => (
+          <li key={i}>
+            <strong>{c.name}</strong>
+            <a href={`tel:${c.phone.replace(/[^\d+#]/g, '')}`}>{c.phone}</a>
+            {c.scope && <small className="muted">{c.scope}</small>}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -912,7 +935,7 @@ function FeeBar({ fees, error, note, children }: { fees: { total: number; subsid
   );
 }
 
-function Done({ registration: r, session, fields, paymentInstructions, slug: slug, onCancel, notice, modifyUntil, onModify }: { registration: Registration; paymentInstructions: string | null; slug: string; session?: SessionAvailability; fields: Field[]; onCancel: () => Promise<void>; notice: string | null; modifyUntil: string | null; onModify: () => Promise<void> }) {
+function Done({ serviceContacts, registration: r, session, fields, paymentInstructions, slug: slug, onCancel, notice, modifyUntil, onModify }: { serviceContacts: EventState['serviceContacts']; registration: Registration; paymentInstructions: string | null; slug: string; session?: SessionAvailability; fields: Field[]; onCancel: () => Promise<void>; notice: string | null; modifyUntil: string | null; onModify: () => Promise<void> }) {
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -942,6 +965,7 @@ function Done({ registration: r, session, fields, paymentInstructions, slug: slu
           <p className="preline">{paymentInstructions}</p>
         </section>
       )}
+      <ServiceContacts contacts={serviceContacts} />
       {r.travelers.map((x, i) => (
         <section className="block" key={i}>
           <h2>{x.name}<small className="muted"> {x.travelerTypeName}</small></h2>

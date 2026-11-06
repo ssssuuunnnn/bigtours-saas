@@ -25,6 +25,12 @@ export class AccountController {
     sendImage(res, file.contentType, file.content);
   }
 
+  @Get('company-logo')
+  async companyLogo(@Headers() h: RequestHeaders, @Param('slug') slug: string, @Res() res: Response) {
+    const file = await this.accounts.readCompanyLogo(requestHost(h), slug);
+    sendImage(res, file.contentType, file.content);
+  }
+
   @Get('landing')
   landing(@Headers() h: RequestHeaders, @Param('slug') slug: string) {
     return this.accounts.landing(requestHost(h), slug);

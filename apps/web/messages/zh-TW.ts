@@ -104,6 +104,7 @@ export const t = {
   optionPdfLink: '查看行程內容',
   termsLink: '查看報名與個人資料條款',
   paymentInstructions: '付款說明',
+  serviceContacts: '服務人員',
   termsRequired: '請先勾選同意條款',
   submit: '送出報名',
   submitting: '送出中',
