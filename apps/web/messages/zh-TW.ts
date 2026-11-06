@@ -111,6 +111,9 @@ export const t = {
   changeCount: '修改人數',
   increase: (name: string) => `增加${name}`,
   decrease: (name: string) => `減少${name}`,
+  finalRooms: '住宿',
+  finalRoomsPending: '旅行社尚未公布最終分房。',
+  finalRoomsNone: '旅行社公布的分房結果還沒有您的房間，請聯繫旅行社。',
   modify: {
     action: '修改報名',
     until: (d: string) => `可在 ${d} 前修改報名。開始修改後會保留名額 15 分鐘，送出前原報名都不會變更。`,

@@ -47,6 +47,7 @@ export interface Registration {
   selfPayAmount: number;
   paymentStatus: string;
   roomPreferences: RoomPreference[];
+  finalRooms: { label: string; typeName: string | null; names: string[] }[] | null;
   travelers: { id: string; travelerTypeId: string; roomTypeId: string | null; plainValues: Record<string, any>; masks: Record<string, string>; preferenceIds: Record<string, string[]>; name: string; travelerTypeName: string; basePrice: number; fieldValues: Record<string, any>; requestedRoomNo: number | null; roomType: { name: string; surcharge: number } | null; preferences: { rank: number; groupName: string; optionName: string }[]; options: { optionId: string; name: string; hasPdf: boolean; price: number }[] }[];
 }
 export interface EventState {

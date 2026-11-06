@@ -57,6 +57,12 @@ export const EMAIL_TEMPLATES: TemplateDefinition[] = [
     placeholders: [...EMPLOYEE, '截止時間'], required: [],
   },
   {
+    key: 'room_published', label: '分房結果公布', audience: 'employee',
+    subject: '【[活動名稱]】分房結果公布',
+    body: '[員工姓名] 您好：\n\n旅行社已公布「[活動名稱]」[梯次] 的分房結果：\n\n[分房內容]\n\n您也可以登入報名網站查看：\n\n[報名網站連結]',
+    placeholders: [...EMPLOYEE, '梯次', '分房內容'], required: ['分房內容'],
+  },
+  {
     key: 'reassigned', label: '行程改派通知', audience: 'employee',
     subject: '【[活動名稱]】您的自選行程已改派',
     body: '[員工姓名] 您好：\n\n因為「[改派原因]」，旅行社調整了以下旅客的自選行程：\n\n[改派內容]\n\n調整後整筆費用 [整筆費用]，您需自付 [自付金額]。已付款的差額由旅行社處理。\n\n如果不滿意改派結果，報名截止前可以登入修改，截止後請聯繫旅行社：\n\n[報名網站連結]',
