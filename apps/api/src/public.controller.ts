@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Put, Res } from '@nestjs/common';
-import { draftRequest, holdRequest, submitRequest, updateHoldRequest } from '@bigtours/shared';
+import { draftRequest, holdRequest, submitRequest, modifyHoldRequest, modifyRequest, updateHoldRequest } from '@bigtours/shared';
 import type { Response } from 'express';
 import type { ZodType } from 'zod';
 import { AccessService } from './access.service.ts';
@@ -74,6 +74,16 @@ export class PublicController {
   @Post('registrations')
   async submit(@Headers() h: Record<string, string>, @Param('slug') slug: string, @Body() body: unknown) {
     return this.registrations.submit(await this.ctx(h, slug), parse(submitRequest, body, 'INVALID_DETAILS'));
+  }
+
+  @Post('registrations/current/modification-hold')
+  async modificationHold(@Headers() h: Record<string, string>, @Param('slug') slug: string, @Body() body: unknown) {
+    return this.registrations.createModificationHold(await this.ctx(h, slug), parse(modifyHoldRequest, body, 'INVALID_SELECTION'));
+  }
+
+  @Put('registrations/current')
+  async modify(@Headers() h: Record<string, string>, @Param('slug') slug: string, @Body() body: unknown) {
+    return this.registrations.submitModification(await this.ctx(h, slug), parse(modifyRequest, body, 'INVALID_DETAILS'));
   }
 
   @Post('registrations/current/cancel-request')

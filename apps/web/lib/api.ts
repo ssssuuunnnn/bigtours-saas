@@ -24,7 +24,7 @@ export interface EventFrontImages { login: string | null; loginMobile: string | 
 export interface OptionGroup { id: string; name: string; isRequired: boolean; minSelect: number; maxSelect: number; preferenceCount: number; options: Option[] }
 export interface TravelerType { id: string; name: string; basePrice: number; isEmployeeSelf: boolean; note: string | null; occupiesBed: boolean }
 export interface Field { key: string; label: string; type: string; choices: string[] | null; isRequired: boolean; isSensitive: boolean }
-export interface Hold { id: string; sessionId: string; quantity: number; expiresAt: string }
+export interface Hold { id: string; sessionId: string; quantity: number; expiresAt: string; modifying: boolean }
 export interface Traveler {
   key: string;
   travelerTypeId: string;
@@ -42,10 +42,12 @@ export interface Registration {
   sessionId: string;
   status: string;
   totalAmount: number;
+  subsidyAmount: number;
   subsidyApplied: number;
   selfPayAmount: number;
   paymentStatus: string;
-  travelers: { name: string; travelerTypeName: string; basePrice: number; fieldValues: Record<string, any>; requestedRoomNo: number | null; roomType: { name: string; surcharge: number } | null; preferences: { rank: number; groupName: string; optionName: string }[]; options: { optionId: string; name: string; hasPdf: boolean; price: number }[] }[];
+  roomPreferences: RoomPreference[];
+  travelers: { id: string; travelerTypeId: string; roomTypeId: string | null; plainValues: Record<string, any>; masks: Record<string, string>; preferenceIds: Record<string, string[]>; name: string; travelerTypeName: string; basePrice: number; fieldValues: Record<string, any>; requestedRoomNo: number | null; roomType: { name: string; surcharge: number } | null; preferences: { rank: number; groupName: string; optionName: string }[]; options: { optionId: string; name: string; hasPdf: boolean; price: number }[] }[];
 }
 export interface EventState {
   agency: { name: string };
@@ -58,6 +60,7 @@ export interface EventState {
   hold: Hold | null;
   registration: Registration | null;
   draft: { travelers: Traveler[]; roomPreferences: RoomPreference[] } | null;
+  modificationSessionId: string | null;
   serverTime: string;
 }
 
@@ -96,6 +99,8 @@ export function createClient(slug: string) {
     releaseHold: () => call<void>('DELETE', '/holds/current'),
     saveDraft: (body: unknown) => call<void>('PUT', '/draft', body),
     submit: (body: unknown) => call<Registration>('POST', '/registrations', body),
+    modificationHold: (sessionId: string, travelers: unknown[]) => call<Hold>('POST', '/registrations/current/modification-hold', { sessionId, travelers }),
+    submitModification: (body: unknown) => call<Registration>('PUT', '/registrations/current', body),
     requestCancel: () => call<Registration>('POST', '/registrations/current/cancel-request'),
   };
 }

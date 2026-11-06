@@ -6,6 +6,7 @@ import { MailService } from './mail.service.ts';
 export type MailTemplate =
   | { key: 'account'; token: string }
   | { key: 'link_notice' }
+  | { key: 'modified'; byAgency: boolean; total: number; selfPay: number }
   | { key: 'cancel_confirmed' }
   | { key: 'cancel_rejected' }
   | { key: 'reassigned'; reason: string; changes: { traveler: string; from: string; to: string }[]; total: number; selfPay: number };
@@ -37,6 +38,17 @@ export function composeMail(event: MailEvent, employee: MailEmployee, t: MailTem
         return {
           subject: `【${event.name}】設定密碼連結已產生`,
           paragraphs: [hello, `有人為您產生了「${event.name}」的設定密碼連結，連結會由承辦人員另外提供給您，這封信不含連結。`, '如果您不知道這件事，請聯繫公司的活動窗口。'],
+        };
+      case 'modified':
+        return {
+          subject: `【${event.name}】您的報名內容已修改`,
+          paragraphs: [
+            hello,
+            t.byAgency ? `旅行社修改了您「${event.name}」的報名內容。` : `您已修改「${event.name}」的報名內容。`,
+            `修改後整筆費用 ${money(t.total)}，您需自付 ${money(t.selfPay)}。已付款的差額由旅行社處理。`,
+            '完整內容請登入報名網站查看：',
+            site,
+          ],
         };
       case 'cancel_confirmed':
         return {

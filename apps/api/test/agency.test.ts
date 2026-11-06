@@ -1344,6 +1344,78 @@ describe('報名管理、取消與改派', () => {
     await api(c.a).post('/reassign', { sessionId: c.s, optionId: src.id, reason: 'x', assignments: [{ travelerId: r1.travelerId, toOptionId: randomUUID() }] }).expect(422);
   });
 
+  describe('旅行社修改報名', () => {
+    const put = (c: Ctx, id: string, body: object) => api(c.a).put(`/registrations/${id}`, body);
+    const edit = (c: Ctx, r: { travelerId: string }, optionId: string, patch: object = {}) => ({
+      sessionId: c.s,
+      travelers: [{ key: r.travelerId, travelerTypeId: c.type, optionIds: [optionId], name: '改過的名字', fieldValues: {}, requestedRoomNo: 1 }],
+      roomPreferences: [],
+      ...patch,
+    });
+
+    it('報名截止後仍可修改，名額搬動、費用更新、已付款維持已付並顯示差額', async () => {
+      const c = await setup();
+      const o = await c.option('獨木舟', 1200, 20);
+      const o2 = await c.option('手作', 2000, 20);
+      const r = await book(c, { option: o, price: 1200, email: 'e@example.com' });
+      await admin.query(`UPDATE events SET registration_closes_at = now() - interval '1 day' WHERE id = $1`, [c.a.eventId]);
+      await api(c.a).put(`/registrations/${r.id}/payment`, { status: 'paid' }).expect(204);
+
+      const data = (await get(c.a, `/registrations/${r.id}/edit`).expect(200)).body;
+      expect(data.registration.travelers[0].id).toBe(r.travelerId);
+      expect(data.registration.totalAmount).toBe(11200);
+      expect(data.optionGroups[0].options.length).toBe(2);
+
+      mail().sent.length = 0;
+      await put(c, r.id, edit(c, r, o2.id)).expect(204);
+      expect(await soldOf(o.quota!)).toBe(0);
+      expect(await soldOf(o2.quota!)).toBe(1);
+
+      const d = (await get(c.a, `/registrations/${r.id}`).expect(200)).body;
+      expect(d).toMatchObject({ totalAmount: 12000, paymentStatus: 'paid', paidAmount: 11200, paymentDiff: 800 });
+      expect(d.travelers[0].name).toBe('改過的名字');
+      expect((await get(c.a, '/registrations').expect(200)).body.rows[0].paymentDiff).toBe(800);
+      await until(() => mail().sent.some((m) => m.subject.includes('報名內容已修改')));
+
+      const rev = d.revisions[0];
+      expect(rev).toMatchObject({ hasContent: true, actorType: 'agency_user', summary: { action: 'modified', from: 11200, to: 12000 } });
+      const content = (await get(c.a, `/registrations/${r.id}/revisions/${rev.no}`).expect(200)).body;
+      expect(content.before.travelers[0]).toMatchObject({ name: '員工' + r.no.slice(1), options: [{ name: '獨木舟', price: 1200 }] });
+      expect(content.after.travelers[0]).toMatchObject({ name: '改過的名字', options: [{ name: '手作', price: 2000 }] });
+      expect(content.after.total).toBe(12000);
+    });
+
+    it('紀錄裡的敏感欄位只有遮罩；留空保留原值', async () => {
+      const c = await setup();
+      const o = await c.option('獨木舟', 0, null);
+      await admin.query(`INSERT INTO event_fields (agency_id, event_id, field_key, label, field_type, is_required, is_sensitive) VALUES ($1, $2, 'nid', '身分證', 'text', true, true)`, [c.a.agencyId, c.a.eventId]);
+      const r = await book(c, { option: o, price: 0 });
+      await put(c, r.id, edit(c, r, o.id)).expect(204);
+      const d = (await get(c.a, `/registrations/${r.id}`).expect(200)).body;
+      const res = await get(c.a, `/registrations/${r.id}/revisions/${d.revisions[0].no}`).expect(200);
+      expect(JSON.stringify(res.body)).not.toContain('A123456789');
+      expect(res.body.after.travelers[0].fields).toEqual([{ label: '身分證', value: 'A1*******9' }]);
+      const row = await q1(`SELECT sensitive_values_encrypted AS e FROM travelers WHERE id = $1`, [r.travelerId]);
+      expect(ENC().decryptJson(row.e)).toEqual({ nid: 'A123456789' });
+    });
+
+    it('名額不足、已取消、別家旅行社都不能修改；紀錄版本不存在回 404', async () => {
+      const c = await setup();
+      const o = await c.option('獨木舟', 0, 20);
+      const full = await c.option('滿了', 0, 0);
+      const r = await book(c, { option: o, price: 0 });
+      expect((await put(c, r.id, edit(c, r, full.id)).expect(409)).body.code).toBe('OPTION_FULL');
+      expect(await soldOf(o.quota!)).toBe(1);
+      await get(c.a, `/registrations/${r.id}/revisions/99`).expect(404);
+
+      const other = await makeAgency('admin');
+      await request(app.getHttpServer()).put(`/api/v1/agency/events/${c.a.eventId}/registrations/${r.id}`).set('x-forwarded-host', other.host).set('cookie', other.cookie).send(edit(c, r, o.id)).expect(404);
+
+      await admin.query(`UPDATE registrations SET status = 'cancelled' WHERE id = $1`, [r.id]);
+      expect((await put(c, r.id, edit(c, r, o.id)).expect(409)).body.code).toBe('NOT_MODIFIABLE');
+    });
+  });
+
   it('員工申請取消會留在修改紀錄', async () => {
     const c = await setup();
     const o = await c.option('X', 0, null);

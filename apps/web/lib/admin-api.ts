@@ -28,7 +28,7 @@ export interface EventOverview {
 }
 export interface RegistrationRow {
   id: string; employeeName: string; employeeNo: string; sessionName: string; travelerCount: number;
-  totalAmount: number; subsidyAmount: number; selfPayAmount: number; paymentStatus: string; status: string; submittedAt: string;
+  totalAmount: number; subsidyAmount: number; selfPayAmount: number; paymentStatus: string; paymentDiff: number; status: string; submittedAt: string;
 }
 export interface RegistrationPage { rows: RegistrationRow[]; total: number; page: number; pageSize: number; registrations: number; travelers: number; sessions: { id: string; name: string }[] }
 export type RevisionSummary =
@@ -38,7 +38,7 @@ export type RevisionSummary =
   | { action: 'reassigned'; from: number; to: number; reason: string; changes: { traveler: string; from: string; to: string }[] };
 export interface RegistrationDetail {
   id: string; employeeName: string; employeeNo: string; sessionName: string; status: string;
-  totalAmount: number; subsidyAmount: number; subsidyApplied: number; selfPayAmount: number; paymentStatus: string;
+  totalAmount: number; subsidyAmount: number; subsidyApplied: number; selfPayAmount: number; paymentStatus: string; paidAmount: number | null; paymentDiff: number;
   submittedAt: string; cancelRequestedAt: string | null; cancelledAt: string | null; canViewSensitive: boolean;
   travelers: {
     id: string; name: string; typeName: string; isEmployeeSelf: boolean; basePrice: number; requestedRoomNo: number | null; fee: number;
@@ -48,7 +48,23 @@ export interface RegistrationDetail {
     preferences: { rank: number; optionName: string }[];
   }[];
   coworkers: { requestedRoomNo: number; name: string }[];
-  revisions: { at: string; actorName: string | null; actorType: string; summary: RevisionSummary }[];
+  revisions: { no: number; hasContent: boolean; at: string; actorName: string | null; actorType: string; summary: RevisionSummary }[];
+}
+export interface RevisionSnapshot {
+  session: string;
+  total: number;
+  travelers: { id: string; name: string; type: string; basePrice: number; roomType: string | null; roomSurcharge: number; fields: { label: string; value: string }[]; options: { name: string; price: number }[]; preferences: string[] }[];
+}
+export interface EditableTraveler {
+  id: string; travelerTypeId: string; roomTypeId: string | null; plainValues: Record<string, any>; masks: Record<string, string>; preferenceIds: Record<string, string[]>;
+  name: string; basePrice: number; requestedRoomNo: number | null; roomType: { name: string; surcharge: number } | null; options: { optionId: string; name: string; price: number }[];
+}
+export interface RegistrationEditData {
+  travelerTypes: { id: string; name: string; basePrice: number; isEmployeeSelf: boolean; occupiesBed: boolean }[];
+  optionGroups: { id: string; name: string; minSelect: number; maxSelect: number; isRequired: boolean; preferenceCount: number; options: { id: string; name: string; price: number }[] }[];
+  fields: { key: string; label: string; type: string; choices: string[] | null; isRequired: boolean; isSensitive: boolean }[];
+  availability: { id: string; name: string; remaining: number; roomTypes: { id: string; name: string; capacity: number; surcharge: number; remaining: number }[] }[];
+  registration: { id: string; sessionId: string; status: string; totalAmount: number; subsidyAmount: number; paymentStatus: string; roomPreferences: { requestedRoomNo: number; preferredCoworkerName: string | null; note: string | null }[]; travelers: EditableTraveler[] };
 }
 export interface ReassignSource { sessionId: string; sessionName: string; optionId: string; optionName: string; groupName: string; travelers: number }
 export interface ReassignPlan {
@@ -153,6 +169,9 @@ export const adminApi = {
   },
   registration: (id: string, rid: string) => call<RegistrationDetail>('GET', `/events/${id}/registrations/${rid}`),
   revealSensitive: (id: string, rid: string) => call<Record<string, Record<string, unknown>>>('POST', `/events/${id}/registrations/${rid}/sensitive`, {}),
+  registrationEdit: (id: string, rid: string) => call<RegistrationEditData>('GET', `/events/${id}/registrations/${rid}/edit`),
+  modifyRegistration: (id: string, rid: string, body: unknown) => call<void>('PUT', `/events/${id}/registrations/${rid}`, body),
+  registrationRevision: (id: string, rid: string, no: number) => call<{ before: RevisionSnapshot; after: RevisionSnapshot }>('GET', `/events/${id}/registrations/${rid}/revisions/${no}`),
   setPayment: (id: string, rid: string, status: string) => call<void>('PUT', `/events/${id}/registrations/${rid}/payment`, { status }),
   adjustFee: (id: string, rid: string, totalAmount: number, reason: string) => call<void>('PUT', `/events/${id}/registrations/${rid}/fee`, { totalAmount, reason }),
   confirmCancel: (id: string, rid: string) => call<void>('POST', `/events/${id}/registrations/${rid}/cancel/confirm`, {}),

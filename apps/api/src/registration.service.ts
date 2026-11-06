@@ -6,14 +6,17 @@ import {
   seatStatus,
   type DraftRequest,
   type ErrorCode,
+  type AgencyModifyRequest,
   type HoldRequest,
+  type ModifyRequest,
   type SubmitRequest,
 } from '@bigtours/shared';
 import type { EmployeeContext } from './access.service.ts';
 import { DatabaseService, type Tx } from './database.service.ts';
 import { EncryptionService } from './encryption.service.ts';
 import { DomainError } from './errors.ts';
-import { addRevision } from './registration-log.ts';
+import { addRevision, paymentAfter } from './registration-log.ts';
+import { NotificationService, type MailEvent } from './notification.service.ts';
 
 const HOLD_MINUTES = 15;
 
@@ -39,6 +42,8 @@ interface DraftPayload extends DraftRequest {}
 /** 一筆保留需要的選項名額與房型床位。 */
 interface SeatNeeds { quotas: Map<string, number>; rooms: Map<string, number> }
 type RoomType = { id: string; surcharge: number };
+interface SelectionRules { allowDependentsOnly: boolean; dependentLimit: number | null }
+const employeeRules = (ctx: EmployeeContext): SelectionRules => ({ allowDependentsOnly: ctx.event.allowDependentsOnly, dependentLimit: ctx.employee.dependentLimit });
 
 /** 不同梯次的併發請求不會互相排隊，由唯一索引作為最後防線，並轉成一般錯誤。 */
 function rethrowUniqueViolation(constraint: string, code: ErrorCode) {
@@ -56,6 +61,7 @@ export class RegistrationService {
     @Inject(DatabaseService) private readonly db: DatabaseService,
     @Inject(EncryptionService) private readonly encryption: EncryptionService,
     @Inject(StorageService) private readonly storage: StorageService,
+    @Inject(NotificationService) private readonly notifications: NotificationService,
   ) {}
 
   // ===== 查詢 =====
@@ -86,7 +92,12 @@ export class RegistrationService {
       const hold = await this.loadActiveHold(tx, ctx.employee.id);
       const registration = await this.loadRegistration(tx, ctx.employee.id, config);
       const draft = await this.loadDraft(tx, ctx.employee.id, config);
+      // 保留逾時後重新整理，還要知道剛才改到哪個梯次。
+      const lastModification = registration && draft
+        ? await tx.query(`SELECT session_id FROM seat_holds WHERE event_employee_id = $1 AND modifies_registration_id = $2 ORDER BY created_at DESC LIMIT 1`, [ctx.employee.id, registration.id])
+        : null;
       return {
+        modificationSessionId: lastModification?.rows[0]?.session_id ?? null,
         agency: { name: ctx.agency.name },
         event: {
           slug: ctx.event.slug,
@@ -134,7 +145,7 @@ export class RegistrationService {
     this.assertOpen(ctx);
     return this.db.withTenant(ctx.agency.id, async (tx) => {
       const config = await this.loadConfig(tx, ctx.event.id);
-      this.validateSelection(ctx, config, req.travelers);
+      this.validateSelection(employeeRules(ctx), config, req.travelers);
       await this.assertNotRegistered(tx, ctx.employee.id);
 
       const needs = await this.seatNeeds(tx, config, req.sessionId, req.travelers);
@@ -167,16 +178,19 @@ export class RegistrationService {
     this.assertOpen(ctx);
     return this.db.withTenant(ctx.agency.id, async (tx) => {
       const config = await this.loadConfig(tx, ctx.event.id);
-      this.validateSelection(ctx, config, travelers);
+      this.validateSelection(await this.modificationRules(tx, ctx), config, travelers);
       const current = await tx.query(
-        `SELECT id, session_id FROM seat_holds
+        `SELECT id, session_id, modifies_registration_id FROM seat_holds
           WHERE event_employee_id = $1 AND status = 'active' AND expires_at > now()`,
         [ctx.employee.id],
       );
       const hold = current.rows[0];
       if (!hold) throw new DomainError('HOLD_EXPIRED');
 
-      const needs = await this.seatNeeds(tx, config, hold.session_id, travelers);
+      const full = await this.seatNeeds(tx, config, hold.session_id, travelers);
+      const delta = hold.modifies_registration_id ? await this.modificationDelta(tx, hold.modifies_registration_id, hold.session_id, travelers.length, full) : null;
+      const needs = delta?.needs ?? full;
+      const quantity = delta?.quantity ?? travelers.length;
       const existingItems = await tx.query(`SELECT quota_id FROM seat_hold_items WHERE hold_id = $1`, [hold.id]);
       const existingRooms = await tx.query(`SELECT room_type_id FROM seat_hold_room_items WHERE hold_id = $1`, [hold.id]);
       const quotaIds = new Set<string>([...needs.quotas.keys(), ...existingItems.rows.map((r) => r.quota_id as string)]);
@@ -190,8 +204,8 @@ export class RegistrationService {
       );
       if (!locked.rowCount) throw new DomainError('HOLD_EXPIRED');
 
-      await this.assertSeats(tx, hold.session_id, travelers.length, needs, hold.id);
-      await tx.query(`UPDATE seat_holds SET quantity = $1 WHERE id = $2`, [travelers.length, hold.id]);
+      await this.assertSeats(tx, hold.session_id, quantity, needs, hold.id);
+      await tx.query(`UPDATE seat_holds SET quantity = $1 WHERE id = $2`, [quantity, hold.id]);
       await tx.query(`DELETE FROM seat_hold_items WHERE hold_id = $1`, [hold.id]);
       await tx.query(`DELETE FROM seat_hold_room_items WHERE hold_id = $1`, [hold.id]);
       await this.writeHoldItems(tx, ctx.agency.id, hold.id, needs);
@@ -202,7 +216,12 @@ export class RegistrationService {
   async releaseHold(ctx: EmployeeContext) {
     await this.db.withTenant(ctx.agency.id, (tx) =>
       tx.query(
-        `UPDATE seat_holds SET status = 'released', closed_at = now() WHERE event_employee_id = $1 AND status = 'active'`,
+        `WITH released AS (
+           UPDATE seat_holds SET status = 'released', closed_at = now() WHERE event_employee_id = $1 AND status = 'active'
+         )
+         -- 已經報名的人放棄修改時，改到一半的內容也不用留了；第一次報名的草稿要留著。
+         DELETE FROM registration_drafts d WHERE d.event_employee_id = $1
+           AND EXISTS (SELECT 1 FROM registrations r WHERE r.event_employee_id = $1 AND r.status <> 'cancelled')`,
         [ctx.employee.id],
       ),
     );
@@ -231,12 +250,12 @@ export class RegistrationService {
     this.assertOpen(ctx);
     return this.db.withTenant(ctx.agency.id, async (tx) => {
       const config = await this.loadConfig(tx, ctx.event.id);
-      this.validateSelection(ctx, config, req.travelers);
+      this.validateSelection(employeeRules(ctx), config, req.travelers);
       await this.assertNotRegistered(tx, ctx.employee.id);
 
       const current = await tx.query(
         `SELECT id, session_id FROM seat_holds
-          WHERE event_employee_id = $1 AND status = 'active' AND expires_at > now()`,
+          WHERE event_employee_id = $1 AND status = 'active' AND expires_at > now() AND modifies_registration_id IS NULL`,
         [ctx.employee.id],
       );
       const found = current.rows[0];
@@ -363,6 +382,338 @@ export class RegistrationService {
     }).catch(rethrowUniqueViolation('registrations_one_active', 'ALREADY_REGISTERED'));
   }
 
+  // ===== 修改報名 =====
+
+  /** 只保留比原報名多出來的名額；減少的部分要等送出後才釋出。 */
+  async createModificationHold(ctx: EmployeeContext, req: HoldRequest) {
+    this.assertOpen(ctx);
+    return this.db.withTenant(ctx.agency.id, async (tx) => {
+      const config = await this.loadConfig(tx, ctx.event.id);
+      this.validateSelection(await this.modificationRules(tx, ctx), config, req.travelers);
+      const reg = await this.modifiableRegistration(tx, ctx.employee.id);
+
+      const full = await this.seatNeeds(tx, config, req.sessionId, req.travelers);
+      const { needs, quantity } = await this.modificationDelta(tx, reg.id, req.sessionId, req.travelers.length, full);
+      await this.lockSeats(tx, ctx.event.id, req.sessionId, [...needs.quotas.keys()], [...needs.rooms.keys()]);
+
+      await tx.query(
+        `UPDATE seat_holds SET status = 'expired', closed_at = now() WHERE event_employee_id = $1 AND status = 'active' AND expires_at <= now()`,
+        [ctx.employee.id],
+      );
+      // 修改中換梯次：換掉原本的保留但不重新計時；新梯次沒名額時整個交易還原，舊保留還在。
+      const existing = await tx.query(
+        `SELECT id, expires_at, modifies_registration_id FROM seat_holds WHERE event_employee_id = $1 AND status = 'active' FOR UPDATE`,
+        [ctx.employee.id],
+      );
+      const replacing = existing.rows[0];
+      if (replacing && !replacing.modifies_registration_id) throw new DomainError('HOLD_EXISTS');
+      if (replacing) await tx.query(`UPDATE seat_holds SET status = 'released', closed_at = now() WHERE id = $1`, [replacing.id]);
+
+      await this.assertSeats(tx, req.sessionId, quantity, needs);
+      const { rows } = await tx.query(
+        `INSERT INTO seat_holds (agency_id, event_id, event_employee_id, session_id, quantity, expires_at, modifies_registration_id)
+         VALUES ($1, $2, $3, $4, $5, COALESCE($8, now() + make_interval(mins => $6)), $7) RETURNING id`,
+        [ctx.agency.id, ctx.event.id, ctx.employee.id, req.sessionId, quantity, HOLD_MINUTES, reg.id, replacing?.expires_at ?? null],
+      );
+      await this.writeHoldItems(tx, ctx.agency.id, rows[0].id, needs);
+      return this.loadActiveHold(tx, ctx.employee.id);
+    }).catch(rethrowUniqueViolation('seat_holds_one_active', 'HOLD_EXISTS'));
+  }
+
+  /** 送出前原報名不變；倒數結束只讓這次修改失效。 */
+  async submitModification(ctx: EmployeeContext, req: ModifyRequest) {
+    this.assertOpen(ctx);
+    let mail: { event: MailEvent; total: number; selfPay: number } | null = null;
+    const result = await this.db.withTenant(ctx.agency.id, async (tx) => {
+      const config = await this.loadConfig(tx, ctx.event.id);
+      this.validateSelection(await this.modificationRules(tx, ctx), config, req.travelers);
+      const current = await tx.query(
+        `SELECT id, session_id, modifies_registration_id FROM seat_holds
+          WHERE event_employee_id = $1 AND status = 'active' AND expires_at > now() AND modifies_registration_id IS NOT NULL`,
+        [ctx.employee.id],
+      );
+      const found = current.rows[0];
+      if (!found) throw new DomainError('HOLD_EXPIRED');
+
+      const full = await this.seatNeeds(tx, config, found.session_id, req.travelers);
+      const old = await this.oldSeats(tx, found.modifies_registration_id);
+      await this.lockSeats(tx, ctx.event.id, [found.session_id, old.sessionId], [...new Set([...full.quotas.keys(), ...old.quotas.keys()])], [...new Set([...full.rooms.keys(), ...old.rooms.keys()])]);
+      const locked = await tx.query(`SELECT id FROM seat_holds WHERE id = $1 AND status = 'active' AND expires_at > now() FOR UPDATE`, [found.id]);
+      if (!locked.rowCount) throw new DomainError('HOLD_EXPIRED');
+
+      // 保留之後原報名可能被旅行社改過，差額要和保留的一致才能送出。
+      const { needs, quantity } = await this.modificationDelta(tx, found.modifies_registration_id, found.session_id, req.travelers.length, full);
+      const heldQuantity = await tx.query(`SELECT quantity FROM seat_holds WHERE id = $1`, [found.id]);
+      const heldItems = await tx.query(`SELECT quota_id, quantity FROM seat_hold_items WHERE hold_id = $1`, [found.id]);
+      const heldRooms = await tx.query(`SELECT room_type_id, quantity FROM seat_hold_room_items WHERE hold_id = $1`, [found.id]);
+      const same = heldQuantity.rows[0].quantity === quantity
+        && heldItems.rowCount === needs.quotas.size && heldItems.rows.every((r) => needs.quotas.get(r.quota_id) === r.quantity)
+        && heldRooms.rowCount === needs.rooms.size && heldRooms.rows.every((r) => needs.rooms.get(r.room_type_id) === r.quantity);
+      if (!same) throw new DomainError('HOLD_MISMATCH');
+
+      const previous = await this.readDraftPayload(tx, ctx.employee.id);
+      const merged = this.mergeSensitive(req, previous, config);
+      const r = await this.applyModification(tx, ctx.agency.id, found.modifies_registration_id, found.session_id, config, merged, full, { type: 'employee', id: ctx.employee.id });
+      await tx.query(`UPDATE seat_holds SET status = 'converted', registration_id = $1, closed_at = now() WHERE id = $2`, [found.modifies_registration_id, found.id]);
+      await tx.query(`DELETE FROM registration_drafts WHERE event_employee_id = $1`, [ctx.employee.id]);
+      mail = { event: await this.notifications.mailEvent(tx, ctx.event.id), total: r.total, selfPay: r.selfPay };
+      return this.loadRegistration(tx, ctx.employee.id, config);
+    });
+    const email = await this.employeeEmail(ctx.agency.id, ctx.employee.id);
+    if (mail && email) {
+      const m: { event: MailEvent; total: number; selfPay: number } = mail;
+      void this.notifications.deliver(ctx.agency.id, ctx.event.id, m.event, { id: ctx.employee.id, name: ctx.employee.name, email }, { key: 'modified', byAgency: false, total: m.total, selfPay: m.selfPay });
+    }
+    return result;
+  }
+
+  /** 旅行社修改：截止後也可以，立即生效，不需要保留；不受員工的眷屬上限限制。 */
+  async modifyByAgency(agencyId: string, eventId: string, registrationId: string, actorId: string, req: AgencyModifyRequest) {
+    let mail: { event: MailEvent; total: number; selfPay: number; employee: { id: string; name: string; email: string | null } };
+    await this.db.withTenant(agencyId, async (tx) => {
+      const { rows } = await tx.query(
+        `SELECT r.id, r.status, r.event_employee_id, m.name, m.email, e.allow_dependents_only
+           FROM registrations r JOIN event_employees m ON m.id = r.event_employee_id JOIN events e ON e.id = r.event_id
+          WHERE r.id = $1 AND r.event_id = $2`,
+        [registrationId, eventId],
+      );
+      const reg = rows[0];
+      if (!reg) throw new DomainError('NOT_FOUND');
+      if (reg.status === 'cancelled') throw new DomainError('NOT_MODIFIABLE');
+      const config = await this.loadConfig(tx, eventId);
+      this.validateSelection({ allowDependentsOnly: reg.allow_dependents_only, dependentLimit: null }, config, req.travelers);
+      const session = await tx.query(`SELECT 1 FROM event_sessions WHERE id = $1 AND event_id = $2`, [req.sessionId, eventId]);
+      if (!session.rowCount) throw new DomainError('INVALID_SELECTION', { reason: 'unknown_session' });
+
+      const full = await this.seatNeeds(tx, config, req.sessionId, req.travelers);
+      const old = await this.oldSeats(tx, registrationId);
+      await this.lockSeats(tx, eventId, [req.sessionId, old.sessionId], [...new Set([...full.quotas.keys(), ...old.quotas.keys()])], [...new Set([...full.rooms.keys(), ...old.rooms.keys()])]);
+      const { needs, quantity } = await this.modificationDelta(tx, registrationId, req.sessionId, req.travelers.length, full);
+      await this.assertSeats(tx, req.sessionId, quantity, needs);
+      const r = await this.applyModification(tx, agencyId, registrationId, req.sessionId, config, req, full, { type: 'agency_user', id: actorId });
+      mail = { event: await this.notifications.mailEvent(tx, eventId), total: r.total, selfPay: r.selfPay, employee: { id: reg.event_employee_id, name: reg.name, email: reg.email } };
+    });
+    const m = mail!;
+    if (m.employee.email) {
+      void this.notifications.deliver(agencyId, eventId, m.event, { id: m.employee.id, name: m.employee.name, email: m.employee.email }, { key: 'modified', byAgency: true, total: m.total, selfPay: m.selfPay });
+    }
+  }
+
+  /** 修改畫面需要的設定、各梯次剩餘名額與目前內容。 */
+  editData(agencyId: string, eventId: string, registrationId: string) {
+    return this.db.withTenant(agencyId, async (tx) => {
+      const { rows } = await tx.query(`SELECT r.event_employee_id, r.status FROM registrations r WHERE r.id = $1 AND r.event_id = $2`, [registrationId, eventId]);
+      if (!rows[0]) throw new DomainError('NOT_FOUND');
+      const config = await this.loadConfig(tx, eventId);
+      return {
+        travelerTypes: [...config.types.values()],
+        optionGroups: [...config.groups.values()].map((g) => ({ ...g, options: g.options.map((id) => config.options.get(id)!) })),
+        fields: config.fields.map(({ id: _id, ...f }) => f),
+        availability: await this.loadAvailability(tx, eventId),
+        registration: await this.loadRegistration(tx, rows[0].event_employee_id, config, registrationId),
+      };
+    });
+  }
+
+  /** 旅行社可能幫員工加到超過上限；修改時不要求把人減回去，只是不能再多。 */
+  private async modificationRules(tx: Tx, ctx: EmployeeContext): Promise<SelectionRules> {
+    const { rows } = await tx.query(
+      `SELECT count(*)::int AS n FROM travelers t JOIN registrations r ON r.id = t.registration_id
+        WHERE r.event_employee_id = $1 AND r.status <> 'cancelled' AND NOT t.is_employee_self`,
+      [ctx.employee.id],
+    );
+    return { ...employeeRules(ctx), dependentLimit: Math.max(ctx.employee.dependentLimit, rows[0].n) };
+  }
+
+  private async employeeEmail(agencyId: string, employeeId: string) {
+    const { rows } = await this.db.withTenant(agencyId, (tx) => tx.query(`SELECT email FROM event_employees WHERE id = $1`, [employeeId]));
+    return (rows[0]?.email ?? null) as string | null;
+  }
+
+  private async modifiableRegistration(tx: Tx, employeeId: string) {
+    const { rows } = await tx.query(`SELECT id, status FROM registrations WHERE event_employee_id = $1 AND status <> 'cancelled' FOR UPDATE`, [employeeId]);
+    if (!rows[0] || rows[0].status !== 'confirmed') throw new DomainError('NOT_MODIFIABLE');
+    return rows[0] as { id: string; status: string };
+  }
+
+  /** 原報名佔用的名額。 */
+  private async oldSeats(tx: Tx, registrationId: string) {
+    const { rows } = await tx.query(`SELECT session_id FROM registrations WHERE id = $1`, [registrationId]);
+    const sessionId: string = rows[0].session_id;
+    const count = await tx.query(`SELECT count(*)::int AS n FROM travelers WHERE registration_id = $1`, [registrationId]);
+    const quotas = await tx.query(
+      `SELECT q.id, count(*)::int AS n FROM travelers t JOIN traveler_options o ON o.traveler_id = t.id
+         JOIN option_session_quotas q ON q.option_id = o.option_id AND q.session_id = $2
+        WHERE t.registration_id = $1 GROUP BY q.id`,
+      [registrationId, sessionId],
+    );
+    const rooms = await tx.query(
+      `SELECT session_room_type_id AS id, count(*)::int AS n FROM travelers WHERE registration_id = $1 AND session_room_type_id IS NOT NULL GROUP BY session_room_type_id`,
+      [registrationId],
+    );
+    return {
+      sessionId,
+      travelers: count.rows[0].n as number,
+      quotas: new Map<string, number>(quotas.rows.map((r) => [r.id, r.n])),
+      rooms: new Map<string, number>(rooms.rows.map((r) => [r.id, r.n])),
+    };
+  }
+
+  /** 新內容比原報名多佔的名額。換梯次時原梯次的名額不能抵用。 */
+  private async modificationDelta(tx: Tx, registrationId: string, sessionId: string, travelers: number, full: SeatNeeds) {
+    const old = await this.oldSeats(tx, registrationId);
+    if (old.sessionId !== sessionId) return { quantity: travelers, needs: full };
+    const positive = (next: Map<string, number>, prev: Map<string, number>) => new Map([...next].flatMap(([id, n]) => {
+      const more = n - (prev.get(id) ?? 0);
+      return more > 0 ? [[id, more] as [string, number]] : [];
+    }));
+    return {
+      quantity: Math.max(travelers - old.travelers, 0),
+      needs: { quotas: positive(full.quotas, old.quotas), rooms: positive(full.rooms, old.rooms) },
+    };
+  }
+
+  /** 改動前後的內容（敏感欄位只有遮罩），加密存進修改紀錄。 */
+  private async snapshot(tx: Tx, registrationId: string, config: EventConfig) {
+    const { rows: reg } = await tx.query(
+      `SELECT r.total_amount, s.name AS session_name FROM registrations r JOIN event_sessions s ON s.id = r.session_id WHERE r.id = $1`,
+      [registrationId],
+    );
+    const { rows } = await tx.query(
+      `SELECT t.id, t.name, t.traveler_type_id, t.base_price_snapshot, t.room_surcharge_snapshot, t.field_values, t.sensitive_masks, rt.name AS room_type,
+              COALESCE((SELECT json_agg(json_build_object('optionId', o.option_id, 'price', o.price_snapshot)) FROM traveler_options o WHERE o.traveler_id = t.id), '[]') AS options,
+              COALESCE((SELECT json_agg(p.option_id ORDER BY p.rank) FROM traveler_option_preferences p WHERE p.traveler_id = t.id), '[]') AS preferences
+         FROM travelers t LEFT JOIN session_room_types rt ON rt.id = t.session_room_type_id
+        WHERE t.registration_id = $1 ORDER BY t.sort_order`,
+      [registrationId],
+    );
+    return {
+      session: reg[0].session_name,
+      total: reg[0].total_amount,
+      travelers: rows.map((t) => ({
+        id: t.id,
+        name: t.name,
+        type: config.types.get(t.traveler_type_id)?.name ?? '',
+        basePrice: t.base_price_snapshot,
+        roomType: t.room_type,
+        roomSurcharge: t.room_surcharge_snapshot,
+        fields: config.fields.flatMap((f) => {
+          const v = t.sensitive_masks[f.key] ?? t.field_values[f.key];
+          return v === undefined ? [] : [{ label: f.label, value: Array.isArray(v) ? v.join('、') : String(v) }];
+        }),
+        options: t.options.map((o: { optionId: string; price: number }) => ({ name: config.options.get(o.optionId)?.name ?? '', price: o.price })),
+        preferences: t.preferences.map((id: string) => config.options.get(id)?.name ?? ''),
+      })),
+    };
+  }
+
+  /**
+   * 沒改動的項目保留原本的價格快照，新選的項目用目前價格。
+   * 曾手動調整過的差額會保留：新總額 = 舊總額 + 明細的增減。補助維持報名時的金額。
+   * 呼叫前必須已取得新舊梯次、選項與房型的鎖。
+   */
+  private async applyModification(tx: Tx, agencyId: string, registrationId: string, sessionId: string, config: EventConfig, req: ModifyRequest, full: SeatNeeds, actor: { type: 'employee' | 'agency_user'; id: string }) {
+    const { rows: regs } = await tx.query(`SELECT status, session_id, total_amount, subsidy_amount, payment_status FROM registrations WHERE id = $1 FOR UPDATE`, [registrationId]);
+    const reg = regs[0];
+    if (!reg || reg.status === 'cancelled' || (actor.type === 'employee' && reg.status !== 'confirmed')) throw new DomainError('NOT_MODIFIABLE');
+    const old = await this.oldSeats(tx, registrationId);
+    const before = await this.snapshot(tx, registrationId, config);
+
+    const { rows: oldRows } = await tx.query(
+      `SELECT t.id, t.traveler_type_id, t.base_price_snapshot, t.session_room_type_id, t.room_surcharge_snapshot, t.sensitive_values_encrypted, t.field_values,
+              COALESCE((SELECT json_object_agg(o.option_id, o.price_snapshot) FROM traveler_options o WHERE o.traveler_id = t.id), '{}') AS option_prices
+         FROM travelers t WHERE t.registration_id = $1`,
+      [registrationId],
+    );
+    const oldById = new Map(oldRows.map((r) => [r.id as string, r]));
+    const oldSum = oldRows.reduce((sum, r) => sum + r.base_price_snapshot + r.room_surcharge_snapshot + (Object.values(r.option_prices) as number[]).reduce((a, b) => a + b, 0), 0);
+
+    const details = req.travelers.map((t) => {
+      const existing = oldById.get(t.key);
+      if (!existing?.sensitive_values_encrypted) return t;
+      // 敏感欄位留空表示不變更。
+      const saved = this.encryption.decryptJson<Record<string, unknown>>(existing.sensitive_values_encrypted);
+      const fieldValues: typeof t.fieldValues = { ...t.fieldValues };
+      for (const [k, v] of Object.entries(saved)) {
+        const incoming = fieldValues[k];
+        if (incoming === undefined || incoming === null || incoming === '') fieldValues[k] = v as never;
+      }
+      return { ...t, fieldValues };
+    });
+    this.validateDetails(config, details);
+
+    const roomTypes = await this.sessionRoomTypes(tx, sessionId);
+    const keep = details.map((t) => t.key).filter((k) => oldById.has(k));
+    await tx.query(`DELETE FROM travelers WHERE registration_id = $1 AND NOT (id = ANY($2::uuid[]))`, [registrationId, keep]);
+
+    let newSum = 0;
+    for (const [index, t] of details.entries()) {
+      const existing = oldById.get(t.key);
+      const type = config.types.get(t.travelerTypeId)!;
+      const basePrice = existing && existing.traveler_type_id === t.travelerTypeId ? existing.base_price_snapshot as number : type.basePrice;
+      const surcharge = !t.roomTypeId ? 0 : existing && existing.session_room_type_id === t.roomTypeId ? existing.room_surcharge_snapshot as number : roomTypes.get(t.roomTypeId)!.surcharge;
+      const { plain, sensitive, masks } = this.splitFields(config, t.fieldValues);
+      const encrypted = Object.keys(sensitive).length ? this.encryption.encryptJson(sensitive) : null;
+      let travelerId: string = t.key;
+      if (existing) {
+        await tx.query(
+          `UPDATE travelers SET traveler_type_id = $2, is_employee_self = $3, name = $4, base_price_snapshot = $5, field_values = $6, sensitive_values_encrypted = $7, sensitive_masks = $8,
+                  requested_room_no = $9, sort_order = $10, session_room_type_id = $11, room_surcharge_snapshot = $12 WHERE id = $1`,
+          [t.key, type.id, type.isEmployeeSelf, t.name, basePrice, JSON.stringify(plain), encrypted, JSON.stringify(masks), t.requestedRoomNo, index, t.roomTypeId, surcharge],
+        );
+      } else {
+        const inserted = await tx.query(
+          `INSERT INTO travelers (agency_id, registration_id, traveler_type_id, is_employee_self, name, base_price_snapshot, field_values, sensitive_values_encrypted, sensitive_masks,
+                                  requested_room_no, sort_order, session_room_type_id, room_surcharge_snapshot)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
+          [agencyId, registrationId, type.id, type.isEmployeeSelf, t.name, basePrice, JSON.stringify(plain), encrypted, JSON.stringify(masks), t.requestedRoomNo, index, t.roomTypeId, surcharge],
+        );
+        travelerId = inserted.rows[0].id;
+      }
+      const prices: Record<string, number> = existing?.option_prices ?? {};
+      await tx.query(`DELETE FROM traveler_options WHERE traveler_id = $1`, [travelerId]);
+      await tx.query(`DELETE FROM traveler_option_preferences WHERE traveler_id = $1`, [travelerId]);
+      newSum += basePrice + surcharge;
+      for (const optionId of t.optionIds) {
+        const price = prices[optionId] ?? config.options.get(optionId)!.price;
+        newSum += price;
+        await tx.query(`INSERT INTO traveler_options (agency_id, traveler_id, option_id, price_snapshot) VALUES ($1, $2, $3, $4)`, [agencyId, travelerId, optionId, price]);
+      }
+      for (const [groupId, optionIds] of Object.entries(t.preferences)) {
+        for (const [i, optionId] of optionIds.entries()) {
+          await tx.query(`INSERT INTO traveler_option_preferences (agency_id, traveler_id, group_id, rank, option_id) VALUES ($1, $2, $3, $4, $5)`, [agencyId, travelerId, groupId, i + 2, optionId]);
+        }
+      }
+    }
+
+    await tx.query(`DELETE FROM room_preferences WHERE registration_id = $1`, [registrationId]);
+    for (const p of req.roomPreferences) {
+      await tx.query(`INSERT INTO room_preferences (agency_id, registration_id, requested_room_no, preferred_coworker_name, note) VALUES ($1, $2, $3, $4, $5)`, [agencyId, registrationId, p.requestedRoomNo, p.preferredCoworkerName, p.note]);
+    }
+    // 換梯次後原本的分房不再適用。
+    if (old.sessionId !== sessionId) {
+      await tx.query(`DELETE FROM room_assignments WHERE traveler_id IN (SELECT id FROM travelers WHERE registration_id = $1)`, [registrationId]);
+    }
+
+    // 先釋出再佔用，同一個計數才不會暫時超過上限。
+    await tx.query(`UPDATE event_sessions SET sold_count = sold_count - $1 WHERE id = $2`, [old.travelers, old.sessionId]);
+    for (const [id, n] of old.quotas) await tx.query(`UPDATE option_session_quotas SET sold_count = sold_count - $1 WHERE id = $2`, [n, id]);
+    for (const [id, n] of old.rooms) await tx.query(`UPDATE session_room_types SET sold_count = sold_count - $1 WHERE id = $2`, [n, id]);
+    await tx.query(`UPDATE event_sessions SET sold_count = sold_count + $1 WHERE id = $2`, [details.length, sessionId]);
+    for (const [id, n] of full.quotas) await tx.query(`UPDATE option_session_quotas SET sold_count = sold_count + $1 WHERE id = $2`, [n, id]);
+    for (const [id, n] of full.rooms) await tx.query(`UPDATE session_room_types SET sold_count = sold_count + $1 WHERE id = $2`, [n, id]);
+
+    const total = Math.max(reg.total_amount + newSum - oldSum, 0);
+    const selfPay = Math.max(total - reg.subsidy_amount, 0);
+    await tx.query(
+      `UPDATE registrations SET session_id = $2, total_amount = $3, payment_status = $4, updated_at = now() WHERE id = $1`,
+      [registrationId, sessionId, total, paymentAfter(reg.payment_status, selfPay)],
+    );
+    const after = await this.snapshot(tx, registrationId, config);
+    await addRevision(tx, agencyId, registrationId, actor, { action: 'modified', from: reg.total_amount, to: total }, { before: this.encryption.encryptJson(before), after: this.encryption.encryptJson(after) });
+    return { total, selfPay };
+  }
+
   // ===== 取消 =====
 
   async requestCancel(ctx: EmployeeContext) {
@@ -447,7 +798,7 @@ export class RegistrationService {
     if (r.rowCount) throw new DomainError('ALREADY_REGISTERED');
   }
 
-  private validateSelection(ctx: EmployeeContext, config: EventConfig, travelers: Selection) {
+  private validateSelection(rules: SelectionRules, config: EventConfig, travelers: Selection) {
     const keys = new Set(travelers.map((t) => t.key));
     if (keys.size !== travelers.length) throw new DomainError('INVALID_SELECTION', { reason: 'duplicate_key' });
 
@@ -485,10 +836,10 @@ export class RegistrationService {
     }
 
     if (selfCount > 1) throw new DomainError('INVALID_SELECTION', { reason: 'multiple_self' });
-    if (selfCount === 0 && !ctx.event.allowDependentsOnly) {
+    if (selfCount === 0 && !rules.allowDependentsOnly) {
       throw new DomainError('INVALID_SELECTION', { reason: 'self_required' });
     }
-    if (travelers.length - selfCount > ctx.employee.dependentLimit) {
+    if (rules.dependentLimit !== null && travelers.length - selfCount > rules.dependentLimit) {
       throw new DomainError('INVALID_SELECTION', { reason: 'dependent_limit' });
     }
   }
@@ -562,12 +913,11 @@ export class RegistrationService {
   }
 
   /** 固定鎖定順序：先梯次，再依 ID 排序的選項名額與房型，避免死結。 */
-  private async lockSeats(tx: Tx, eventId: string, sessionId: string, quotaIds: string[], roomIds: string[] = []) {
-    const session = await tx.query(`SELECT id FROM event_sessions WHERE id = $1 AND event_id = $2 FOR UPDATE`, [
-      sessionId,
-      eventId,
-    ]);
-    if (!session.rowCount) throw new DomainError('INVALID_SELECTION', { reason: 'unknown_session' });
+  private async lockSeats(tx: Tx, eventId: string, sessionId: string | string[], quotaIds: string[], roomIds: string[] = []) {
+    for (const id of [...new Set([sessionId].flat())].sort()) {
+      const session = await tx.query(`SELECT id FROM event_sessions WHERE id = $1 AND event_id = $2 FOR UPDATE`, [id, eventId]);
+      if (!session.rowCount) throw new DomainError('INVALID_SELECTION', { reason: 'unknown_session' });
+    }
     for (const id of [...quotaIds].sort()) {
       await tx.query(`SELECT id FROM option_session_quotas WHERE id = $1 FOR UPDATE`, [id]);
     }
@@ -587,7 +937,7 @@ export class RegistrationService {
       [sessionId, exclude],
     );
     const seat = s.rows[0];
-    if (seat.sold_count + seat.held + quantity > seat.capacity) {
+    if (quantity > 0 && seat.sold_count + seat.held + quantity > seat.capacity) {
       throw new DomainError('SESSION_FULL', {
         status: seatStatus(seat.capacity, seat.sold_count, seat.held),
         remaining: Math.max(seat.capacity - seat.sold_count - seat.held, 0),
@@ -744,26 +1094,28 @@ export class RegistrationService {
 
   private async loadActiveHold(tx: Tx, employeeId: string) {
     const { rows } = await tx.query(
-      `SELECT id, session_id, quantity, expires_at FROM seat_holds
+      `SELECT id, session_id, quantity, expires_at, modifies_registration_id FROM seat_holds
         WHERE event_employee_id = $1 AND status = 'active' AND expires_at > now()`,
       [employeeId],
     );
     const h = rows[0];
-    return h ? { id: h.id, sessionId: h.session_id, quantity: h.quantity, expiresAt: h.expires_at } : null;
+    return h ? { id: h.id, sessionId: h.session_id, quantity: h.quantity, expiresAt: h.expires_at, modifying: h.modifies_registration_id !== null } : null;
   }
 
   /** 已送出的報名：敏感欄位只回傳遮罩內容。 */
-  private async loadRegistration(tx: Tx, employeeId: string, config: EventConfig) {
+  private async loadRegistration(tx: Tx, employeeId: string, config: EventConfig, registrationId?: string) {
     const { rows } = await tx.query(
-      `SELECT r.id, r.session_id, r.status, r.total_amount, r.subsidy_amount, r.self_pay_amount, r.payment_status, r.submitted_at
-         FROM registrations r WHERE r.event_employee_id = $1 AND r.status <> 'cancelled'`,
-      [employeeId],
+      `SELECT r.id, r.session_id, r.status, r.total_amount, r.subsidy_amount, r.self_pay_amount, r.payment_status, r.submitted_at,
+              COALESCE((SELECT json_agg(json_build_object('requestedRoomNo', p.requested_room_no, 'preferredCoworkerName', p.preferred_coworker_name, 'note', p.note))
+                          FROM room_preferences p WHERE p.registration_id = r.id), '[]') AS room_preferences
+         FROM registrations r WHERE r.event_employee_id = $1 AND ${registrationId ? 'r.id = $2' : `r.status <> 'cancelled'`}`,
+      registrationId ? [employeeId, registrationId] : [employeeId],
     );
     const r = rows[0];
     if (!r) return null;
     const travelers = await tx.query(
       `SELECT t.id, t.name, t.traveler_type_id, t.base_price_snapshot, t.field_values, t.sensitive_masks, t.requested_room_no,
-              t.room_surcharge_snapshot, rt.name AS room_type_name,
+              t.room_surcharge_snapshot, t.session_room_type_id, rt.name AS room_type_name,
               COALESCE((SELECT json_agg(json_build_object('groupId', p.group_id, 'rank', p.rank, 'optionId', p.option_id) ORDER BY p.rank)
                           FROM traveler_option_preferences p WHERE p.traveler_id = t.id), '[]') AS preferences,
               COALESCE((SELECT json_agg(json_build_object('optionId', o.option_id, 'price', o.price_snapshot))
@@ -782,7 +1134,14 @@ export class RegistrationService {
       selfPayAmount: r.self_pay_amount,
       paymentStatus: r.payment_status,
       submittedAt: r.submitted_at,
+      roomPreferences: r.room_preferences,
       travelers: travelers.rows.map((t) => ({
+        id: t.id,
+        travelerTypeId: t.traveler_type_id,
+        roomTypeId: t.session_room_type_id,
+        plainValues: t.field_values,
+        masks: t.sensitive_masks,
+        preferenceIds: t.preferences.reduce((acc: Record<string, string[]>, p: { groupId: string; optionId: string }) => ({ ...acc, [p.groupId]: [...(acc[p.groupId] ?? []), p.optionId] }), {}),
         name: t.name,
         travelerTypeName: config.types.get(t.traveler_type_id)?.name ?? '',
         basePrice: t.base_price_snapshot,

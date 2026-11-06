@@ -80,6 +80,8 @@ const call = (f: Fixture, token: string) => {
     draft: (body: unknown) => h(http.put(`${base}/draft`)).send(body as object),
     submit: (body: unknown) => h(http.post(`${base}/registrations`)).send(body as object),
     cancel: () => h(http.post(`${base}/registrations/current/cancel-request`)),
+    modifyHold: (body: unknown) => h(http.post(`${base}/registrations/current/modification-hold`)).send(body as object),
+    modify: (body: unknown) => h(http.put(`${base}/registrations/current`)).send(body as object),
   };
 };
 
@@ -544,5 +546,250 @@ describe('房型、不佔床與志願', () => {
     const api = call(f, token);
     const r = await api.hold({ sessionId: f.sessionId, travelers: [{ ...sel(f.selfType, [f.freeOption]), preferences: { [group]: [f.limitedOption] } }] }).expect(422);
     expect(r.body.detail.reason).toBe('option_preferences');
+  });
+});
+
+describe('修改報名', () => {
+  /** 已報名一位本人（選限量選項）的員工。 */
+  const registered = async (f: Fixture, o: { subsidy?: number; extra?: boolean } = {}) => {
+    const { token, id } = await makeEmployee(f, { subsidy: o.subsidy ?? 0, limit: 3 });
+    const api = call(f, token);
+    const self = sel(f.selfType, [f.limitedOption]);
+    const travelers = o.extra ? [self, sel(f.depType)] : [self];
+    await api.hold({ sessionId: f.sessionId, travelers });
+    const reg = (await api.submit({ travelers: travelers.map((t) => details(t)), termsAccepted: true })).body;
+    return { api, reg, id, self };
+  };
+  /** 用既有旅客 ID 當 key，敏感欄位留空。 */
+  const keep = (t: { id: string; travelerTypeId: string; options: { optionId: string }[] }, patch: Record<string, unknown> = {}) => ({
+    key: t.id, travelerTypeId: t.travelerTypeId, optionIds: t.options.map((o) => o.optionId), name: '王小明', fieldValues: {}, requestedRoomNo: 1, ...patch,
+  });
+  const pick = ({ key, travelerTypeId, optionIds }: { key: string; travelerTypeId: string; optionIds: string[] }) => ({ key, travelerTypeId, optionIds });
+  const seats = async (f: Fixture, sessionId = f.sessionId) => (await q1(`SELECT sold_count FROM event_sessions WHERE id = $1`, [sessionId])).sold_count;
+  const quotaSold = async (f: Fixture) => (await q1(`SELECT sold_count FROM option_session_quotas WHERE id = $1`, [f.quotaId])).sold_count;
+
+  it('送出前原報名不變，加人只保留多出來的名額，送出後名額與費用才更新', async () => {
+    const f = await makeFixture({ capacity: 2 });
+    const { api, reg } = await registered(f);
+    const t = reg.travelers[0];
+    const dep = sel(f.depType);
+    const edit = [keep(t, { name: '新名字' }), { ...details(dep), name: '眷屬' }];
+
+    const hold = await api.modifyHold({ sessionId: f.sessionId, travelers: edit.map(pick) });
+    expect(hold.status).toBe(201);
+    expect(hold.body.quantity).toBe(1);
+    expect(hold.body.modifying).toBe(true);
+    expect((await api.availability()).body[0].remaining).toBe(0);
+    const during = (await api.state()).body.registration;
+    expect(during.totalAmount).toBe(15500);
+    expect(during.travelers).toHaveLength(1);
+    expect(during.travelers[0].name).toBe('王小明');
+    expect(await seats(f)).toBe(1);
+
+    const done = await api.modify({ travelers: edit, roomPreferences: [] });
+    expect(done.status).toBe(200);
+    expect(done.body.totalAmount).toBe(27500);
+    expect(done.body.travelers.map((x: { name: string }) => x.name)).toEqual(['新名字', '眷屬']);
+    expect(done.body.travelers[0].id).toBe(t.id);
+    expect(await seats(f)).toBe(2);
+    expect((await api.state()).body.hold).toBeNull();
+    expect((await api.state()).body.draft).toBeNull();
+  });
+
+  it('沒改動時保留 0 位也可以；減少人數和選項在送出後才釋出', async () => {
+    const f = await makeFixture();
+    const { api, reg } = await registered(f, { extra: true });
+    const [a, b] = reg.travelers;
+    const same = await api.modifyHold({ sessionId: f.sessionId, travelers: [keep(a), keep(b)].map(pick) });
+    expect(same.status).toBe(201);
+    expect(same.body.quantity).toBe(0);
+    expect(await quotaSold(f)).toBe(1);
+
+    const less = [keep(a, { optionIds: [] })];
+    expect((await api.update({ travelers: less.map(pick) })).status).toBe(200);
+    expect(await seats(f)).toBe(2);
+    expect(await quotaSold(f)).toBe(1);
+    expect((await api.availability()).body[0].remaining).toBe(18);
+
+    const done = await api.modify({ travelers: less, roomPreferences: [] });
+    expect(done.status).toBe(200);
+    expect(done.body.totalAmount).toBe(15000);
+    expect(await seats(f)).toBe(1);
+    expect(await quotaSold(f)).toBe(0);
+    expect((await q1(`SELECT count(*)::int AS n FROM travelers WHERE registration_id = $1`, [reg.id])).n).toBe(1);
+  });
+
+  it('放棄或逾時不影響原報名；放棄會清掉修改中的內容', async () => {
+    const f = await makeFixture();
+    const { api, reg } = await registered(f);
+    const t = reg.travelers[0];
+    const edit = [keep(t, { name: '改了' })];
+    await api.modifyHold({ sessionId: f.sessionId, travelers: edit.map(pick) });
+    await api.draft({ travelers: edit, roomPreferences: [] });
+    expect((await api.state()).body.draft.travelers[0].name).toBe('改了');
+    await api.release();
+    const after = (await api.state()).body;
+    expect(after.draft).toBeNull();
+    expect(after.registration.travelers[0].name).toBe('王小明');
+
+    await api.modifyHold({ sessionId: f.sessionId, travelers: edit.map(pick) });
+    await admin.query(`UPDATE seat_holds SET expires_at = now() - interval '1 second' WHERE registration_id IS NULL AND status = 'active' AND agency_id = $1`, [f.agencyId]);
+    const late = await api.modify({ travelers: edit, roomPreferences: [] });
+    expect(late.body.code).toBe('HOLD_EXPIRED');
+    expect((await api.state()).body.registration.travelers[0].name).toBe('王小明');
+    expect(await seats(f)).toBe(1);
+  });
+
+  it('換梯次要有新梯次的全部名額，送出後才釋出原梯次，保留時間不重新計算', async () => {
+    const f = await makeFixture();
+    const { api, reg } = await registered(f);
+    const t = reg.travelers[0];
+    const edit = [keep(t, { optionIds: [] })];
+    const first = await api.modifyHold({ sessionId: f.sessionId, travelers: edit.map(pick) });
+
+    const other = await makeEmployee(f);
+    const otherApi = call(f, other.token);
+    const blocker = sel(f.selfType);
+    await otherApi.hold({ sessionId: f.sessionFull, travelers: [blocker] });
+    const full = await api.modifyHold({ sessionId: f.sessionFull, travelers: edit.map(pick) });
+    expect(full.body.code).toBe('SESSION_FULL');
+    expect((await api.state()).body.hold.sessionId).toBe(f.sessionId);
+    await otherApi.release();
+
+    const moved = await api.modifyHold({ sessionId: f.sessionFull, travelers: edit.map(pick) });
+    expect(moved.status).toBe(201);
+    expect(moved.body.quantity).toBe(1);
+    expect(moved.body.expiresAt).toBe(first.body.expiresAt);
+    expect(await seats(f)).toBe(1);
+
+    const done = await api.modify({ travelers: edit, roomPreferences: [] });
+    expect(done.body.sessionId).toBe(f.sessionFull);
+    expect(await seats(f)).toBe(0);
+    expect(await seats(f, f.sessionFull)).toBe(1);
+    expect(await quotaSold(f)).toBe(0);
+  });
+
+  it('多佔的選項名額不足時不能保留；自己佔的名額可以繼續用', async () => {
+    const f = await makeFixture({ optionCapacity: 1 });
+    const { api, reg } = await registered(f, { extra: true });
+    const [a, b] = reg.travelers;
+    expect((await api.modifyHold({ sessionId: f.sessionId, travelers: [keep(a), keep(b, { optionIds: [f.limitedOption] })].map(pick) })).body.code).toBe('OPTION_FULL');
+    expect((await api.modifyHold({ sessionId: f.sessionId, travelers: [keep(a), keep(b)].map(pick) })).status).toBe(201);
+  });
+
+  it('沒改動的項目維持原價，新選的用目前價格，手動調整的差額保留，補助不變', async () => {
+    const f = await makeFixture();
+    const { api, reg } = await registered(f, { subsidy: 1000 });
+    const t = reg.travelers[0];
+    await admin.query(`UPDATE options SET price = 900 WHERE id = $1`, [f.limitedOption]);
+    await admin.query(`UPDATE traveler_types SET base_price = 16000 WHERE id = $1`, [f.selfType]);
+    await admin.query(`UPDATE options SET price = 100 WHERE id = $1`, [f.freeOption]);
+    await admin.query(`UPDATE registrations SET total_amount = total_amount - 200 WHERE id = $1`, [reg.id]);
+    await admin.query(`UPDATE event_employees SET subsidy_amount = 9000 WHERE id = (SELECT event_employee_id FROM registrations WHERE id = $1)`, [reg.id]);
+
+    const edit = [keep(t, { optionIds: [f.limitedOption, f.freeOption] })];
+    await api.modifyHold({ sessionId: f.sessionId, travelers: edit.map(pick) });
+    const done = (await api.modify({ travelers: edit, roomPreferences: [] })).body;
+    // 15500 - 200 手動調整 + 100 新選項
+    expect(done.totalAmount).toBe(15400);
+    expect(done.subsidyAmount).toBe(1000);
+    expect(done.selfPayAmount).toBe(14400);
+    expect(done.travelers[0].basePrice).toBe(15000);
+  });
+
+  it('已付款維持已付；自付變 0 時未付款改為不用付款', async () => {
+    const f = await makeFixture();
+    const { api, reg } = await registered(f);
+    await admin.query(`UPDATE registrations SET payment_status = 'paid', paid_amount = self_pay_amount WHERE id = $1`, [reg.id]);
+    const edit = [keep(reg.travelers[0], { optionIds: [] })];
+    await api.modifyHold({ sessionId: f.sessionId, travelers: edit.map(pick) });
+    const done = (await api.modify({ travelers: edit, roomPreferences: [] })).body;
+    expect(done.paymentStatus).toBe('paid');
+    expect(done.selfPayAmount).toBe(15000);
+    expect((await q1(`SELECT paid_amount FROM registrations WHERE id = $1`, [reg.id])).paid_amount).toBe(15500);
+
+    const free = await makeFixture();
+    const paidBySubsidy = await registered(free, { subsidy: 15000 });
+    const clear = [keep(paidBySubsidy.reg.travelers[0], { optionIds: [] })];
+    await paidBySubsidy.api.modifyHold({ sessionId: free.sessionId, travelers: clear.map(pick) });
+    expect((await paidBySubsidy.api.modify({ travelers: clear, roomPreferences: [] })).body.paymentStatus).toBe('not_required');
+  });
+
+  it('敏感欄位留空保留原值，有填才更新；修改紀錄只存遮罩', async () => {
+    const f = await makeFixture();
+    const { api, reg } = await registered(f);
+    const t = reg.travelers[0];
+    const stored = () => q1(`SELECT sensitive_values_encrypted AS e, sensitive_masks AS m FROM travelers WHERE id = $1`, [t.id]);
+    const original = await stored();
+
+    const unchanged = [keep(t)];
+    await api.modifyHold({ sessionId: f.sessionId, travelers: unchanged.map(pick) });
+    const first = await api.modify({ travelers: unchanged, roomPreferences: [] });
+    expect(first.status).toBe(200);
+    expect((await stored()).m).toEqual(original.m);
+
+    const changed = [keep(t, { fieldValues: { nid: 'B123456789' } })];
+    await api.modifyHold({ sessionId: f.sessionId, travelers: changed.map(pick) });
+    await api.modify({ travelers: changed, roomPreferences: [] });
+    expect((await stored()).m).not.toEqual(original.m);
+
+    const rev = await q1(`SELECT summary, before_encrypted, after_encrypted FROM registration_revisions WHERE registration_id = $1 ORDER BY revision_no DESC LIMIT 1`, [reg.id]);
+    expect(rev.summary.action).toBe('modified');
+    expect(rev.after_encrypted).not.toBeNull();
+  });
+
+  it('截止後、申請取消中、沒有報名都不能修改；眷屬上限一樣有效', async () => {
+    const f = await makeFixture();
+    const { api, reg, self } = await registered(f);
+    const t = reg.travelers[0];
+    const three = [keep(t), sel(f.depType), sel(f.depType), sel(f.depType), sel(f.depType)];
+    expect((await api.modifyHold({ sessionId: f.sessionId, travelers: three.map((x) => pick(x as never)) })).body.code).toBe('INVALID_SELECTION');
+
+    await api.cancel();
+    expect((await api.modifyHold({ sessionId: f.sessionId, travelers: [keep(t)].map(pick) })).body.code).toBe('NOT_MODIFIABLE');
+
+    const none = call(f, (await makeEmployee(f)).token);
+    expect((await none.modifyHold({ sessionId: f.sessionId, travelers: [self] })).body.code).toBe('NOT_MODIFIABLE');
+
+    const g = await makeFixture();
+    const open = await registered(g);
+    await open.api.modifyHold({ sessionId: g.sessionId, travelers: [keep(open.reg.travelers[0])].map(pick) });
+    await admin.query(`UPDATE events SET registration_closes_at = now() - interval '1 minute' WHERE agency_id = $1`, [g.agencyId]);
+    expect((await open.api.modify({ travelers: [keep(open.reg.travelers[0])], roomPreferences: [] })).body.code).toBe('REGISTRATION_CLOSED');
+  });
+
+  it('旅行社幫員工加到超過眷屬上限時，員工仍可修改但不能再加', async () => {
+    const f = await makeFixture();
+    const { api, reg, id } = await registered(f, { extra: true });
+    await admin.query(`UPDATE event_employees SET dependent_limit = 0 WHERE id = $1`, [id]);
+    const kept = reg.travelers.map((t: never) => keep(t));
+    expect((await api.modifyHold({ sessionId: f.sessionId, travelers: kept.map(pick) })).status).toBe(201);
+    expect((await api.update({ travelers: [...kept.map(pick), sel(f.depType)] })).body.code).toBe('INVALID_SELECTION');
+  });
+
+  it('保留後內容和送出的不一致時不能送出', async () => {
+    const f = await makeFixture();
+    const { api, reg } = await registered(f);
+    const t = reg.travelers[0];
+    await api.modifyHold({ sessionId: f.sessionId, travelers: [keep(t)].map(pick) });
+    const more = await api.modify({ travelers: [keep(t), { ...details(sel(f.depType)), name: '多' }], roomPreferences: [] });
+    expect(more.body.code).toBe('HOLD_MISMATCH');
+    expect(await seats(f)).toBe(1);
+  });
+
+  it('已分房的旅客沒換梯次時保留分房，換梯次才清除', async () => {
+    const f = await makeFixture();
+    const { api, reg } = await registered(f);
+    const t = reg.travelers[0];
+    const hasRow = async () => (await q1(`SELECT count(*)::int AS n FROM room_assignments WHERE traveler_id = $1`, [t.id])).n;
+    const room = (await q1(`INSERT INTO rooms (agency_id, session_id, label, capacity) VALUES ($1, $2, '101', 2) RETURNING id`, [f.agencyId, f.sessionId])).id;
+    await admin.query(`INSERT INTO room_assignments (agency_id, traveler_id, room_id) VALUES ($1, $2, $3)`, [f.agencyId, t.id, room]);
+    const edit = [keep(t)];
+    await api.modifyHold({ sessionId: f.sessionId, travelers: edit.map(pick) });
+    await api.modify({ travelers: edit, roomPreferences: [] });
+    expect(await hasRow()).toBe(1);
+    await api.modifyHold({ sessionId: f.sessionFull, travelers: edit.map(pick) });
+    await api.modify({ travelers: edit, roomPreferences: [] });
+    expect(await hasRow()).toBe(0);
   });
 });

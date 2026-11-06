@@ -343,3 +343,28 @@ fieldset.admin-card { margin: 0; border: 0; min-width: 0; }
 .admin-switch { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .admin-note { margin: 0; padding: 10px 12px; border-left: 4px solid var(--brand); background: var(--paper); font-size: 14px; }
 .ghost-link { display: flex; align-items: center; min-height: 44px; padding: 0 12px; color: inherit; }
+
+/* 修改報名 */
+.edit-picks-action { float: right; font-weight: 400; color: var(--brand-text); text-decoration: underline; }
+.modify-traveler { padding: 12px 0; border-top: 1px solid var(--line); }
+.modify-traveler:first-of-type { border-top: 0; padding-top: 0; }
+.modify-traveler p { margin: 4px 0; }
+.stepper-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 0; }
+.stepper { display: inline-flex; align-items: center; gap: 12px; }
+.stepper button { min-width: 44px; min-height: 44px; padding: 0; }
+.stepper b { min-width: 20px; text-align: center; }
+.admin-diff-tag { color: #b45309; white-space: nowrap; }
+.admin-diff { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.admin-diff h3 { margin: 0 0 6px; font-size: 14px; }
+.admin-diff-changed { background: #fef3c7; color: #78350f; padding: 0 4px; border-radius: 4px; }
+.admin-form.admin-modify-form { grid-template-columns: minmax(0, 1fr); border: 0; padding: 0; background: transparent; }
+.admin-form.admin-modify-form .admin-card { border: 1px solid var(--line); margin: 0; min-width: 0; }
+.admin-modify-traveler fieldset { min-width: 0; }
+.admin-modify-traveler .admin-radio-row { flex-wrap: wrap; }
+.admin-modify-traveler .admin-radio-row label { white-space: nowrap; }
+.admin-diff-traveler { margin-top: 10px; }
+.admin-modify-traveler { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; align-items: start; }
+.admin-modify-traveler > .span-all { grid-column: 1 / -1; }
+.admin-modify-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+@media (prefers-color-scheme: dark) { .admin-diff-changed { background: #451a03; color: #fde68a; } .admin-diff-tag { color: #fbbf24; } }
+@media (max-width: 640px) { .admin-diff { grid-template-columns: minmax(0, 1fr); } }

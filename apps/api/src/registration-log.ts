@@ -7,6 +7,7 @@ export type RevisionSummary =
   | { action: 'cancel_rejected' }
   | { action: 'payment'; from: string; to: string }
   | { action: 'fee_adjusted'; from: number; to: number; reason: string }
+  | { action: 'modified'; from: number; to: number }
   | { action: 'reassigned'; from: number; to: number; reason: string; changes: { traveler: string; from: string; to: string }[] };
 
 /** 呼叫前要先鎖定這筆報名，版本號才不會重複。 */
@@ -16,11 +17,12 @@ export async function addRevision(
   registrationId: string,
   actor: { type: 'employee' | 'agency_user'; id: string | null },
   summary: RevisionSummary,
+  snapshots: { before: Buffer; after: Buffer } | null = null,
 ) {
   await tx.query(
-    `INSERT INTO registration_revisions (agency_id, registration_id, revision_no, actor_type, actor_id, changed_fields, summary)
-     VALUES ($1, $2, (SELECT COALESCE(max(revision_no), 0) + 1 FROM registration_revisions WHERE registration_id = $2), $3, $4, $5, $6)`,
-    [agencyId, registrationId, actor.type, actor.id, [summary.action], JSON.stringify(summary)],
+    `INSERT INTO registration_revisions (agency_id, registration_id, revision_no, actor_type, actor_id, changed_fields, summary, before_encrypted, after_encrypted)
+     VALUES ($1, $2, (SELECT COALESCE(max(revision_no), 0) + 1 FROM registration_revisions WHERE registration_id = $2), $3, $4, $5, $6, $7, $8)`,
+    [agencyId, registrationId, actor.type, actor.id, [summary.action], JSON.stringify(summary), snapshots?.before ?? null, snapshots?.after ?? null],
   );
 }
 
