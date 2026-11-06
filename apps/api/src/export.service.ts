@@ -278,6 +278,13 @@ export class ExportService implements OnModuleInit, OnModuleDestroy {
     })) as Record<string, unknown>[];
   }
 
+  /** 企業窗口的費用報表：不含個資，直接下載，不進匯出清單。 */
+  async feeReport(agencyId: string, eventId: string) {
+    const rows = await this.db.withTenant(agencyId, (tx) => this.registrationRows(tx, eventId, null));
+    const columns = REGISTRATION_COLUMNS.filter((c) => ['employee_no', 'employee_name', 'department', 'session', 'traveler_count', 'total', 'subsidy', 'self_pay', 'payment_status', 'reg_status'].includes(c.key));
+    return { name: `費用報表-${taipei(new Date()).slice(0, 10)}.xlsx`, content: await this.workbook('費用報表', columns, rows) };
+  }
+
   /** 文字一律寫成文字格式，身分證、電話開頭的 0 不會被 Excel 吃掉，也不會被當成公式。 */
   private async workbook(name: string, columns: Column[], rows: Record<string, unknown>[]) {
     const book = new ExcelJS.Workbook();

@@ -1,30 +1,21 @@
 import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Put, Query, Req, Res } from '@nestjs/common';
-import { exportRequest, exportTemplateInput, assignRoomRequest, createRoomRequest, roomSessionRequest, updateRoomRequest, emailResendRequest, emailTemplateInput, notifyEmailsRequest, agencyLoginRequest, accountEmailRequest, agencyModifyRequest, companyInput, contactsRequest, createEventRequest, employeeInput, feeAdjustRequest, paymentStatusRequest, reassignRequest, rosterCopyRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
+import { exportRequest, exportTemplateInput, assignRoomRequest, createRoomRequest, roomSessionRequest, updateRoomRequest, emailResendRequest, emailTemplateInput, notifyEmailsRequest, agencyLoginRequest, contactInput, contactStatusRequest, accountEmailRequest, agencyModifyRequest, companyInput, contactsRequest, createEventRequest, employeeInput, feeAdjustRequest, paymentStatusRequest, reassignRequest, rosterCopyRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
 import type { Request, Response } from 'express';
 import type { ZodType } from 'zod';
 import { AgencyAdminService } from './agency-admin.service.ts';
 import { DomainError } from './errors.ts';
+import { parse } from './parse.ts';
 import { EmailAdminService } from './email-admin.service.ts';
 import { RegistrationAdminService } from './registration-admin.service.ts';
 import { RoomService } from './rooms.service.ts';
+import { ContactService } from './contact.service.ts';
 import { DataLogService, type DataLogQuery } from './data-log.service.ts';
 import { ExportService } from './export.service.ts';
 import { RosterService } from './roster.service.ts';
-import { assertSameOrigin, cookieValue, requestHost, sendImage, sendPdf, sendXlsx, type RequestHeaders } from './http.ts';
+import { assertSameOrigin, cookieValue, requestHost, sendImage, sendPdf, sendXlsx, CONTACT_COOKIE, contactCookieOptions, cookieOptions, type RequestHeaders } from './http.ts';
 
 const COOKIE = 'bt_agency_session';
-const cookieOptions = () => ({
-  httpOnly: true,
-  sameSite: 'lax' as const,
-  secure: process.env.NODE_ENV === 'production',
-  path: '/api/v1/agency',
-});
 
-function parse<T>(schema: ZodType<T, any, any>, body: unknown): T {
-  const result = schema.safeParse(body);
-  if (!result.success) throw new DomainError('INVALID_INPUT', { issues: result.error.issues.map((i) => i.path.join('.')) });
-  return result.data;
-}
 
 /** 旅行社後台：旅行社由網址判定，資料由 RLS 隔離，操作權限依角色檢查。 */
 @Controller('api/v1/agency')
@@ -35,6 +26,7 @@ export class AgencyController {
     @Inject(RegistrationAdminService) private readonly regs: RegistrationAdminService,
     @Inject(EmailAdminService) private readonly emails: EmailAdminService,
     @Inject(RoomService) private readonly rooms: RoomService,
+    @Inject(ContactService) private readonly contactAccounts: ContactService,
     @Inject(DataLogService) private readonly dataLog: DataLogService,
     @Inject(ExportService) private readonly exports: ExportService,
   ) {}
@@ -65,8 +57,16 @@ export class AgencyController {
     assertSameOrigin(h);
     const req = agencyLoginRequest.safeParse(body);
     if (!req.success) throw new DomainError('INVALID_CREDENTIALS');
+    // 旅行社人員和企業窗口共用登入頁；同一個 Email 不會同時是兩種身分。
+    if (await this.contactAccounts.isContactEmail(requestHost(h), req.data.email)) {
+      const { token, maxAgeMs } = await this.contactAccounts.login(requestHost(h), req.data.email, req.data.password);
+      res.cookie(CONTACT_COOKIE, token, { ...contactCookieOptions(), maxAge: maxAgeMs });
+      res.clearCookie(COOKIE, cookieOptions());
+      return;
+    }
     const { token, maxAgeMs } = await this.admin.login(requestHost(h), req.data.email, req.data.password);
     res.cookie(COOKIE, token, { ...cookieOptions(), maxAge: maxAgeMs });
+    res.clearCookie(CONTACT_COOKIE, contactCookieOptions());
   }
 
   @Delete('session')
@@ -102,6 +102,30 @@ export class AgencyController {
   @Get('data-log')
   async dataLogList(@Headers() h: RequestHeaders, @Query() query: DataLogQuery) {
     return this.dataLog.list(await this.allowed(h, 'viewSensitiveData'), query);
+  }
+
+  // ===== 企業窗口帳號 =====
+
+  @Get('companies/:companyId/contacts')
+  async contactList(@Headers() h: RequestHeaders, @Param('companyId') companyId: string) {
+    return this.contactAccounts.listContacts(await this.configurer(h), companyId);
+  }
+
+  @Post('companies/:companyId/contacts')
+  async createContact(@Headers() h: RequestHeaders, @Param('companyId') companyId: string, @Body() body: unknown) {
+    return this.contactAccounts.createContact(await this.configurer(h), companyId, parse(contactInput, body));
+  }
+
+  @Post('companies/:companyId/contacts/:contactId/link')
+  @HttpCode(204)
+  async contactLink(@Headers() h: RequestHeaders, @Param('companyId') companyId: string, @Param('contactId') contactId: string) {
+    await this.contactAccounts.sendLink(await this.configurer(h), companyId, contactId);
+  }
+
+  @Patch('companies/:companyId/contacts/:contactId')
+  @HttpCode(204)
+  async contactStatus(@Headers() h: RequestHeaders, @Param('companyId') companyId: string, @Param('contactId') contactId: string, @Body() body: unknown) {
+    await this.contactAccounts.setStatus(await this.configurer(h), companyId, contactId, parse(contactStatusRequest, body).status);
   }
 
   @Get('quota')

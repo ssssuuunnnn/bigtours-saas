@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { ApiError } from '../../lib/api';
-import { adminApi, type AdminMe } from '../../lib/admin-api';
+import { adminApi, contactApi, type AdminMe } from '../../lib/admin-api';
 import { a } from '../../messages/admin';
 import { Sidebar } from './sidebar';
 
@@ -24,7 +24,9 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 
   const load = useCallback(() => {
     adminApi.me().then((m) => { setMe(m); setView('ready'); }).catch((e) => {
-      setView(e instanceof ApiError && e.status === 401 ? 'login' : 'failed');
+      if (!(e instanceof ApiError && e.status === 401)) { setView('failed'); return; }
+      // 企業窗口共用這個登入頁，登入後到自己的後台。
+      contactApi.me().then(() => window.location.replace('/company')).catch(() => setView('login'));
     });
   }, []);
   useEffect(load, [load]);

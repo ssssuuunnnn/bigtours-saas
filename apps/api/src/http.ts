@@ -14,6 +14,18 @@ export function cookieValue(h: RequestHeaders, cookie: string): string | undefin
   return undefined;
 }
 
+export const CONTACT_COOKIE = 'bt_contact_session';
+
+/** 後台（旅行社與企業窗口）的登入 Cookie。 */
+export const cookieOptions = () => ({
+  httpOnly: true,
+  sameSite: 'lax' as const,
+  secure: process.env.NODE_ENV === 'production',
+  path: '/api/v1/agency',
+});
+
+export const contactCookieOptions = () => ({ ...cookieOptions(), path: '/api/v1/company' });
+
 export const sessionTokenFrom = (h: RequestHeaders) => cookieValue(h, SESSION_COOKIE);
 
 /**
