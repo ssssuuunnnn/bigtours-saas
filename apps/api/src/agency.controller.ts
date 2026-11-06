@@ -1,11 +1,12 @@
 import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Put, Query, Req, Res } from '@nestjs/common';
-import { emailResendRequest, emailTemplateInput, notifyEmailsRequest, agencyLoginRequest, accountEmailRequest, agencyModifyRequest, companyInput, contactsRequest, createEventRequest, employeeInput, feeAdjustRequest, paymentStatusRequest, reassignRequest, rosterCopyRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
+import { assignRoomRequest, createRoomRequest, roomSessionRequest, updateRoomRequest, emailResendRequest, emailTemplateInput, notifyEmailsRequest, agencyLoginRequest, accountEmailRequest, agencyModifyRequest, companyInput, contactsRequest, createEventRequest, employeeInput, feeAdjustRequest, paymentStatusRequest, reassignRequest, rosterCopyRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
 import type { Request, Response } from 'express';
 import type { ZodType } from 'zod';
 import { AgencyAdminService } from './agency-admin.service.ts';
 import { DomainError } from './errors.ts';
 import { EmailAdminService } from './email-admin.service.ts';
 import { RegistrationAdminService } from './registration-admin.service.ts';
+import { RoomService } from './rooms.service.ts';
 import { RosterService } from './roster.service.ts';
 import { assertSameOrigin, cookieValue, requestHost, sendImage, sendPdf, type RequestHeaders } from './http.ts';
 
@@ -31,6 +32,7 @@ export class AgencyController {
     @Inject(RosterService) private readonly roster: RosterService,
     @Inject(RegistrationAdminService) private readonly regs: RegistrationAdminService,
     @Inject(EmailAdminService) private readonly emails: EmailAdminService,
+    @Inject(RoomService) private readonly rooms: RoomService,
   ) {}
 
   private ctx(h: RequestHeaders) {
@@ -380,6 +382,47 @@ export class AgencyController {
   @Get('events/:eventId/registrations/:registrationId')
   async registration(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('registrationId') registrationId: string) {
     return this.regs.detail(await this.operator(h), eventId, registrationId);
+  }
+
+  // ===== 分房 =====
+
+  @Get('events/:eventId/rooms')
+  async roomOverview(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Query('session') session?: string) {
+    return this.rooms.overview(await this.operator(h), eventId, session);
+  }
+
+  @Post('events/:eventId/rooms')
+  async createRoom(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    return this.rooms.create(await this.operator(h), eventId, parse(createRoomRequest, body));
+  }
+
+  @Post('events/:eventId/rooms/draft')
+  async draftRooms(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    return this.rooms.draft(await this.operator(h), eventId, parse(roomSessionRequest, body).sessionId);
+  }
+
+  @Post('events/:eventId/rooms/publish')
+  async publishRooms(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    return this.rooms.publish(await this.operator(h), eventId, parse(roomSessionRequest, body).sessionId);
+  }
+
+  @Put('events/:eventId/rooms/assignments')
+  @HttpCode(204)
+  async assignRooms(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    const input = parse(assignRoomRequest, body);
+    await this.rooms.assign(await this.operator(h), eventId, input.sessionId, input.roomId, input.travelerIds);
+  }
+
+  @Patch('events/:eventId/rooms/:roomId')
+  @HttpCode(204)
+  async updateRoom(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('roomId') roomId: string, @Body() body: unknown) {
+    await this.rooms.update(await this.operator(h), eventId, roomId, parse(updateRoomRequest, body));
+  }
+
+  @Delete('events/:eventId/rooms/:roomId')
+  @HttpCode(204)
+  async removeRoom(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('roomId') roomId: string) {
+    await this.rooms.remove(await this.operator(h), eventId, roomId);
   }
 
   // ===== Email 通知 =====

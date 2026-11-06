@@ -97,7 +97,7 @@ export const ERROR_CODES = [
   'UNAUTHENTICATED', 'INVALID_CREDENTIALS', 'PAGE_CLOSED', 'FORBIDDEN_ORIGIN', 'LINK_INVALID', 'INVALID_PASSWORD',
   'INVALID_INPUT', 'CAPACITY_BELOW_SOLD', 'TIER_LIMIT_EXCEEDED', 'SESSION_IN_USE', 'FIELD_LOCKED',
   'FORBIDDEN', 'QUOTA_EMPTY', 'SLUG_TAKEN', 'EVENT_NOT_DRAFT', 'EVENT_NOT_PUBLISHED', 'PAGE_MODE_MISMATCH',
-  'DUPLICATE_NAME', 'TRAVELER_TYPE_IN_USE', 'ROOM_TYPE_IN_USE', 'OPTION_IN_USE', 'QUOTA_IN_USE', 'TEMPLATE_INVALID', 'NOT_MODIFIABLE', 'PAYMENT_NOT_REQUIRED', 'REGISTRATION_CANCELLED', 'ROOM_FULL',
+  'DUPLICATE_NAME', 'TRAVELER_TYPE_IN_USE', 'ROOM_TYPE_IN_USE', 'OPTION_IN_USE', 'QUOTA_IN_USE', 'TEMPLATE_INVALID', 'ROOM_LABEL_TAKEN', 'ROOMS_NOT_READY', 'NOT_MODIFIABLE', 'PAYMENT_NOT_REQUIRED', 'REGISTRATION_CANCELLED', 'ROOM_FULL',
   'DUPLICATE_EMPLOYEE_NO', 'EMPLOYEE_NO_LOCKED', 'EMPLOYEE_HAS_REGISTRATION', 'CSV_BAD_HEADER', 'CSV_TOO_MANY_ROWS',
   'PUBLISH_BLOCKED', 'PUBLISH_REQUIREMENT', 'INVALID_FILE', 'FILE_TOO_LARGE',
 ] as const;
@@ -356,6 +356,28 @@ export const emailTemplateInput = z.object({
 export type EmailTemplateInput = z.infer<typeof emailTemplateInput>;
 export const notifyEmailsRequest = z.object({ emails: z.array(z.string().trim().email().max(254)).max(10) });
 export const emailResendRequest = z.object({ email: z.string().trim().email().max(254).optional() });
+
+export const createRoomRequest = z.object({
+  sessionId: z.string().uuid(),
+  label: z.string().trim().max(30).optional(),
+  roomTypeId: z.string().uuid().nullable(),
+  capacity: z.number().int().min(1).max(20).optional(),
+  note: z.string().trim().max(200).nullable().optional(),
+});
+export type CreateRoomInput = z.infer<typeof createRoomRequest>;
+export const updateRoomRequest = z.object({
+  label: z.string().trim().min(1).max(30),
+  roomTypeId: z.string().uuid().nullable(),
+  capacity: z.number().int().min(1).max(20).optional(),
+  note: z.string().trim().max(200).nullable().optional(),
+});
+export type UpdateRoomInput = z.infer<typeof updateRoomRequest>;
+export const roomSessionRequest = z.object({ sessionId: z.string().uuid() });
+export const assignRoomRequest = z.object({
+  sessionId: z.string().uuid(),
+  roomId: z.string().uuid().nullable(),
+  travelerIds: z.array(z.string().uuid()).min(1).max(100),
+});
 
 export const EVENT_NAV_KEYS = [
   'basic', 'schedule', 'sessions', 'types', 'options', 'fields', 'payment-terms', 'contacts', 'publish',

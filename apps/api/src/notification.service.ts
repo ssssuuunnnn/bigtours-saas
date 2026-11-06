@@ -12,6 +12,7 @@ export type MailTemplate =
   | { key: 'cancel_confirmed' }
   | { key: 'cancel_rejected' }
   | { key: 'deadline_reminder'; closesAt: string }
+  | { key: 'room_published'; sessionName: string; rooms: string }
   | { key: 'reassigned'; reason: string; changes: { traveler: string; from: string; to: string }[]; total: number; selfPay: number }
   | { key: 'agency_cancel_requested'; employeeName: string; employeeNo: string; sessionName: string; eventId: string; registrationId: string }
   | { key: 'agency_modified'; employeeName: string; employeeNo: string; from: number; to: number; eventId: string; registrationId: string };
@@ -39,6 +40,7 @@ function values(event: MailEvent, employee: MailEmployee, t: MailTemplate): Reco
     case 'modified':
       return { ...base, 修改說明: t.byAgency ? `旅行社修改了您「${event.name}」的報名內容。` : `您已修改「${event.name}」的報名內容。`, 整筆費用: money(t.total), 自付金額: money(t.selfPay) };
     case 'deadline_reminder': return { ...base, 截止時間: t.closesAt };
+    case 'room_published': return { ...base, 梯次: t.sessionName, 分房內容: t.rooms };
     case 'reassigned':
       return { ...base, 改派原因: t.reason, 改派內容: t.changes.map((c) => `${c.traveler}：${c.from} → ${c.to}`).join('\n'), 整筆費用: money(t.total), 自付金額: money(t.selfPay) };
     case 'agency_cancel_requested':

@@ -802,6 +802,8 @@ export class RegistrationService {
       );
       if (!updated.rowCount) throw new DomainError('NOT_CANCELLABLE');
       await addRevision(tx, agencyId, registrationId, { type: 'agency_user', id: actorId }, { action: 'cancel_confirmed' });
+      // 已取消的旅客不再佔房間；分房頁會顯示有異動，需要重新公布。
+      await tx.query(`DELETE FROM room_assignments WHERE traveler_id IN (SELECT id FROM travelers WHERE registration_id = $1)`, [registrationId]);
 
       const count = await tx.query(`SELECT count(*)::int AS n FROM travelers WHERE registration_id = $1`, [registrationId]);
       await tx.query(`UPDATE event_sessions SET sold_count = sold_count - $1 WHERE id = $2`, [
@@ -1155,6 +1157,8 @@ export class RegistrationService {
     );
     const r = rows[0];
     if (!r) return null;
+    // 員工只看得到公布的結果；公布後的調整要等重新公布。
+    const published = await tx.query(`SELECT snapshot, published_at FROM room_publications WHERE session_id = $1`, [r.session_id]);
     const travelers = await tx.query(
       `SELECT t.id, t.name, t.traveler_type_id, t.base_price_snapshot, t.field_values, t.sensitive_masks, t.requested_room_no,
               t.room_surcharge_snapshot, t.session_room_type_id, rt.name AS room_type_name,
@@ -1177,6 +1181,11 @@ export class RegistrationService {
       paymentStatus: r.payment_status,
       submittedAt: r.submitted_at,
       roomPreferences: r.room_preferences,
+      finalRooms: published.rows[0]
+        ? (published.rows[0].snapshot.rooms as { label: string; typeName: string | null; travelers: { id: string; name: string }[] }[])
+          .filter((room) => room.travelers.some((x) => travelers.rows.some((t) => t.id === x.id)))
+          .map((room) => ({ label: room.label, typeName: room.typeName, names: room.travelers.map((x) => x.name) }))
+        : null,
       travelers: travelers.rows.map((t) => ({
         id: t.id,
         travelerTypeId: t.traveler_type_id,

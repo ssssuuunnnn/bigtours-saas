@@ -50,6 +50,21 @@ export interface RegistrationDetail {
   coworkers: { requestedRoomNo: number; name: string }[];
   revisions: { no: number; hasContent: boolean; at: string; actorName: string | null; actorType: string; summary: RevisionSummary }[];
 }
+export interface RoomTraveler { id: string; name: string; typeName: string; occupiesBed: boolean; employeeName: string; selectedRoom: string | null; roomTypeId: string | null }
+export interface RoomView {
+  id: string; label: string; note: string | null; roomTypeId: string | null; typeName: string | null; capacity: number; beds: number;
+  status: 'ok' | 'over' | 'under' | 'empty'; travelers: RoomTraveler[]; mismatched: { name: string; selectedRoom: string | null }[]; wishes: string[];
+}
+export interface RoomSessionView {
+  id: string; name: string; roomTypes: { id: string; name: string; capacity: number }[];
+  rooms: RoomView[];
+  unassigned: { key: string; employeeName: string; travelers: RoomTraveler[]; selectedRoom: string | null; wish: string | null }[];
+  stats: { total: number; assigned: number; over: number; under: number; wishes: number };
+  publication: { publishedAt: string; changes: { label: string; typeName: string | null; before: string[]; after: string[] }[] } | null;
+  notifyCount: number;
+}
+export interface RoomOverview { sessions: { id: string; name: string }[]; session: RoomSessionView | null }
+export interface RoomValues { label: string; roomTypeId: string | null; capacity?: number; note: string | null }
 export interface EmailTemplateView {
   key: string; label: string; audience: 'employee' | 'agency'; placeholders: string[]; required: string[];
   defaultSubject: string; defaultBody: string; subject: string; body: string; senderName: string | null; customized: boolean;
@@ -181,6 +196,13 @@ export const adminApi = {
   },
   registration: (id: string, rid: string) => call<RegistrationDetail>('GET', `/events/${id}/registrations/${rid}`),
   revealSensitive: (id: string, rid: string) => call<Record<string, Record<string, unknown>>>('POST', `/events/${id}/registrations/${rid}/sensitive`, {}),
+  rooms: (id: string, session?: string) => call<RoomOverview>('GET', `/events/${id}/rooms${session ? `?session=${session}` : ''}`),
+  createRoom: (id: string, body: { sessionId: string; roomTypeId: string | null; capacity?: number; label?: string }) => call<{ id: string; label: string }>('POST', `/events/${id}/rooms`, body),
+  updateRoom: (id: string, roomId: string, body: RoomValues) => call<void>('PATCH', `/events/${id}/rooms/${roomId}`, body),
+  deleteRoom: (id: string, roomId: string) => call<void>('DELETE', `/events/${id}/rooms/${roomId}`),
+  draftRooms: (id: string, sessionId: string) => call<{ created: number; placed: number }>('POST', `/events/${id}/rooms/draft`, { sessionId }),
+  assignRoom: (id: string, sessionId: string, roomId: string | null, travelerIds: string[]) => call<void>('PUT', `/events/${id}/rooms/assignments`, { sessionId, roomId, travelerIds }),
+  publishRooms: (id: string, sessionId: string) => call<{ notified: number }>('POST', `/events/${id}/rooms/publish`, { sessionId }),
   emails: (id: string) => call<EmailOverview>('GET', `/events/${id}/emails`),
   saveNotifyEmails: (id: string, emails: string[]) => call<void>('PUT', `/events/${id}/emails/notify-emails`, { emails }),
   saveEmailTemplate: (id: string, key: string, body: EmailTemplateValues) => call<void>('PUT', `/events/${id}/emails/templates/${key}`, body),

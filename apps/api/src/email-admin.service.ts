@@ -20,6 +20,7 @@ const SAMPLE: Record<string, MailTemplate> = {
   cancel_confirmed: { key: 'cancel_confirmed' },
   cancel_rejected: { key: 'cancel_rejected' },
   deadline_reminder: { key: 'deadline_reminder', closesAt: '1/29 18:00' },
+  room_published: { key: 'room_published', sessionName: 'A 梯', rooms: 'A-012 三人房：王小明、王太太、王小寶' },
   reassigned: { key: 'reassigned', reason: '成團人數不足', changes: [{ traveler: '王小明', from: '行程 A', to: '行程 B' }], total: 31400, selfPay: 23400 },
   agency_cancel_requested: { key: 'agency_cancel_requested', employeeName: '王小明', employeeNo: 'E001', sessionName: 'A 梯', eventId: 'sample', registrationId: 'sample' },
   agency_modified: { key: 'agency_modified', employeeName: '王小明', employeeNo: 'E001', from: 31400, to: 31750, eventId: 'sample', registrationId: 'sample' },

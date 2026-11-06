@@ -957,6 +957,14 @@ function Done({ registration: r, session, fields, paymentInstructions, slug: slu
           </dl>
         </section>
       ))}
+      <section className="block">
+        <h2>{t.finalRooms}</h2>
+        {!r.finalRooms ? <p className="muted">{t.finalRoomsPending}</p> : r.finalRooms.length === 0 ? <p className="muted">{t.finalRoomsNone}</p> : (
+          <dl className="summary">
+            {r.finalRooms.map((room) => <div key={room.label}><dt>{room.label}{room.typeName ? ` ${room.typeName}` : ''}</dt><dd>{room.names.join('、')}</dd></div>)}
+          </dl>
+        )}
+      </section>
       {!requested && (
         <section className="block">
           {error && <p className="error" role="alert">{error}</p>}

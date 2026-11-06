@@ -6,7 +6,9 @@ import pg from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.ts';
+import { DatabaseService } from '../src/database.service.ts';
 import { EncryptionService } from '../src/encryption.service.ts';
+import { RegistrationService } from '../src/registration.service.ts';
 import { MailService } from '../src/mail.service.ts';
 import { composeMail, NotificationService } from '../src/notification.service.ts';
 
@@ -1577,5 +1579,164 @@ describe('Email 通知', () => {
     const copied = await request(app.getHttpServer()).get(`/api/v1/agency/events/${copy.body.id}/emails`).set('x-forwarded-host', a.host).set('cookie', a.cookie).expect(200);
     expect(copied.body.notifyEmails).toEqual(['team@example.com']);
     expect(copied.body.templates.find((x: any) => x.key === 'deadline_reminder')).toMatchObject({ customized: true, senderName: '山海旅遊' });
+  });
+});
+
+describe('分房', () => {
+  const mail = () => app.get(MailService);
+  const until = async (fn: () => boolean) => { for (let i = 0; i < 100; i++) { if (fn()) return; await new Promise((r) => setTimeout(r, 30)); } throw new Error('等待逾時'); };
+  const setup = async (role = 'admin') => {
+    const a = await makeAgency(role);
+    const s = (await q1(`INSERT INTO event_sessions (agency_id, event_id, name, capacity, sort_order) VALUES ($1, $2, 'A 梯', 50, 0) RETURNING id`, [a.agencyId, a.eventId])).id as string;
+    const twin = (await q1(`INSERT INTO session_room_types (agency_id, session_id, name, capacity, bed_quota) VALUES ($1, $2, '二人房', 2, 50) RETURNING id`, [a.agencyId, s])).id as string;
+    const single = (await q1(`INSERT INTO session_room_types (agency_id, session_id, name, capacity, bed_quota) VALUES ($1, $2, '單人房', 1, 50) RETURNING id`, [a.agencyId, s])).id as string;
+    const adult = (await q1(`INSERT INTO traveler_types (agency_id, event_id, name, base_price) VALUES ($1, $2, '成人', 100) RETURNING id`, [a.agencyId, a.eventId])).id as string;
+    const infant = (await q1(`INSERT INTO traveler_types (agency_id, event_id, name, base_price, occupies_bed) VALUES ($1, $2, '嬰兒', 10, false) RETURNING id`, [a.agencyId, a.eventId])).id as string;
+    return { a, s, twin, single, adult, infant };
+  };
+  type C = Awaited<ReturnType<typeof setup>>;
+  let seq = 0;
+  /** people：[姓名, 房型 ID, 第幾間, 不佔床] */
+  const book = async (c: C, people: [string, string | null, number, boolean?][], email: string | null = null, wish?: [number, string]) => {
+    seq += 1;
+    const emp = (await q1(`INSERT INTO event_employees (agency_id, event_id, employee_no, name, email) VALUES ($1, $2, $3, $4, $5) RETURNING id`, [c.a.agencyId, c.a.eventId, `R${seq}`, people[0]![0], email])).id;
+    const reg = (await q1(`INSERT INTO registrations (agency_id, event_id, session_id, event_employee_id, total_amount, subsidy_amount, payment_status, terms_version_accepted, terms_accepted_at) VALUES ($1, $2, $3, $4, 100, 0, 'unpaid', 1, now()) RETURNING id`, [c.a.agencyId, c.a.eventId, c.s, emp])).id as string;
+    const ids: string[] = [];
+    for (const [i, [name, room, no, noBed]] of people.entries()) {
+      ids.push((await q1(`INSERT INTO travelers (agency_id, registration_id, traveler_type_id, is_employee_self, name, base_price_snapshot, session_room_type_id, requested_room_no, sort_order) VALUES ($1, $2, $3, false, $4, 100, $5, $6, $7) RETURNING id`, [c.a.agencyId, reg, noBed ? c.infant : c.adult, name, room, no, i])).id);
+    }
+    if (wish) await admin.query(`INSERT INTO room_preferences (agency_id, registration_id, requested_room_no, preferred_coworker_name) VALUES ($1, $2, $3, $4)`, [c.a.agencyId, reg, wish[0], wish[1]]);
+    return { reg, ids, emp: emp as string };
+  };
+  const view = async (c: C) => (await api(c.a).get('/rooms').expect(200)).body.session;
+
+  it('建立草稿依第幾間分組、自動編號；可重複按，不動已排好的房間', async () => {
+    const c = await setup();
+    await book(c, [['王大明', c.twin, 1], ['王太太', c.twin, 1], ['王小寶', null, 1, true], ['王阿公', c.single, 2]]);
+    const first = (await api(c.a).post('/rooms/draft', { sessionId: c.s }).expect(201)).body;
+    expect(first).toEqual({ created: 2, placed: 4 });
+    const v = await view(c);
+    expect(v.rooms.map((r: any) => [r.label, r.typeName, r.beds, r.status])).toEqual([['A-001', '二人房', 2, 'ok'], ['A-002', '單人房', 1, 'ok']]);
+    expect(v.rooms[0].travelers.map((t: any) => t.name)).toEqual(['王大明', '王太太', '王小寶']);
+    expect(v.stats).toMatchObject({ total: 4, assigned: 4, over: 0 });
+
+    await api(c.a).put('/rooms/assignments', { sessionId: c.s, roomId: v.rooms[1].id, travelerIds: [v.rooms[0].travelers[1].id] }).expect(204);
+    await book(c, [['新來的', c.twin, 1]]);
+    expect((await api(c.a).post('/rooms/draft', { sessionId: c.s }).expect(201)).body).toEqual({ created: 1, placed: 1 });
+    const again = await view(c);
+    expect(again.rooms[1].travelers.map((t: any) => t.name)).toEqual(['王太太', '王阿公']);
+    expect(again.rooms[2].label).toBe('A-003');
+  });
+
+  it('不佔床不計人數；超過不能公布，沒住滿可以公布；房型與報名不同會提醒', async () => {
+    const c = await setup();
+    const p = await book(c, [['甲', c.twin, 1], ['乙', c.twin, 2]]);
+    const small = (await api(c.a).post('/rooms', { sessionId: c.s, roomTypeId: c.single }).expect(201)).body;
+    expect(small.label).toBe('A-001');
+    await api(c.a).put('/rooms/assignments', { sessionId: c.s, roomId: small.id, travelerIds: [p.ids[0]] }).expect(204);
+    const blocked = await api(c.a).post('/rooms/publish', { sessionId: c.s }).expect(409);
+    expect(blocked.body).toMatchObject({ code: 'ROOMS_NOT_READY', detail: { unassigned: 1, over: 0 } });
+
+    await api(c.a).put('/rooms/assignments', { sessionId: c.s, roomId: small.id, travelerIds: [p.ids[1]] }).expect(204);
+    const v = await view(c);
+    expect(v.rooms[0]).toMatchObject({ status: 'over', beds: 2, capacity: 1 });
+    expect(v.rooms[0].mismatched.map((m: any) => m.selectedRoom)).toEqual(['二人房', '二人房']);
+    expect((await api(c.a).post('/rooms/publish', { sessionId: c.s }).expect(409)).body.detail).toEqual({ unassigned: 0, over: 1 });
+
+    await api(c.a).patch(`/rooms/${small.id}`, { label: 'A-001', roomTypeId: c.twin }).expect(204);
+    expect((await view(c)).rooms[0].status).toBe('ok');
+    await api(c.a).put('/rooms/assignments', { sessionId: c.s, roomId: null, travelerIds: [p.ids[1]] }).expect(204);
+    const big = (await api(c.a).post('/rooms', { sessionId: c.s, roomTypeId: c.twin }).expect(201)).body;
+    await api(c.a).put('/rooms/assignments', { sessionId: c.s, roomId: big.id, travelerIds: [p.ids[1]] }).expect(204);
+    const baby = await book(c, [['寶寶', null, 1, true]]);
+    await api(c.a).put('/rooms/assignments', { sessionId: c.s, roomId: big.id, travelerIds: [baby.ids[0]] }).expect(204);
+    const w = await view(c);
+    expect(w.rooms.map((r: any) => r.status)).toEqual(['under', 'under']);
+    expect(w.rooms[1].beds).toBe(1);
+    await api(c.a).post('/rooms/publish', { sessionId: c.s }).expect(201);
+  });
+
+  it('公布前員工看不到；重新公布前看到上次結果；只通知有變動的員工', async () => {
+    const c = await setup();
+    const tag = randomUUID().slice(0, 8);
+    const emails = ['a', 'b', 'c'].map((x) => `${x}-${tag}@example.com`);
+    const A = await book(c, [['甲', c.twin, 1]], emails[0]!);
+    const B = await book(c, [['乙', c.twin, 1]], emails[1]!);
+    const D = await book(c, [['丙', c.twin, 1]], emails[2]!);
+    await api(c.a).post('/rooms/draft', { sessionId: c.s }).expect(201);
+    const before = await view(c);
+    expect(before.publication).toBeNull();
+    expect(before.notifyCount).toBe(3);
+
+    const svc = app.get(RegistrationService) as any;
+    const finalRooms = async (reg: { emp: string }) => {
+      const res = await app.get(DatabaseService).withTenant(c.a.agencyId, async (tx: any) => svc.loadRegistration(tx, reg.emp, await svc.loadConfig(tx, c.a.eventId)));
+      return res.finalRooms;
+    };
+    expect(await finalRooms(A)).toBeNull();
+
+    expect((await api(c.a).post('/rooms/publish', { sessionId: c.s }).expect(201)).body.notified).toBe(3);
+    await until(() => emails.every((e) => mail().sent.some((m) => m.to === e)));
+    const m = mail().sent.find((x) => x.to === emails[0])!;
+    expect(m.subject).toContain('分房結果');
+    expect(m.text).toContain('A-001 二人房：甲');
+    expect(m.text).not.toContain('乙');
+    expect(await finalRooms(A)).toEqual([{ label: 'A-001', typeName: '二人房', names: ['甲'] }]);
+
+    const v = await view(c);
+    await api(c.a).put('/rooms/assignments', { sessionId: c.s, roomId: v.rooms[0].id, travelerIds: [B.ids[0]] }).expect(204);
+    const changed = await view(c);
+    expect(changed.publication.changes.map((x: any) => [x.label, x.before, x.after])).toEqual([['A-001', ['甲'], ['甲', '乙']], ['A-002', ['乙'], []]]);
+    expect(changed.notifyCount).toBe(2);
+    expect(await finalRooms(A)).toEqual([{ label: 'A-001', typeName: '二人房', names: ['甲'] }]);
+
+    const count = (e: string) => mail().sent.filter((x) => x.to === e).length;
+    expect((await api(c.a).post('/rooms/publish', { sessionId: c.s }).expect(201)).body.notified).toBe(2);
+    await until(() => count(emails[0]!) === 2 && count(emails[1]!) === 2);
+    expect(count(emails[2]!)).toBe(1);
+    expect(mail().sent.filter((x) => x.to === emails[1]).at(-1)!.text).toContain('A-001 二人房：甲、乙');
+    expect((await finalRooms(A))[0].names).toEqual(['甲', '乙']);
+    expect((await view(c)).publication.changes).toEqual([]);
+    void D;
+  });
+
+  it('確認取消後離開房間並出現異動；手動房號不能重複；刪除房間旅客回到未分房', async () => {
+    const c = await setup();
+    const A = await book(c, [['甲', c.twin, 1]], null, [1, '乙同事']);
+    const B = await book(c, [['乙', c.twin, 1]]);
+    expect((await view(c)).stats.wishes).toBe(1);
+    expect((await view(c)).unassigned[0]).toMatchObject({ employeeName: '甲', wish: '乙同事', selectedRoom: '二人房' });
+    await api(c.a).post('/rooms/draft', { sessionId: c.s }).expect(201);
+    await api(c.a).post('/rooms/publish', { sessionId: c.s }).expect(201);
+
+    await admin.query(`UPDATE registrations SET status = 'cancel_requested', cancel_requested_at = now() WHERE id = $1`, [B.reg]);
+    await admin.query(`UPDATE event_sessions SET sold_count = 2 WHERE id = $1`, [c.s]);
+    await admin.query(`UPDATE session_room_types SET sold_count = 2 WHERE id = $1`, [c.twin]);
+    await app.get(RegistrationService).confirmCancel(c.a.agencyId, B.reg, null);
+    const v = await view(c);
+    expect(v.stats.total).toBe(1);
+    expect(v.publication.changes).toHaveLength(1);
+    expect(v.publication.changes[0]).toMatchObject({ before: ['乙'], after: [] });
+    expect(v.rooms[1].status).toBe('empty');
+
+    const label = await api(c.a).post('/rooms', { sessionId: c.s, roomTypeId: c.twin, label: 'A-001' }).expect(409);
+    expect(label.body.code).toBe('ROOM_LABEL_TAKEN');
+    await api(c.a).del(`/rooms/${v.rooms[0].id}`).expect(204);
+    expect((await view(c)).unassigned[0].travelers[0].name).toBe('甲');
+    void A;
+  });
+
+  it('房型驗證、別的梯次與別家旅行社都擋下；營運人員可以操作', async () => {
+    const c = await setup('operations');
+    await api(c.a).post('/rooms', { sessionId: c.s, roomTypeId: null, capacity: 2 }).expect(422);
+    const other = await q1(`INSERT INTO event_sessions (agency_id, event_id, name, capacity, sort_order) VALUES ($1, $2, 'B 梯', 50, 1) RETURNING id`, [c.a.agencyId, c.a.eventId]);
+    const free = (await api(c.a).post('/rooms', { sessionId: other.id, roomTypeId: null, capacity: 4 }).expect(201)).body;
+    expect(free.label).toBe('B-001');
+    await api(c.a).post('/rooms', { sessionId: other.id, roomTypeId: c.twin }).expect(422);
+    const p = await book(c, [['甲', c.twin, 1]]);
+    await api(c.a).put('/rooms/assignments', { sessionId: c.s, roomId: free.id, travelerIds: [p.ids[0]] }).expect(404);
+    await api(c.a).put('/rooms/assignments', { sessionId: other.id, roomId: free.id, travelerIds: [p.ids[0]] }).expect(404);
+    const stranger = await makeAgency('admin');
+    await request(app.getHttpServer()).post(`/api/v1/agency/events/${c.a.eventId}/rooms/draft`).set('x-forwarded-host', stranger.host).set('cookie', stranger.cookie).send({ sessionId: c.s }).expect(404);
   });
 });
