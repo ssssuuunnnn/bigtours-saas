@@ -1,8 +1,8 @@
 'use client';
 
 import { useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { adminApi, type AccountState, type AdminEmployee, type AdminEvent, type EmployeeValues, type ImportPreview, type PasswordLink, type RosterPage } from '../../../../lib/admin-api';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { adminApi as agencyApi, type AccountState, type AdminEmployee, type RosterApi, type AdminEvent, type EmployeeValues, type ImportPreview, type PasswordLink, type RosterPage } from '../../../../lib/admin-api';
 import { a } from '../../../../messages/admin';
 import { adminError } from '../../admin-shell';
 
@@ -13,7 +13,14 @@ const money = (n: number) => `$${n.toLocaleString('en-US')}`;
 
 type View = { kind: 'list' } | { kind: 'import' } | { kind: 'copy' };
 
-export function RosterPanel({ event }: { event: AdminEvent }) {
+const RosterApiContext = createContext<RosterApi>(agencyApi);
+
+/** 旅行社和企業窗口共用這個畫面，只有呼叫的 API 不同。 */
+export function RosterPanel({ event, api = agencyApi }: { event: Pick<AdminEvent, 'id'>; api?: RosterApi }) {
+  return <RosterApiContext.Provider value={api}><RosterView event={event} /></RosterApiContext.Provider>;
+}
+
+function RosterView({ event }: { event: Pick<AdminEvent, 'id'> }) {
   const [view, setView] = useState<View>({ kind: 'list' });
   const [note, setNote] = useState<string | null>(null);
   const done = (message: string) => { setNote(message); setView({ kind: 'list' }); };
@@ -23,7 +30,8 @@ export function RosterPanel({ event }: { event: AdminEvent }) {
   return <ListView event={event} note={note} onNote={setNote} onImport={() => { setNote(null); setView({ kind: 'import' }); }} onCopy={() => { setNote(null); setView({ kind: 'copy' }); }} />;
 }
 
-function ListView({ event, note, onNote, onImport, onCopy }: { event: AdminEvent; note: string | null; onNote: (n: string | null) => void; onImport: () => void; onCopy: () => void }) {
+function ListView({ event, note, onNote, onImport, onCopy }: { event: Pick<AdminEvent, 'id'>; note: string | null; onNote: (n: string | null) => void; onImport: () => void; onCopy: () => void }) {
+  const adminApi = useContext(RosterApiContext);
   const [data, setData] = useState<RosterPage | null>(null);
   const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
@@ -183,7 +191,8 @@ function ListView({ event, note, onNote, onImport, onCopy }: { event: AdminEvent
   );
 }
 
-function EmployeeForm({ event, employee, defaults, onCancel, onSaved }: { event: AdminEvent; employee: AdminEmployee | null; defaults: RosterPage['defaults']; onCancel: () => void; onSaved: () => void }) {
+function EmployeeForm({ event, employee, defaults, onCancel, onSaved }: { event: Pick<AdminEvent, 'id'>; employee: AdminEmployee | null; defaults: RosterPage['defaults']; onCancel: () => void; onSaved: () => void }) {
+  const adminApi = useContext(RosterApiContext);
   const [v, setV] = useState({
     employeeNo: employee?.employeeNo ?? '',
     name: employee?.name ?? '',
@@ -240,7 +249,8 @@ function EmployeeForm({ event, employee, defaults, onCancel, onSaved }: { event:
 
 const TEMPLATE = '﻿員工編號,姓名,部門,Email,補助金額,眷屬人數上限\nE10234,陳怡君,研發部,yijun@example.com,8000,3\nE10238,周志偉,工廠,,,1\n';
 
-function ImportView({ event, onCancel, onDone }: { event: AdminEvent; onCancel: () => void; onDone: (message: string) => void }) {
+function ImportView({ event, onCancel, onDone }: { event: Pick<AdminEvent, 'id'>; onCancel: () => void; onDone: (message: string) => void }) {
+  const adminApi = useContext(RosterApiContext);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -335,7 +345,8 @@ function ImportView({ event, onCancel, onDone }: { event: AdminEvent; onCancel: 
   );
 }
 
-function CopyView({ event, onCancel, onDone }: { event: AdminEvent; onCancel: () => void; onDone: (message: string) => void }) {
+function CopyView({ event, onCancel, onDone }: { event: Pick<AdminEvent, 'id'>; onCancel: () => void; onDone: (message: string) => void }) {
+  const adminApi = useContext(RosterApiContext);
   const [sources, setSources] = useState<{ id: string; name: string; employees: number }[] | null>(null);
   const [from, setFrom] = useState('');
   const [error, setError] = useState<string | null>(null);

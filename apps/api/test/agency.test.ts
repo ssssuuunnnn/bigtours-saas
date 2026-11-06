@@ -1966,3 +1966,165 @@ describe('個資紀錄', () => {
     expect(next.hasMore).toBe(false);
   });
 });
+
+describe('企業窗口', () => {
+  const http = () => request(app.getHttpServer());
+  const mail = () => app.get(MailService);
+  const agencyCall = (a: Ag) => ({
+    get: (p: string) => http().get(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie),
+    post: (p: string, b: object) => http().post(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie).send(b),
+    patch: (p: string, b: object) => http().patch(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie).send(b),
+  });
+  const company = async (a: Ag) => (await q1(`SELECT company_id FROM events WHERE id = $1`, [a.eventId])).company_id as string;
+  const tokenFrom = (to: string) => mail().sent.filter((m) => m.to === to).at(-1)!.text.match(/set-password\/([\w-]+)/)![1]!;
+  /** 建立窗口、用邀請信設定密碼、登入，回傳可以呼叫窗口 API 的工具。 */
+  const contactOf = async (a: Ag, companyId?: string) => {
+    const cid = companyId ?? await company(a);
+    const email = `c-${randomUUID().slice(0, 8)}@example.com`;
+    const { id } = (await agencyCall(a).post(`/companies/${cid}/contacts`, { name: '林窗口', email }).expect(201)).body;
+    await http().post(`/api/v1/company/password-links/${tokenFrom(email)}`).set('x-forwarded-host', a.host).send({ password: 'contact1234' }).expect(204);
+    const login = await http().post('/api/v1/agency/session').set('x-forwarded-host', a.host).send({ email, password: 'contact1234' }).expect(204);
+    const cookie = (login.headers['set-cookie'] as unknown as string[]).find((c) => c.startsWith('bt_contact_session='))!.split(';')[0]!;
+    const call = (method: 'get' | 'post' | 'patch' | 'delete', p: string) => (http() as any)[method](`/api/v1/company${p}`).set('x-forwarded-host', a.host).set('cookie', cookie);
+    return { id, email, cookie, cid, get: (p: string) => call('get', p), post: (p: string, b: object) => call('post', p).send(b), patch: (p: string, b: object) => call('patch', p).send(b), del: (p: string) => call('delete', p) };
+  };
+  const booked = async (a: Ag, no: string, status = 'confirmed') => {
+    const s = (await q1(`INSERT INTO event_sessions (agency_id, event_id, name, capacity, sort_order, sold_count) VALUES ($1, $2, $3, 50, 0, 1) RETURNING id`, [a.agencyId, a.eventId, `梯${no}`])).id;
+    const type = (await q1(`INSERT INTO traveler_types (agency_id, event_id, name, base_price) VALUES ($1, $2, $3, 1000) RETURNING id`, [a.agencyId, a.eventId, `T${no}`])).id;
+    const emp = (await q1(`INSERT INTO event_employees (agency_id, event_id, employee_no, name, department) VALUES ($1, $2, $3, $4, '資訊部') RETURNING id`, [a.agencyId, a.eventId, no, `員工${no}`])).id;
+    const reg = (await q1(`INSERT INTO registrations (agency_id, event_id, session_id, event_employee_id, total_amount, subsidy_amount, payment_status, terms_version_accepted, terms_accepted_at, status) VALUES ($1, $2, $3, $4, 10000, 3000, 'unpaid', 1, now(), $5) RETURNING id`, [a.agencyId, a.eventId, s, emp, status])).id as string;
+    await admin.query(`INSERT INTO travelers (agency_id, registration_id, traveler_type_id, is_employee_self, name, base_price_snapshot, field_values, sensitive_masks, sensitive_values_encrypted) VALUES ($1, $2, $3, true, $4, 1000, $5, $6, $7)`,
+      [a.agencyId, reg, type, `員工${no}`, JSON.stringify({ diet: '素食' }), JSON.stringify({ nid: 'A1*******9' }), app.get(EncryptionService).encryptJson({ nid: 'A123456789' })]);
+    return { reg, emp: emp as string };
+  };
+
+  it('邀請信開通後能登入，連結只能用一次；共用登入頁判斷身分；旅行社 API 不接受窗口', async () => {
+    const a = await makeAgency('admin');
+    const c = await contactOf(a);
+    expect((await c.get('/me').expect(200)).body).toMatchObject({ companyName: expect.any(String), user: { name: '林窗口', email: c.email } });
+    await http().get('/api/v1/agency/me').set('x-forwarded-host', a.host).set('cookie', c.cookie).expect(401);
+    await http().get('/api/v1/company/me').set('x-forwarded-host', a.host).set('cookie', a.cookie).expect(401);
+    const list = (await agencyCall(a).get(`/companies/${c.cid}/contacts`).expect(200)).body;
+    expect(list[0]).toMatchObject({ name: '林窗口', status: 'active', activated: true });
+    await http().post('/api/v1/agency/session').set('x-forwarded-host', a.host).send({ email: c.email, password: 'wrong-pass1' }).expect(401);
+
+    const invite = mail().sent.filter((m) => m.to === c.email).at(-1)!;
+    expect(invite.subject).toContain('企業窗口帳號邀請');
+    const used = tokenFrom(c.email);
+    await http().get(`/api/v1/company/password-links/${used}`).set('x-forwarded-host', a.host).expect(410);
+    await http().post(`/api/v1/company/password-links/${used}`).set('x-forwarded-host', a.host).send({ password: 'other12345' }).expect(410);
+    await http().post(`/api/v1/company/password-links/nope`).set('x-forwarded-host', a.host).send({ password: 'short' }).expect(422);
+  });
+
+  it('Email 不能和旅行社人員或其他窗口重複；重設連結讓舊連結失效；停用後立即不能使用', async () => {
+    const a = await makeAgency('admin');
+    const cid = await company(a);
+    const staff = (await q1(`SELECT email FROM agency_users WHERE agency_id = $1 LIMIT 1`, [a.agencyId])).email;
+    expect((await agencyCall(a).post(`/companies/${cid}/contacts`, { name: 'X', email: staff }).expect(409)).body.code).toBe('EMAIL_TAKEN');
+    const c = await contactOf(a);
+    expect((await agencyCall(a).post(`/companies/${cid}/contacts`, { name: 'Y', email: c.email }).expect(409)).body.code).toBe('EMAIL_TAKEN');
+
+    await agencyCall(a).post(`/companies/${cid}/contacts/${c.id}/link`, {}).expect(204);
+    const first = tokenFrom(c.email);
+    expect(mail().sent.filter((m) => m.to === c.email).at(-1)!.subject).toContain('重設');
+    await agencyCall(a).post(`/companies/${cid}/contacts/${c.id}/link`, {}).expect(204);
+    await http().get(`/api/v1/company/password-links/${first}`).set('x-forwarded-host', a.host).expect(410);
+    const second = tokenFrom(c.email);
+    await http().get(`/api/v1/company/password-links/${second}`).set('x-forwarded-host', a.host).expect(200);
+
+    await agencyCall(a).patch(`/companies/${cid}/contacts/${c.id}`, { status: 'disabled' }).expect(204);
+    await c.get('/me').expect(401);
+    await http().get(`/api/v1/company/password-links/${second}`).set('x-forwarded-host', a.host).expect(410);
+    await http().post('/api/v1/agency/session').set('x-forwarded-host', a.host).send({ email: c.email, password: 'contact1234' }).expect(401);
+    await agencyCall(a).post(`/companies/${cid}/contacts/${c.id}/link`, {}).expect(404);
+    await agencyCall(a).patch(`/companies/${cid}/contacts/${c.id}`, { status: 'active' }).expect(204);
+    await http().post('/api/v1/agency/session').set('x-forwarded-host', a.host).send({ email: c.email, password: 'contact1234' }).expect(204);
+
+    mail().failFor.add('broken@example.com');
+    expect((await agencyCall(a).post(`/companies/${cid}/contacts`, { name: 'Z', email: 'broken@example.com' }).expect(502)).body.code).toBe('MAIL_FAILED');
+    mail().failFor.delete('broken@example.com');
+    const ops = await makeAgency('operations');
+    await agencyCall(ops).get(`/companies/${await company(ops)}/contacts`).expect(403);
+  });
+
+  it('只看得到自家企業的活動；別家企業的活動、報名、名單都是 404，尚未發布的看得到', async () => {
+    const a = await makeAgency('admin');
+    const c = await contactOf(a);
+    await admin.query(`UPDATE events SET status = 'draft' WHERE id = $1`, [a.eventId]);
+    const events = (await c.get('/events').expect(200)).body;
+    expect(events.map((e: any) => e.id)).toEqual([a.eventId]);
+    expect(events[0].state).toBe('draft');
+
+    const otherCompany = (await q1(`INSERT INTO companies (agency_id, name) VALUES ($1, '別家') RETURNING id`, [a.agencyId])).id;
+    const tier = (await q1(`SELECT pricing_tier_id FROM events WHERE id = $1`, [a.eventId])).pricing_tier_id;
+    const other = (await q1(`INSERT INTO events (agency_id, company_id, name, slug, pricing_tier_id) VALUES ($1, $2, '別家活動', $3, $4) RETURNING id`, [a.agencyId, otherCompany, `o-${randomUUID().slice(0, 6)}`, tier])).id;
+    const emp = (await q1(`INSERT INTO event_employees (agency_id, event_id, employee_no, name) VALUES ($1, $2, 'Z1', '別人') RETURNING id`, [a.agencyId, other])).id;
+    expect((await c.get('/events').expect(200)).body).toHaveLength(1);
+    await c.get(`/events/${other}/overview`).expect(404);
+    await c.get(`/events/${other}/employees`).expect(404);
+    await c.get(`/events/${other}/registrations`).expect(404);
+    await c.get(`/events/${other}/fee-report`).expect(404);
+    await c.post(`/events/${other}/employees`, { employeeNo: 'N1', name: 'n', email: null, department: null, subsidyAmount: null, dependentLimit: null }).expect(404);
+    await c.patch(`/events/${other}/employees/${emp}`, { employeeNo: 'Z1', name: 'x', email: null, department: null, subsidyAmount: null, dependentLimit: null }).expect(404);
+    await c.del(`/events/${other}/employees/${emp}`).expect(404);
+    await c.post(`/events/${other}/employees/${emp}/password-link`, {}).expect(404);
+    expect((await c.post(`/events/${a.eventId}/employees/copy`, { fromEventId: other }).expect(404)).body.code).toBe('NOT_FOUND');
+
+    const stranger = await makeAgency('admin');
+    await http().get('/api/v1/company/me').set('x-forwarded-host', stranger.host).set('cookie', c.cookie).expect(401);
+  });
+
+  it('報名明細唯讀且不含個資；已取消有列出但不計入補助合計；費用報表不含個資', async () => {
+    const a = await makeAgency('admin');
+    await admin.query(`INSERT INTO event_fields (agency_id, event_id, field_key, label, field_type, is_sensitive) VALUES ($1, $2, 'nid', '身分證字號', 'text', true), ($1, $2, 'diet', '飲食', 'text', false)`, [a.agencyId, a.eventId]);
+    const c = await contactOf(a);
+    const live = await booked(a, 'E1');
+    await booked(a, 'E2', 'cancelled');
+    const over = (await c.get(`/events/${a.eventId}/overview`).expect(200)).body;
+    expect(over).toMatchObject({ roster: 2, registered: 1, subsidyTotal: 3000, accountsPending: 2 });
+    expect(over.sessions).toHaveLength(2);
+
+    const list = (await c.get(`/events/${a.eventId}/registrations`).expect(200)).body;
+    expect(list.rows.map((r: any) => r.status).sort()).toEqual(['cancelled', 'confirmed']);
+    expect(Object.keys(list.rows[0])).not.toContain('paymentDiff');
+    const detail = await c.get(`/events/${a.eventId}/registrations/${live.reg}`).expect(200);
+    expect(detail.body.travelers[0]).toEqual({ id: expect.any(String), name: '員工E1', typeName: 'TE1', roomTypeName: null, options: [], fee: 1000 });
+    expect(JSON.stringify(detail.body)).not.toMatch(/A1\*|A123|素食|revisions/);
+
+    await c.post(`/events/${a.eventId}/registrations/${live.reg}/sensitive`, {}).expect(404);
+    await c.patch(`/events/${a.eventId}/registrations/${live.reg}/payment`, { status: 'paid' }).expect(404);
+    await c.get(`/events/${a.eventId}/rooms`).expect(404);
+
+    const res = await c.get(`/events/${a.eventId}/fee-report`).buffer(true).parse((r: any, cb: any) => { const b: Buffer[] = []; r.on('data', (d: Buffer) => b.push(d)); r.on('end', () => cb(null, Buffer.concat(b))); }).expect(200);
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.load(res.body as never);
+    const rows: unknown[][] = [];
+    book.worksheets[0]!.eachRow((row) => rows.push((row.values as unknown[]).slice(1)));
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toContain('部門');
+    expect(rows[1]).toContain('E1');
+    expect(JSON.stringify(rows)).not.toContain('A123456789');
+  });
+
+  it('員工名單和旅行社相同，操作紀錄記的是窗口；可匯入、寄帳號信、產生連結', async () => {
+    const a = await makeAgency('admin');
+    const c = await contactOf(a);
+    const base = `/events/${a.eventId}/employees`;
+    const e = (await c.post(base, { employeeNo: 'K1', name: '小王', email: `k1-${randomUUID().slice(0, 6)}@example.com`, department: '資訊部', subsidyAmount: 1000, dependentLimit: 1 }).expect(201)).body;
+    expect((await c.get(base).expect(200)).body.rows[0]).toMatchObject({ employeeNo: 'K1', accountState: 'none' });
+    await c.patch(`${base}/${e.id}`, { employeeNo: 'K1', name: '小王', email: null, department: '資訊部', subsidyAmount: 2000, dependentLimit: 1 }).expect(204);
+    const link = (await c.post(`${base}/${e.id}/password-link`, {}).expect(201)).body;
+    expect(link).toMatchObject({ issuedBy: '林窗口', token: expect.any(String) });
+    const row = await q1(`SELECT created_by_type, created_by_id FROM employee_password_links WHERE event_employee_id = $1`, [e.id]);
+    expect(row).toEqual({ created_by_type: 'company_contact', created_by_id: c.id });
+    const logs = await admin.query(`SELECT action, actor_type, actor_id FROM audit_logs WHERE agency_id = $1 AND action LIKE 'employee.%'`, [a.agencyId]);
+    expect(logs.rows.length).toBeGreaterThan(0);
+    expect(logs.rows.every((l) => l.actor_type === 'company_contact' && l.actor_id === c.id)).toBe(true);
+
+    const csv = Buffer.from('員工編號,姓名,Email,部門,補助金額,眷屬上限\nK2,小李,,人資部,,\n');
+    const preview = await http().post(`/api/v1/company${base}/import/preview`).set('x-forwarded-host', a.host).set('cookie', c.cookie).set('content-type', 'text/csv').send(csv).expect(200);
+    expect(preview.body.newCount).toBe(1);
+    await http().post(`/api/v1/company${base}/import`).set('x-forwarded-host', a.host).set('cookie', c.cookie).set('content-type', 'text/csv').send(csv).expect(200);
+    expect((await c.get(base).expect(200)).body.rosterTotal).toBe(2);
+  });
+});

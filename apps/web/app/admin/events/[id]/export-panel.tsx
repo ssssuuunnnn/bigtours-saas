@@ -78,6 +78,8 @@ export function ExportPanel({ event }: { event: AdminEvent }) {
     void run(async () => {
       const name = saveName!.trim();
       const { id } = await adminApi.saveExportTemplate(event.id, { name, scope: template.scope, columns: selected });
+      // 先載入新的範本清單再選取，否則選單會暫時跳回第一個。
+      await load();
       setTemplateId(id);
       setSaveName(null);
       return a.exportTemplateSaved;

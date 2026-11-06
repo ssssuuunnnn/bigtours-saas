@@ -27,7 +27,7 @@ try {
     process.exit(0);
   }
   if (old) {
-    for (const t of ['audit_logs', 'export_jobs', 'export_templates', 'email_messages', 'email_templates', 'room_publications', 'agency_user_sessions', 'employee_sessions', 'employee_password_links', 'room_assignments', 'rooms', 'room_preferences', 'registration_revisions', 'traveler_options', 'travelers', 'seat_hold_items', 'seat_holds', 'registration_drafts', 'registrations', 'event_employees', 'event_fields', 'option_session_quotas', 'options', 'option_groups', 'traveler_types', 'event_sessions', 'agency_quota_ledger', 'events', 'company_contacts', 'companies', 'agency_users']) {
+    for (const t of ['audit_logs', 'company_contact_sessions', 'company_contact_links', 'export_jobs', 'export_templates', 'email_messages', 'email_templates', 'room_publications', 'agency_user_sessions', 'employee_sessions', 'employee_password_links', 'room_assignments', 'rooms', 'room_preferences', 'registration_revisions', 'traveler_options', 'travelers', 'seat_hold_items', 'seat_holds', 'registration_drafts', 'registrations', 'event_employees', 'event_fields', 'option_session_quotas', 'options', 'option_groups', 'traveler_types', 'event_sessions', 'agency_quota_ledger', 'events', 'company_contacts', 'companies', 'agency_users']) {
       await client.query(`DELETE FROM ${t} WHERE agency_id = $1`, [old.id]);
     }
     await client.query('DELETE FROM agencies WHERE id = $1', [old.id]);
@@ -139,6 +139,7 @@ try {
   ] as const) {
     await client.query(`INSERT INTO agency_users (agency_id, email, password_hash, name, role) VALUES ($1, $2, $3, $4, $5)`, [agency, email, demoHash, name, role]);
   }
+  await client.query(`INSERT INTO company_contacts (agency_id, company_id, email, password_hash, name) VALUES ($1, $2, 'contact@acme.example', $3, '示範窗口')`, [agency, company, demoHash]);
   console.log(`\n旅行社後台：${base.replace('{agency}', code)}/admin（admin@、operator@、ops@demo-travel.example／${DEMO_PASSWORD}）`);
   const site = `${base.replace('{agency}', code)}/acme-2027`;
   console.log(`\n報名網站：${site}（示範密碼 ${DEMO_PASSWORD}）`);

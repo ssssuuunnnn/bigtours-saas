@@ -101,7 +101,7 @@ export class RegistrationAdminService {
       if (q.payment && ['unpaid', 'paid', 'refunded', 'not_required'].includes(q.payment)) add((n) => `r.payment_status = $${n}`, q.payment);
       // 預設不列已取消，要看已取消的要明確選。
       if (q.status && ['confirmed', 'cancel_requested', 'cancelled'].includes(q.status)) add((n) => `r.status = $${n}`, q.status);
-      else where.push(`r.status <> 'cancelled'`);
+      else if (q.status !== 'all') where.push(`r.status <> 'cancelled'`);
       const { rows } = await tx.query(
         `SELECT r.id, r.status, r.total_amount, r.subsidy_amount, r.self_pay_amount, r.payment_status, r.paid_amount, r.submitted_at,
                 m.name AS employee_name, m.employee_no, s.name AS session_name,

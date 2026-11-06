@@ -3,7 +3,6 @@ import { employeeInput, type EmployeeInput } from '@bigtours/shared';
 import { parse as parseCsv } from 'csv-parse/sync';
 import { randomUUID } from 'node:crypto';
 import { AccountService } from './account.service.ts';
-import type { AgencyUserContext } from './agency-admin.service.ts';
 import { DatabaseService, type Tx } from './database.service.ts';
 import { DomainError } from './errors.ts';
 import { NotificationService } from './notification.service.ts';
@@ -144,6 +143,9 @@ export function parseRoster(content: unknown) {
   return { rows, issues, errors, duplicates, hasEmailColumn: index.email >= 0, hasDepartmentColumn: index.department >= 0 };
 }
 
+/** 旅行社人員和企業窗口都會操作名單；紀錄要分得出是誰。 */
+export interface RosterContext { agencyId: string; user: { id: string; name: string }; actorType?: 'company_contact' }
+
 @Injectable()
 export class RosterService {
   private readonly logger = new Logger(RosterService.name);
@@ -167,7 +169,7 @@ export class RosterService {
 
   // ===== 列表 =====
 
-  list(ctx: AgencyUserContext, eventId: string, q: { search?: string; account?: string; registration?: string; page?: number }) {
+  list(ctx: RosterContext, eventId: string, q: { search?: string; account?: string; registration?: string; page?: number }) {
     return this.db.withTenant(ctx.agencyId, async (tx) => {
       const event = await this.assertEvent(tx, eventId);
       const page = Math.max(1, Math.floor(q.page ?? 1) || 1);
@@ -204,7 +206,7 @@ export class RosterService {
 
   // ===== 新增、修改、移除 =====
 
-  create(ctx: AgencyUserContext, eventId: string, input: EmployeeInput) {
+  create(ctx: RosterContext, eventId: string, input: EmployeeInput) {
     return this.db.withTenant(ctx.agencyId, async (tx) => {
       await this.assertEvent(tx, eventId, true);
       const { rows: found } = await tx.query(`SELECT id, status FROM event_employees WHERE event_id = $1 AND employee_no = $2`, [eventId, input.employeeNo]);
@@ -226,7 +228,7 @@ export class RosterService {
     });
   }
 
-  async update(ctx: AgencyUserContext, eventId: string, employeeId: string, input: EmployeeInput) {
+  async update(ctx: RosterContext, eventId: string, employeeId: string, input: EmployeeInput) {
     await this.db.withTenant(ctx.agencyId, async (tx) => {
       const event = await this.assertEvent(tx, eventId, true);
       const current = await this.lockEmployee(tx, eventId, employeeId);
@@ -245,7 +247,7 @@ export class RosterService {
   }
 
   /** 已報名的員工不能移除；移除後立即不能登入，舊連結失效。 */
-  async remove(ctx: AgencyUserContext, eventId: string, employeeId: string) {
+  async remove(ctx: RosterContext, eventId: string, employeeId: string) {
     await this.db.withTenant(ctx.agencyId, async (tx) => {
       await this.assertEvent(tx, eventId, true);
       const current = await this.lockEmployee(tx, eventId, employeeId);
@@ -255,7 +257,7 @@ export class RosterService {
       await tx.query(`DELETE FROM employee_sessions WHERE event_employee_id = $1`, [employeeId]);
       await tx.query(`UPDATE event_employees SET status = 'removed', updated_at = now() WHERE id = $1`, [employeeId]);
       await tx.query(
-        `INSERT INTO audit_logs (agency_id, actor_type, actor_id, action, target_type, target_id) VALUES ($1, 'agency_user', $2, 'employee.removed', 'event_employee', $3)`,
+        `INSERT INTO audit_logs (agency_id, actor_type, actor_id, action, target_type, target_id) VALUES ($1, '${ctx.actorType ?? 'agency_user'}', $2, 'employee.removed', 'event_employee', $3)`,
         [ctx.agencyId, ctx.user.id, employeeId],
       );
     });
@@ -275,13 +277,13 @@ export class RosterService {
   }
 
   /** 報名開始後修改補助金額要留下修改人與時間。 */
-  private async auditSubsidy(tx: Tx, ctx: AgencyUserContext, event: any, changes: { id: string; from: number | null; to: number | null }[]) {
+  private async auditSubsidy(tx: Tx, ctx: RosterContext, event: any, changes: { id: string; from: number | null; to: number | null }[]) {
     if (!event.registration_opens_at || new Date(event.registration_opens_at) > new Date()) return;
     for (const c of changes) {
       if (c.from === c.to) continue;
       await tx.query(
         `INSERT INTO audit_logs (agency_id, actor_type, actor_id, action, target_type, target_id, metadata)
-         VALUES ($1, 'agency_user', $2, 'employee.subsidy_changed', 'event_employee', $3, $4)`,
+         VALUES ($1, '${ctx.actorType ?? 'agency_user'}', $2, 'employee.subsidy_changed', 'event_employee', $3, $4)`,
         [ctx.agencyId, ctx.user.id, c.id, JSON.stringify({ from: c.from, to: c.to })],
       );
     }
@@ -289,7 +291,7 @@ export class RosterService {
 
   // ===== CSV 匯入 =====
 
-  previewImport(ctx: AgencyUserContext, eventId: string, content: unknown) {
+  previewImport(ctx: RosterContext, eventId: string, content: unknown) {
     const parsed = parseRoster(content);
     return this.db.withTenant(ctx.agencyId, async (tx) => {
       await this.assertEvent(tx, eventId);
@@ -308,7 +310,7 @@ export class RosterService {
   }
 
   /** 檔案沒有的欄位不動；留空的補助與眷屬上限改回套用活動預設。帳號信不會自動寄出。 */
-  import(ctx: AgencyUserContext, eventId: string, content: unknown) {
+  import(ctx: RosterContext, eventId: string, content: unknown) {
     const parsed = parseRoster(content);
     return this.db.withTenant(ctx.agencyId, async (tx) => {
       const event = await this.assertEvent(tx, eventId, true);
@@ -346,7 +348,7 @@ export class RosterService {
       await this.auditSubsidy(tx, ctx, event, changes);
       await tx.query(
         `INSERT INTO audit_logs (agency_id, actor_type, actor_id, action, target_type, target_id, metadata)
-         VALUES ($1, 'agency_user', $2, 'employee.imported', 'event', $3, $4)`,
+         VALUES ($1, '${ctx.actorType ?? 'agency_user'}', $2, 'employee.imported', 'event', $3, $4)`,
         [ctx.agencyId, ctx.user.id, eventId, JSON.stringify({ created, updated, errors: parsed.errors, duplicates: parsed.duplicates })],
       );
       return { created, updated, errorCount: parsed.errors, duplicateCount: parsed.duplicates };
@@ -356,7 +358,7 @@ export class RosterService {
   // ===== 從其他活動複製 =====
 
   /** 只能從同一家企業的活動複製，避免名單跨企業。 */
-  copySources(ctx: AgencyUserContext, eventId: string) {
+  copySources(ctx: RosterContext, eventId: string) {
     return this.db.withTenant(ctx.agencyId, async (tx) => {
       const event = await this.assertEvent(tx, eventId);
       const { rows } = await tx.query(
@@ -369,7 +371,7 @@ export class RosterService {
   }
 
   /** 已在名單內的員工編號不動；密碼不帶過去，帳號不跨活動共用。 */
-  copyFrom(ctx: AgencyUserContext, eventId: string, fromEventId: string) {
+  copyFrom(ctx: RosterContext, eventId: string, fromEventId: string) {
     return this.db.withTenant(ctx.agencyId, async (tx) => {
       const event = await this.assertEvent(tx, eventId, true);
       const { rows: sources } = await tx.query(`SELECT id FROM events WHERE id = $1 AND company_id = $2 AND id <> $3`, [fromEventId, event.company_id, eventId]);
@@ -389,14 +391,14 @@ export class RosterService {
   // ===== 帳號信與連結 =====
 
   /** 產生後舊連結立即失效；有信箱的員工會收到通知，信中不含連結。 */
-  async issueLink(ctx: AgencyUserContext, eventId: string, employeeId: string) {
+  async issueLink(ctx: RosterContext, eventId: string, employeeId: string) {
     const r = await this.db.withTenant(ctx.agencyId, async (tx) => {
       const event = await this.assertEvent(tx, eventId);
       await this.lockEmployee(tx, eventId, employeeId);
       const { rows } = await tx.query(`SELECT name, email FROM event_employees WHERE id = $1`, [employeeId]);
       return { event, employee: rows[0] };
     });
-    const { token, expiresAt } = await this.accounts.issuePasswordLink(ctx.agencyId, employeeId, { type: 'agency_user', id: ctx.user.id }, 'manual');
+    const { token, expiresAt } = await this.accounts.issuePasswordLink(ctx.agencyId, employeeId, { type: ctx.actorType ?? 'agency_user', id: ctx.user.id }, 'manual');
     const notified = r.employee.email !== null;
     if (notified) {
       void this.notifications.deliver(ctx.agencyId, eventId, r.event, { id: employeeId, name: r.employee.name, email: r.employee.email }, { key: 'link_notice' });
@@ -408,7 +410,7 @@ export class RosterService {
    * 先記錄「寄送中」再回應，實際寄送在背景進行，上千封也不會讓畫面等待。
    * 連結只存在記憶體，所以系統中途重啟時，沒寄出的員工會顯示寄送失敗，可以重寄。
    */
-  async sendAccountEmails(ctx: AgencyUserContext, eventId: string, input: { employeeIds?: string[]; allPending?: boolean }) {
+  async sendAccountEmails(ctx: RosterContext, eventId: string, input: { employeeIds?: string[]; allPending?: boolean }) {
     const { event, recipients, skipped } = await this.db.withTenant(ctx.agencyId, async (tx) => {
       const event = await this.assertEvent(tx, eventId);
       const states = input.allPending ? ['none', 'failed', 'expired'] : null;
@@ -431,12 +433,12 @@ export class RosterService {
     return { queued: recipients.length, skipped };
   }
 
-  private async sendInBackground(ctx: AgencyUserContext, eventId: string, event: any, recipients: any[]) {
+  private async sendInBackground(ctx: RosterContext, eventId: string, event: any, recipients: any[]) {
     const queue = [...recipients];
     const worker = async () => {
       for (let r = queue.shift(); r; r = queue.shift()) {
         try {
-          const { token } = await this.accounts.issuePasswordLink(ctx.agencyId, r.id, { type: 'agency_user', id: ctx.user.id }, 'email');
+          const { token } = await this.accounts.issuePasswordLink(ctx.agencyId, r.id, { type: ctx.actorType ?? 'agency_user', id: ctx.user.id }, 'email');
           await this.notifications.deliver(ctx.agencyId, eventId, event, r, { key: 'account', token }, true);
         } catch (err) {
           this.logger.error(`帳號信處理失敗：${(err as Error).message}`);

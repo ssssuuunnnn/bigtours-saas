@@ -80,6 +80,7 @@ export interface DataLogRow {
   travelerCount: number | null; name: string | null; sessionName: string | null; rows: number | null; fields: string[];
 }
 export interface DataLogPage { rows: DataLogRow[]; hasMore: boolean; events: { id: string; name: string }[]; actors: { id: string; name: string }[] }
+export interface CompanyContact { id: string; name: string; email: string; status: 'active' | 'disabled'; activated: boolean }
 export interface EmailTemplateView {
   key: string; label: string; audience: 'employee' | 'agency'; placeholders: string[]; required: string[];
   defaultSubject: string; defaultBody: string; subject: string; body: string; senderName: string | null; customized: boolean;
@@ -142,8 +143,9 @@ export interface AdminOptionGroup extends OptionGroupValues { id: string; option
 export interface FieldValues { label: string; type: string; choices: string[] | null; isRequired: boolean; isSensitive: boolean }
 export interface AdminField extends FieldValues { id: string }
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`/api/v1/agency${path}`, {
+const clientFor = (prefix: string) => {
+  const call: Call = async <T,>(method: string, path: string, body?: unknown): Promise<T> => {
+  const res = await fetch(`${prefix}${path}`, {
     method,
     headers: body ? { 'content-type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
@@ -152,17 +154,41 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new ApiError(res.status, data?.code ?? 'fallback', data?.detail);
   return data as T;
-}
-
-export type ImageKind = 'login' | 'login-mobile' | 'home';
-
-/** 檔案以原始內容送出，不走 JSON。 */
-async function upload<T>(path: string, file: File, contentType: string, method = 'PUT'): Promise<T> {
-  const res = await fetch(`/api/v1/agency${path}`, { method, headers: { 'content-type': contentType }, body: file });
+  };
+  /** 檔案以原始內容送出，不走 JSON。 */
+  const upload: Upload = async <T,>(path: string, file: File, contentType: string, method = 'PUT'): Promise<T> => {
+  const res = await fetch(`${prefix}${path}`, { method, headers: { 'content-type': contentType }, body: file });
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new ApiError(res.status, data?.code ?? 'fallback', data?.detail);
   return data as T;
-}
+  };
+  return { call, upload };
+};
+const { call, upload } = clientFor('/api/v1/agency');
+
+export type ImageKind = 'login' | 'login-mobile' | 'home';
+
+
+type Call = <T>(method: string, path: string, body?: unknown) => Promise<T>;
+type Upload = <T>(path: string, file: File, contentType: string, method?: string) => Promise<T>;
+
+/** 旅行社和企業窗口的員工名單操作相同，只有網址前綴不同。 */
+const rosterMethods = (call: Call, upload: Upload) => ({
+  employees: (id: string, q: { search?: string; account?: string; registration?: string; page?: number }) => {
+    const params = new URLSearchParams(Object.entries(q).flatMap(([k, v]) => (v ? [[k, String(v)]] : [])));
+    return call<RosterPage>('GET', `/events/${id}/employees?${params}`);
+  },
+  createEmployee: (id: string, v: EmployeeValues) => call<{ id: string }>('POST', `/events/${id}/employees`, v),
+  updateEmployee: (id: string, eid: string, v: EmployeeValues) => call<void>('PATCH', `/events/${id}/employees/${eid}`, v),
+  removeEmployee: (id: string, eid: string) => call<void>('DELETE', `/events/${id}/employees/${eid}`),
+  previewImport: (id: string, file: File) => upload<ImportPreview>(`/events/${id}/employees/import/preview`, file, 'text/csv', 'POST'),
+  importEmployees: (id: string, file: File) => upload<{ created: number; updated: number; errorCount: number; duplicateCount: number }>(`/events/${id}/employees/import`, file, 'text/csv', 'POST'),
+  rosterSources: (id: string) => call<{ id: string; name: string; employees: number }[]>('GET', `/events/${id}/employees/copy-sources`),
+  copyRoster: (id: string, fromEventId: string) => call<{ added: number; skipped: number }>('POST', `/events/${id}/employees/copy`, { fromEventId }),
+  sendAccountEmails: (id: string, body: { employeeIds: string[] } | { allPending: true }) => call<{ queued: number; skipped: number }>('POST', `/events/${id}/employees/account-emails`, body),
+  passwordLink: (id: string, eid: string) => call<PasswordLink>('POST', `/events/${id}/employees/${eid}/password-link`, {}),
+});
+export type RosterApi = ReturnType<typeof rosterMethods>;
 
 export const adminApi = {
   login: (email: string, password: string) => call<void>('POST', '/session', { email, password }),
@@ -174,6 +200,10 @@ export const adminApi = {
   quota: () => call<QuotaTier[]>('GET', '/quota'),
   companies: () => call<AdminCompany[]>('GET', '/companies'),
   createCompany: (name: string) => call<AdminCompany>('POST', '/companies', { name }),
+  companyContacts: (companyId: string) => call<CompanyContact[]>('GET', `/companies/${companyId}/contacts`),
+  createContact: (companyId: string, v: { name: string; email: string }) => call<{ id: string }>('POST', `/companies/${companyId}/contacts`, v),
+  sendContactLink: (companyId: string, id: string) => call<void>('POST', `/companies/${companyId}/contacts/${id}/link`, {}),
+  setContactStatus: (companyId: string, id: string, status: 'active' | 'disabled') => call<void>('PATCH', `/companies/${companyId}/contacts/${id}`, { status }),
   createEvent: (v: { companyId: string; name: string; slug: string; pricingTierId: string }) => call<{ id: string }>('POST', '/events', v),
   deleteEvent: (id: string) => call<void>('DELETE', `/events/${id}`),
   updateBasic: (id: string, v: Pick<AdminEvent, 'name' | 'slug' | 'days' | 'themeColor' | 'supportPhone' | 'supportHours'>) => call<void>('PUT', `/events/${id}/basic`, v),
@@ -191,19 +221,7 @@ export const adminApi = {
   uploadOptionPdf: (id: string, oid: string, file: File) => upload<{ pdfFileName: string }>(`/events/${id}/options/${oid}/pdf?name=${encodeURIComponent(file.name)}`, file, 'application/pdf'),
   deleteOptionPdf: (id: string, oid: string) => call<void>('DELETE', `/events/${id}/options/${oid}/pdf`),
   copyEvent: (id: string, v: { companyId: string; name: string; slug: string; pricingTierId: string }) => call<{ id: string }>('POST', `/events/${id}/copy`, v),
-  employees: (id: string, q: { search?: string; account?: string; registration?: string; page?: number }) => {
-    const params = new URLSearchParams(Object.entries(q).flatMap(([k, v]) => (v ? [[k, String(v)]] : [])));
-    return call<RosterPage>('GET', `/events/${id}/employees?${params}`);
-  },
-  createEmployee: (id: string, v: EmployeeValues) => call<{ id: string }>('POST', `/events/${id}/employees`, v),
-  updateEmployee: (id: string, eid: string, v: EmployeeValues) => call<void>('PATCH', `/events/${id}/employees/${eid}`, v),
-  removeEmployee: (id: string, eid: string) => call<void>('DELETE', `/events/${id}/employees/${eid}`),
-  previewImport: (id: string, file: File) => upload<ImportPreview>(`/events/${id}/employees/import/preview`, file, 'text/csv', 'POST'),
-  importEmployees: (id: string, file: File) => upload<{ created: number; updated: number; errorCount: number; duplicateCount: number }>(`/events/${id}/employees/import`, file, 'text/csv', 'POST'),
-  rosterSources: (id: string) => call<{ id: string; name: string; employees: number }[]>('GET', `/events/${id}/employees/copy-sources`),
-  copyRoster: (id: string, fromEventId: string) => call<{ added: number; skipped: number }>('POST', `/events/${id}/employees/copy`, { fromEventId }),
-  sendAccountEmails: (id: string, body: { employeeIds: string[] } | { allPending: true }) => call<{ queued: number; skipped: number }>('POST', `/events/${id}/employees/account-emails`, body),
-  passwordLink: (id: string, eid: string) => call<PasswordLink>('POST', `/events/${id}/employees/${eid}/password-link`, {}),
+  ...rosterMethods(call, upload),
   overview: (id: string) => call<EventOverview>('GET', `/events/${id}/overview`),
   registrations: (id: string, q: { search?: string; session?: string; payment?: string; status?: string; page?: number }) => {
     const params = new URLSearchParams(Object.entries(q).flatMap(([k, v]) => (v ? [[k, String(v)]] : [])));
@@ -261,3 +279,39 @@ export const adminApi = {
   deleteField: (id: string, fid: string) => call<void>('DELETE', `/events/${id}/fields/${fid}`),
   orderFields: (id: string, ids: string[]) => call<void>('PUT', `/events/${id}/fields/order`, { ids }),
 };
+
+// ===== 企業窗口 =====
+
+export interface ContactMe { agencyName: string; companyName: string; user: { name: string; email: string } }
+export interface ContactEvent {
+  id: string; name: string; state: 'draft' | 'not_open' | 'open' | 'closed'; registrationOpensAt: string | null; registrationClosesAt: string | null;
+  roster: number; registered: number; sessionCount: number; firstDay: string | null; lastDay: string | null;
+}
+export interface ContactOverview extends ContactEvent {
+  accountsPending: number; subsidyTotal: number;
+  sessions: { id: string; name: string; departsOn: string | null; returnsOn: string | null; travelers: number }[];
+}
+export interface ContactRegistrationRow { id: string; employeeName: string; employeeNo: string; sessionName: string; travelerCount: number; totalAmount: number; subsidyAmount: number; selfPayAmount: number; paymentStatus: string; status: string }
+export interface ContactRegistrationPage { rows: ContactRegistrationRow[]; total: number; page: number; pageSize: number; registrations: number; travelers: number; sessions: { id: string; name: string }[] }
+export interface ContactRegistration {
+  id: string; employeeName: string; employeeNo: string; sessionName: string; status: string; totalAmount: number; subsidyApplied: number; selfPayAmount: number; paymentStatus: string;
+  cancelRequestedAt: string | null; cancelledAt: string | null;
+  travelers: { id: string; name: string; typeName: string; roomTypeName: string | null; options: string[]; fee: number }[];
+}
+
+const contact = clientFor('/api/v1/company');
+export const contactApi = {
+  me: () => contact.call<ContactMe>('GET', '/me'),
+  logout: () => contact.call<void>('DELETE', '/session'),
+  events: () => contact.call<ContactEvent[]>('GET', '/events'),
+  overview: (id: string) => contact.call<ContactOverview>('GET', `/events/${id}/overview`),
+  registrations: (id: string, q: { search?: string; session?: string; payment?: string; page?: number }) => {
+    const params = new URLSearchParams(Object.entries(q).filter(([, v]) => v).map(([k, v]) => [k, String(v)]));
+    return contact.call<ContactRegistrationPage>('GET', `/events/${id}/registrations?${params}`);
+  },
+  registration: (id: string, rid: string) => contact.call<ContactRegistration>('GET', `/events/${id}/registrations/${rid}`),
+  lookupLink: (token: string) => contact.call<{ name: string; companyName: string; agencyName: string }>('GET', `/password-links/${encodeURIComponent(token)}`),
+  setPassword: (token: string, password: string) => contact.call<void>('POST', `/password-links/${encodeURIComponent(token)}`, { password }),
+  ...rosterMethods(contact.call, contact.upload),
+};
+export const feeReportUrl = (id: string) => `/api/v1/company/events/${id}/fee-report`;

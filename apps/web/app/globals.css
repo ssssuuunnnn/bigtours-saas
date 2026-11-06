@@ -427,3 +427,6 @@ fieldset.admin-card { margin: 0; border: 0; min-width: 0; }
 /* 個資紀錄 */
 .admin-log-filters { display: flex; flex-wrap: wrap; gap: 12px; }
 .admin-log-filters .field { flex: 1 1 160px; }
+
+/* 企業窗口 */
+.contact-sum { display: grid; gap: 4px; padding: 12px 14px; background: var(--paper); border-radius: 4px; }
