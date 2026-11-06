@@ -35,7 +35,7 @@ export function EmailsPanel({ event }: { event: AdminEvent }) {
           {template.key === 'deadline_reminder' && <ReminderCard event={event} reminder={data.reminder} onSent={load} />}
         </div>
       </div>
-      <NotifyCard key={data.notifyEmails.join()} event={event} emails={data.notifyEmails} onSaved={load} />
+      <NotifyCard event={event} emails={data.notifyEmails} onSaved={load} />
       <FailuresCard event={event} data={data} onChanged={load} />
     </section>
   );
