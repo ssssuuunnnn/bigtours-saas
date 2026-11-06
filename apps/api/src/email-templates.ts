@@ -80,6 +80,12 @@ export const EMAIL_TEMPLATES: TemplateDefinition[] = [
     body: '[員工姓名]（[員工編號]）修改了「[活動名稱]」的報名，整筆費用 [原費用] → [整筆費用]。已付款的差額請另外處理。\n\n[後台連結]',
     placeholders: ['員工姓名', '員工編號', '活動名稱', '旅行社名稱', '原費用', '整筆費用', '後台連結'], required: [],
   },
+  {
+    key: 'agency_tier_alert', label: '活動用量提醒（寄給旅行社）', audience: 'agency',
+    subject: '【[活動名稱]】報名人數已達級距上限的 [使用比例]',
+    body: '「[活動名稱]」目前 [人數] 人，級距上限 [級距上限] 人，已使用 [使用比例]。\n\n達到上限後就無法再報名。需要更多名額時，請到「梯次與名額」升級級距並增加名額：\n\n[後台連結]',
+    placeholders: ['活動名稱', '旅行社名稱', '人數', '級距上限', '使用比例', '後台連結'], required: [],
+  },
 ];
 
 export const templateDefinition = (key: string) => EMAIL_TEMPLATES.find((t) => t.key === key);

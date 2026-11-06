@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Put, Query, Req, Res } from '@nestjs/common';
-import { agencyNameRequest, isValidPassword, staffInput, staffRoleRequest, exportRequest, exportTemplateInput, assignRoomRequest, createRoomRequest, roomSessionRequest, updateRoomRequest, emailResendRequest, emailTemplateInput, notifyEmailsRequest, agencyLoginRequest, contactInput, contactStatusRequest, accountEmailRequest, agencyModifyRequest, companyInput, contactsRequest, createEventRequest, employeeInput, feeAdjustRequest, paymentStatusRequest, reassignRequest, rosterCopyRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
+import { tierUpgradeRequest, agencyNameRequest, isValidPassword, staffInput, staffRoleRequest, exportRequest, exportTemplateInput, assignRoomRequest, createRoomRequest, roomSessionRequest, updateRoomRequest, emailResendRequest, emailTemplateInput, notifyEmailsRequest, agencyLoginRequest, contactInput, contactStatusRequest, accountEmailRequest, agencyModifyRequest, companyInput, contactsRequest, createEventRequest, employeeInput, feeAdjustRequest, paymentStatusRequest, reassignRequest, rosterCopyRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
 import type { Request, Response } from 'express';
 import type { ZodType } from 'zod';
 import { AgencyAdminService } from './agency-admin.service.ts';
@@ -390,6 +390,17 @@ export class AgencyController {
   async downloadTerms(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Res() res: Response) {
     const file = await this.admin.readTerms(await this.configurer(h), eventId);
     sendPdf(res, file.name, file.content);
+  }
+
+  @Get('events/:eventId/tier-options')
+  async tierOptions(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Query('needed') needed?: string) {
+    return this.admin.tierOptions(await this.configurer(h), eventId, Number(needed) || 0);
+  }
+
+  @Post('events/:eventId/tier-upgrade')
+  @HttpCode(204)
+  async upgradeTier(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    await this.admin.upgradeTier(await this.configurer(h), eventId, parse(tierUpgradeRequest, body).tierId);
   }
 
   @Post('events/:eventId/copy')

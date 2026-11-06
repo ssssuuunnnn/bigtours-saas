@@ -40,7 +40,7 @@ export function EventSection({ id, section }: { id: string; section: EventNavKey
       <h1>{a.eventSections[section]}</h1>
       {section === 'basic' && <BasicPanel key={event.slug} event={event} onSaved={load} />}
       {section === 'schedule' && <SchedulePanel event={event} onSaved={load} />}
-      {section === 'sessions' && <SessionsPanel event={event} />}
+      {section === 'sessions' && <SessionsPanel event={event} onEventChanged={load} />}
       {section === 'types' && <TypesPanel event={event} />}
       {section === 'options' && <OptionsPanel event={event} />}
       {section === 'fields' && <FieldsPanel event={event} />}

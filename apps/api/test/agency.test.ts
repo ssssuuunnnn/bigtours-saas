@@ -2396,3 +2396,106 @@ describe('平台後台', () => {
     expect((await pf.get(`/agencies?search=${n.code}`).expect(200)).body).toHaveLength(1);
   });
 });
+
+describe('升級級距與用量提醒', () => {
+  const mail = () => app.get(MailService);
+  const tiers = async () => (await admin.query(`SELECT id, max_travelers FROM pricing_tiers WHERE is_active AND min_travelers <> 0 OR is_active AND max_travelers < 1000 ORDER BY max_travelers`)).rows.filter((t) => t.max_travelers <= 5000);
+  const setup = async () => {
+    const a = await makeAgency('admin');
+    const cur = await q1(`SELECT t.id, t.max_travelers FROM events e JOIN pricing_tiers t ON t.id = e.pricing_tier_id WHERE e.id = $1`, [a.eventId]);
+    const next = (await tiers()).find((t) => t.max_travelers > cur.max_travelers)!;
+    return { a, cur, next };
+  };
+  const grant = (a: Ag, tierId: string, n = 1) => admin.query(`INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason) VALUES ($1, $2, $3, 'grant')`, [a.agencyId, tierId, n]);
+  const remaining = async (a: Ag, tierId: string) => (await q1(`SELECT COALESCE(sum(change), 0)::int AS n FROM agency_quota_ledger WHERE agency_id = $1 AND pricing_tier_id = $2`, [a.agencyId, tierId])).n as number;
+  const session = (extra: object) => ({ name: '大梯', departsOn: '2027-03-01', returnsOn: '2027-03-03', departureTime: '08:00', returnArrivalTime: '20:00', outboundFlightNo: '', returnFlightNo: '', roomTypes: [], ...extra });
+
+  it('升級退回舊額度、扣新額度；之後名額上限放寬；推薦能容納需求的最小級距', async () => {
+    const { a, cur, next } = await setup();
+    await grant(a, next.id, 2);
+    await api(a).post('/sessions', session({ capacity: cur.max_travelers + 1 })).expect(409);
+    const opts = (await api(a).get(`/tier-options?needed=${cur.max_travelers + 1}`).expect(200)).body;
+    expect(opts.current.maxTravelers).toBe(cur.max_travelers);
+    expect(opts.recommendedId).toBe(next.id);
+    expect(opts.options.every((o: any) => o.maxTravelers > cur.max_travelers)).toBe(true);
+    expect(opts.options.find((o: any) => o.id === next.id).remaining).toBe(2);
+    expect(opts.contractExpired).toBe(false);
+
+    const before = await remaining(a, cur.id);
+    await api(a).post('/tier-upgrade', { tierId: next.id }).expect(204);
+    expect(await remaining(a, cur.id)).toBe(before + 1);
+    expect(await remaining(a, next.id)).toBe(1);
+    expect((await api(a).get('').expect(200)).body.tierMax).toBe(next.max_travelers);
+    await api(a).post('/sessions', session({ capacity: cur.max_travelers + 1 })).expect(201);
+    const log = await q1(`SELECT metadata FROM audit_logs WHERE agency_id = $1 AND action = 'event.tier_upgraded'`, [a.agencyId]);
+    expect(log.metadata).toEqual({ from: cur.id, to: next.id });
+  });
+
+  it('額度不足、合約到期、不是更高級距都不能升級，額度不變；權限與隔離', async () => {
+    const { a, cur, next } = await setup();
+    expect((await api(a).post('/tier-upgrade', { tierId: next.id }).expect(409)).body.code).toBe('QUOTA_EMPTY');
+    await grant(a, next.id);
+    await admin.query(`UPDATE agencies SET contract_ends_on = '2020-01-01' WHERE id = $1`, [a.agencyId]);
+    expect((await api(a).post('/tier-upgrade', { tierId: next.id }).expect(409)).body.code).toBe('CONTRACT_EXPIRED');
+    expect((await api(a).get('/tier-options?needed=1').expect(200)).body.contractExpired).toBe(true);
+    await admin.query(`UPDATE agencies SET contract_ends_on = NULL WHERE id = $1`, [a.agencyId]);
+    expect((await api(a).post('/tier-upgrade', { tierId: cur.id }).expect(409)).body.code).toBe('TIER_NOT_HIGHER');
+    await api(a).post('/tier-upgrade', { tierId: randomUUID() }).expect(404);
+    expect(await remaining(a, next.id)).toBe(1);
+
+    const ops = await makeAgency('operations');
+    await api(ops).get('/tier-options?needed=1').expect(403);
+    await api(ops).post('/tier-upgrade', { tierId: next.id }).expect(403);
+    const stranger = await makeAgency('admin');
+    await request(app.getHttpServer()).post(`/api/v1/agency/events/${a.eventId}/tier-upgrade`).set('x-forwarded-host', stranger.host).set('cookie', stranger.cookie).send({ tierId: next.id }).expect(404);
+  });
+
+  it('同時升級不會超扣額度', async () => {
+    const { a, next } = await setup();
+    await grant(a, next.id);
+    const b = (await q1(`INSERT INTO events (agency_id, company_id, slug, name, status, pricing_tier_id) SELECT agency_id, company_id, 'evt2', 'E2', 'draft', pricing_tier_id FROM events WHERE id = $1 RETURNING id`, [a.eventId])).id;
+    const call = (id: string) => request(app.getHttpServer()).post(`/api/v1/agency/events/${id}/tier-upgrade`).set('x-forwarded-host', a.host).set('cookie', a.cookie).send({ tierId: next.id });
+    const [x, y] = await Promise.all([call(a.eventId), call(b)]);
+    expect([x.status, y.status].sort()).toEqual([204, 409]);
+    expect(await remaining(a, next.id)).toBe(0);
+  });
+
+  it('達 80% 與達上限各寄一次；未達不寄；升級後重新計算；沒有通知信箱不寄', async () => {
+    const { a, cur, next } = await setup();
+    const svc = app.get(NotificationService);
+    const tag = randomUUID().slice(0, 8);
+    const team = `tier-${tag}@example.com`;
+    const count = () => mail().sent.filter((m) => m.to === team).length;
+    const sid = (await q1(`INSERT INTO event_sessions (agency_id, event_id, name, capacity, sold_count) VALUES ($1, $2, 'S', $3, 0) RETURNING id`, [a.agencyId, a.eventId, cur.max_travelers])).id;
+    const sold = (n: number) => admin.query(`UPDATE event_sessions SET sold_count = $2 WHERE id = $1`, [sid, n]);
+
+    await sold(Math.ceil(cur.max_travelers * 0.8));
+    await svc.checkTierUsage(a.agencyId, a.eventId);
+    expect((await q1(`SELECT tier_alert_level AS l FROM events WHERE id = $1`, [a.eventId])).l).toBe(80);
+
+    await admin.query(`UPDATE events SET tier_alert_level = 0, notify_emails = $2 WHERE id = $1`, [a.eventId, [team]]);
+    await sold(Math.ceil(cur.max_travelers * 0.8) - 1);
+    await svc.checkTierUsage(a.agencyId, a.eventId);
+    expect(count()).toBe(0);
+    await sold(Math.ceil(cur.max_travelers * 0.8));
+    await svc.checkTierUsage(a.agencyId, a.eventId);
+    await svc.checkTierUsage(a.agencyId, a.eventId);
+    expect(count()).toBe(1);
+    const m = mail().sent.find((x) => x.to === team)!;
+    expect(m.subject).toContain('80%');
+    expect(m.text).toContain(`/admin/events/${a.eventId}/sessions`);
+    await sold(cur.max_travelers);
+    await svc.checkTierUsage(a.agencyId, a.eventId);
+    await svc.checkTierUsage(a.agencyId, a.eventId);
+    expect(count()).toBe(2);
+    expect(mail().sent.filter((x) => x.to === team).at(-1)!.subject).toContain('100%');
+
+    await grant(a, next.id);
+    await api(a).post('/tier-upgrade', { tierId: next.id }).expect(204);
+    expect((await q1(`SELECT tier_alert_level AS l FROM events WHERE id = $1`, [a.eventId])).l).toBe(0);
+    await admin.query(`UPDATE event_sessions SET capacity = $2 WHERE id = $1`, [sid, next.max_travelers]);
+    await sold(Math.ceil(next.max_travelers * 0.8));
+    await svc.checkTierUsage(a.agencyId, a.eventId);
+    expect(count()).toBe(3);
+  });
+});

@@ -250,7 +250,10 @@ export class RegistrationService {
 
   async submit(ctx: EmployeeContext, req: SubmitRequest) {
     const registration = await this.createRegistration(ctx, req);
-    if (registration) void this.mailRegistered(ctx, registration);
+    if (registration) {
+      void this.mailRegistered(ctx, registration);
+      void this.notifications.checkTierUsage(ctx.agency.id, ctx.event.id);
+    }
     return registration;
   }
 
@@ -484,6 +487,7 @@ export class RegistrationService {
       mail = { event: await this.notifications.mailEvent(tx, ctx.event.id), total: r.total, selfPay: r.selfPay, from: r.from };
       return this.loadRegistration(tx, ctx.employee.id, config);
     });
+    void this.notifications.checkTierUsage(ctx.agency.id, ctx.event.id);
     if (mail && result) {
       const before: { event: MailEvent; total: number; selfPay: number; from?: number } = mail;
       void this.notifications.notifyAgency(ctx.agency.id, ctx.event.id, {
@@ -524,6 +528,7 @@ export class RegistrationService {
       const r = await this.applyModification(tx, agencyId, registrationId, req.sessionId, config, req, full, { type: 'agency_user', id: actorId });
       mail = { event: await this.notifications.mailEvent(tx, eventId), total: r.total, selfPay: r.selfPay, employee: { id: reg.event_employee_id, name: reg.name, email: reg.email } };
     });
+    void this.notifications.checkTierUsage(agencyId, eventId);
     const m = mail!;
     if (m.employee.email) {
       void this.notifications.deliver(agencyId, eventId, m.event, { id: m.employee.id, name: m.employee.name, email: m.employee.email }, { key: 'modified', byAgency: true, total: m.total, selfPay: m.selfPay });

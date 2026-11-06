@@ -8,7 +8,7 @@ export interface AdminEvent {
   pageMode: 'manual' | 'scheduled'; pageIsOpen: boolean; pageOpensAt: string | null; pageClosesAt: string | null;
   registrationOpensAt: string | null; registrationClosesAt: string | null; paymentInstructions: string | null; retentionDays: number; termsFileName: string | null; termsVersion: number;
   images: { login: string | null; loginMobile: string | null; home: string | null };
-  pageState: 'open' | 'not_open' | 'closed'; activeHolds: number;
+  pageState: 'open' | 'not_open' | 'closed'; activeHolds: number; heldTravelers: number;
 }
 export type AccountState = 'activated' | 'sending' | 'link_issued' | 'failed' | 'sent' | 'expired' | 'no_email' | 'none';
 export interface EmployeeValues { employeeNo: string; name: string; email: string | null; department: string | null; subsidyAmount: number | null; dependentLimit: number | null }
@@ -82,6 +82,8 @@ export interface DataLogRow {
 export interface DataLogPage { rows: DataLogRow[]; hasMore: boolean; events: { id: string; name: string }[]; actors: { id: string; name: string }[] }
 export interface StaffMember { id: string; name: string; email: string; role: string; status: 'active' | 'disabled'; activated: boolean; lastLoginAt: string | null; isSelf: boolean }
 export interface AgencySettings { name: string; code: string; logoUrl: string | null }
+export interface TierOption { id: string; minTravelers: number; maxTravelers: number; price: number; remaining: number }
+export interface TierOptions { current: TierOption; options: TierOption[]; recommendedId: string | null; contractExpired: boolean }
 export interface CompanyContact { id: string; name: string; email: string; status: 'active' | 'disabled'; activated: boolean }
 export interface EmailTemplateView {
   key: string; label: string; audience: 'employee' | 'agency'; placeholders: string[]; required: string[];
@@ -219,6 +221,8 @@ export const adminApi = {
   sendContactLink: (companyId: string, id: string) => call<void>('POST', `/companies/${companyId}/contacts/${id}/link`, {}),
   setContactStatus: (companyId: string, id: string, status: 'active' | 'disabled') => call<void>('PATCH', `/companies/${companyId}/contacts/${id}`, { status }),
   createEvent: (v: { companyId: string; name: string; slug: string; pricingTierId: string }) => call<{ id: string }>('POST', '/events', v),
+  tierOptions: (id: string, needed: number) => call<TierOptions>('GET', `/events/${id}/tier-options?needed=${needed}`),
+  upgradeTier: (id: string, tierId: string) => call<void>('POST', `/events/${id}/tier-upgrade`, { tierId }),
   deleteEvent: (id: string) => call<void>('DELETE', `/events/${id}`),
   updateBasic: (id: string, v: Pick<AdminEvent, 'name' | 'slug' | 'days' | 'themeColor' | 'supportPhone' | 'supportHours'>) => call<void>('PUT', `/events/${id}/basic`, v),
   updateSchedule: (id: string, v: Pick<AdminEvent, 'pageMode' | 'pageOpensAt' | 'pageClosesAt' | 'registrationOpensAt' | 'registrationClosesAt'>) => call<void>('PUT', `/events/${id}/schedule`, v),

@@ -174,7 +174,8 @@ export class AgencyAdminService {
         `SELECT e.status, e.itinerary, e.theme_color, e.support_phone, e.support_hours, e.page_mode, e.page_is_open, e.page_opens_at, e.page_closes_at,
                 e.registration_opens_at, e.registration_closes_at, e.payment_instructions, e.retention_days,
                 e.terms_file_name, e.terms_version, e.hero_object_key, e.login_mobile_object_key, e.home_image_object_key, c.name AS company_name,
-                (SELECT count(*)::int FROM seat_holds h WHERE h.event_id = e.id AND h.status = 'active' AND h.expires_at > now()) AS active_holds
+                (SELECT count(*)::int FROM seat_holds h WHERE h.event_id = e.id AND h.status = 'active' AND h.expires_at > now()) AS active_holds,
+                (SELECT COALESCE(sum(h.quantity), 0)::int FROM seat_holds h WHERE h.event_id = e.id AND h.status = 'active' AND h.expires_at > now()) AS held_travelers
            FROM events e JOIN companies c ON c.id = e.company_id WHERE e.id = $1`,
         [eventId],
       );
@@ -185,7 +186,7 @@ export class AgencyAdminService {
         supportPhone: r.support_phone, supportHours: r.support_hours,
         pageMode: r.page_mode, pageIsOpen: r.page_is_open, pageOpensAt: r.page_opens_at, pageClosesAt: r.page_closes_at,
         registrationOpensAt: r.registration_opens_at, registrationClosesAt: r.registration_closes_at,
-        pageState: this.currentPageState(r), activeHolds: r.active_holds,
+        pageState: this.currentPageState(r), activeHolds: r.active_holds, heldTravelers: r.held_travelers,
         paymentInstructions: r.payment_instructions, retentionDays: r.retention_days,
         termsFileName: r.terms_file_name, termsVersion: r.terms_version,
         images: agencyImages(eventId, { login: r.hero_object_key, 'login-mobile': r.login_mobile_object_key, home: r.home_image_object_key }),
@@ -293,9 +294,7 @@ export class AgencyAdminService {
   }
 
   private async insertDraftEvent(tx: Tx, ctx: AgencyUserContext, input: NewEventInput) {
-    // 合約到期後不能建立新活動；已發布的活動可繼續進行到結束。
-    const contract = await tx.query(`SELECT contract_ends_on < (now() AT TIME ZONE 'Asia/Taipei')::date AS expired FROM agencies WHERE id = $1`, [ctx.agencyId]);
-    if (contract.rows[0]?.expired) throw new DomainError('CONTRACT_EXPIRED');
+    await this.assertContract(tx, ctx.agencyId);
     // 同一旅行社、同一級距依序扣額度，避免同時建立時超扣。
     await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`quota:${ctx.agencyId}:${input.pricingTierId}`]);
     const { rows: tiers } = await tx.query(
@@ -318,6 +317,65 @@ export class AgencyAdminService {
       [ctx.agencyId, input.pricingTierId, rows[0].id, ctx.user.id],
     );
     return rows[0].id as string;
+  }
+
+  /** 合約到期後不能建立新活動或升級級距；已發布的活動可繼續進行到結束。 */
+  private async assertContract(tx: Tx, agencyId: string) {
+    const { rows } = await tx.query(`SELECT contract_ends_on < (now() AT TIME ZONE 'Asia/Taipei')::date AS expired FROM agencies WHERE id = $1`, [agencyId]);
+    if (rows[0]?.expired) throw new DomainError('CONTRACT_EXPIRED');
+  }
+
+  /** 升級級距畫面：列出比目前大的級距與剩餘額度，needed 是想要的梯次名額合計。 */
+  tierOptions(ctx: AgencyUserContext, eventId: string, needed: number) {
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, false);
+      const { rows } = await tx.query(
+        `SELECT t.id, t.min_travelers, t.max_travelers, t.price_amount, t.id = e.pricing_tier_id AS current,
+                COALESCE((SELECT sum(l.change)::int FROM agency_quota_ledger l WHERE l.pricing_tier_id = t.id), 0) AS remaining
+           FROM pricing_tiers t JOIN events e ON e.id = $1
+          WHERE t.is_active OR t.id = e.pricing_tier_id ORDER BY t.max_travelers, t.min_travelers`,
+        [eventId],
+      );
+      const row = (r: any) => ({ id: r.id as string, minTravelers: r.min_travelers as number, maxTravelers: r.max_travelers as number, price: r.price_amount as number, remaining: r.remaining as number });
+      const current = rows.find((r) => r.current);
+      const options = rows.filter((r) => r.max_travelers > current.max_travelers).map(row);
+      const expired = await tx.query(`SELECT contract_ends_on < (now() AT TIME ZONE 'Asia/Taipei')::date AS expired FROM agencies WHERE id = $1`, [ctx.agencyId]);
+      return {
+        current: row(current),
+        options,
+        recommendedId: options.find((o) => o.maxTravelers >= needed)?.id ?? null,
+        contractExpired: !!expired.rows[0]?.expired,
+      };
+    });
+  }
+
+  /** 退回舊級距額度、扣新級距額度。依級距 ID 順序上鎖，兩邊同時升級時不會互相等待。 */
+  upgradeTier(ctx: AgencyUserContext, eventId: string, tierId: string) {
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.lockEvent(tx, eventId, true);
+      await this.assertContract(tx, ctx.agencyId);
+      const { rows } = await tx.query(
+        `SELECT e.pricing_tier_id, cur.max_travelers AS cur_max, next.max_travelers AS next_max
+           FROM events e JOIN pricing_tiers cur ON cur.id = e.pricing_tier_id JOIN pricing_tiers next ON next.id = $2 AND next.is_active
+          WHERE e.id = $1`,
+        [eventId, tierId],
+      );
+      const r = rows[0];
+      if (!r) throw new DomainError('NOT_FOUND');
+      if (r.next_max <= r.cur_max) throw new DomainError('TIER_NOT_HIGHER');
+      for (const id of [r.pricing_tier_id as string, tierId].sort()) await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`quota:${ctx.agencyId}:${id}`]);
+      const left = await tx.query(`SELECT COALESCE(sum(change), 0)::int AS remaining FROM agency_quota_ledger WHERE pricing_tier_id = $1`, [tierId]);
+      if (left.rows[0].remaining < 1) throw new DomainError('QUOTA_EMPTY');
+      await tx.query(
+        `INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason, event_id, created_by) VALUES ($1, $2, 1, 'tier_upgrade', $3, $5), ($1, $4, -1, 'tier_upgrade', $3, $5)`,
+        [ctx.agencyId, r.pricing_tier_id, eventId, tierId, ctx.user.id],
+      );
+      await tx.query(`UPDATE events SET pricing_tier_id = $2, tier_alert_level = 0, updated_at = now() WHERE id = $1`, [eventId, tierId]);
+      await tx.query(
+        `INSERT INTO audit_logs (agency_id, actor_type, actor_id, action, target_type, target_id, metadata) VALUES ($1, 'agency_user', $2, 'event.tier_upgraded', 'event', $3, $4)`,
+        [ctx.agencyId, ctx.user.id, eventId, JSON.stringify({ from: r.pricing_tier_id, to: tierId })],
+      );
+    });
   }
 
   /** 只有未發布的活動可以刪除，額度退回；代碼釋出給新活動使用。 */

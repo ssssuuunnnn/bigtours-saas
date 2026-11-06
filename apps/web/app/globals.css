@@ -342,6 +342,7 @@ fieldset.admin-card { margin: 0; border: 0; min-width: 0; }
 .admin-modal h2 { margin: 0; }
 .admin-switch { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .admin-note { margin: 0; padding: 10px 12px; border-left: 4px solid var(--brand); background: var(--paper); font-size: 14px; }
+.admin-note a { color: var(--brand-text); }
 .ghost-link { display: flex; align-items: center; min-height: 44px; padding: 0 12px; color: inherit; }
 
 /* 修改報名 */
