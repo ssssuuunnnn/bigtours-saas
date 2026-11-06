@@ -97,7 +97,7 @@ export const ERROR_CODES = [
   'UNAUTHENTICATED', 'INVALID_CREDENTIALS', 'PAGE_CLOSED', 'FORBIDDEN_ORIGIN', 'LINK_INVALID', 'INVALID_PASSWORD',
   'INVALID_INPUT', 'CAPACITY_BELOW_SOLD', 'TIER_LIMIT_EXCEEDED', 'SESSION_IN_USE', 'FIELD_LOCKED',
   'FORBIDDEN', 'QUOTA_EMPTY', 'SLUG_TAKEN', 'EVENT_NOT_DRAFT', 'EVENT_NOT_PUBLISHED', 'PAGE_MODE_MISMATCH',
-  'DUPLICATE_NAME', 'TRAVELER_TYPE_IN_USE', 'ROOM_TYPE_IN_USE', 'OPTION_IN_USE', 'QUOTA_IN_USE', 'TEMPLATE_INVALID', 'LAST_ADMIN', 'CANNOT_CHANGE_SELF', 'EMAIL_TAKEN', 'MAIL_FAILED', 'ROOM_LABEL_TAKEN', 'ROOMS_NOT_READY', 'NOT_MODIFIABLE', 'PAYMENT_NOT_REQUIRED', 'REGISTRATION_CANCELLED', 'ROOM_FULL',
+  'DUPLICATE_NAME', 'TRAVELER_TYPE_IN_USE', 'ROOM_TYPE_IN_USE', 'OPTION_IN_USE', 'QUOTA_IN_USE', 'TEMPLATE_INVALID', 'AGENCY_CODE_TAKEN', 'QUOTA_BELOW_USED', 'CONTRACT_EXPIRED', 'LAST_ADMIN', 'CANNOT_CHANGE_SELF', 'EMAIL_TAKEN', 'MAIL_FAILED', 'ROOM_LABEL_TAKEN', 'ROOMS_NOT_READY', 'NOT_MODIFIABLE', 'PAYMENT_NOT_REQUIRED', 'REGISTRATION_CANCELLED', 'ROOM_FULL',
   'DUPLICATE_EMPLOYEE_NO', 'EMPLOYEE_NO_LOCKED', 'EMPLOYEE_HAS_REGISTRATION', 'CSV_BAD_HEADER', 'CSV_TOO_MANY_ROWS',
   'PUBLISH_BLOCKED', 'PUBLISH_REQUIREMENT', 'INVALID_FILE', 'FILE_TOO_LARGE',
 ] as const;
@@ -281,7 +281,7 @@ export const orderRequest = z.object({ ids: z.array(z.string().uuid()).min(1).ma
 
 // ===== 活動設定 =====
 
-const eventSlug = z.string().trim().toLowerCase().min(2).max(50).regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/).refine((v) => v !== 'admin');
+const eventSlug = z.string().trim().toLowerCase().min(2).max(50).regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/).refine((v) => !['admin', 'company', 'platform', 'api'].includes(v));
 const eventName = z.string().trim().min(1).max(100);
 const optionalText = (max: number) => z.string().trim().max(max).nullable().transform((v) => v || null);
 const isoDateTime = z.string().datetime({ offset: true }).nullable();
@@ -394,6 +394,33 @@ export const exportTemplateInput = z.object({
 });
 export type ExportTemplateInput = z.infer<typeof exportTemplateInput>;
 
+/** 這些代碼會和系統網址衝突，不能當旅行社代號。 */
+export const RESERVED_AGENCY_CODES = ['www', 'admin', 'api', 'platform', 'app', 'mail', 'static', 'assets', 'help', 'support', 'status'];
+export const platformLoginRequest = z.object({ email: z.string().trim().min(1).max(200), password: z.string().min(1).max(128) });
+const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+export const contractInput = z.object({
+  planNote: z.string().trim().min(1).max(200),
+  contractStartsOn: dateOnly,
+  contractEndsOn: dateOnly,
+}).refine((v) => v.contractEndsOn >= v.contractStartsOn, { path: ['contractEndsOn'] });
+export type ContractInput = z.infer<typeof contractInput>;
+export const agencyCreateInput = z.object({
+  name: z.string().trim().min(1).max(100),
+  code: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/).refine((c) => !RESERVED_AGENCY_CODES.includes(c)),
+  adminName: z.string().trim().min(1).max(100),
+  adminEmail: z.string().trim().toLowerCase().email().max(254),
+  planNote: z.string().trim().min(1).max(200),
+  contractStartsOn: dateOnly,
+  contractEndsOn: dateOnly,
+}).refine((v) => v.contractEndsOn >= v.contractStartsOn, { path: ['contractEndsOn'] });
+export type AgencyCreateInput = z.infer<typeof agencyCreateInput>;
+export const quotaAdjustInput = z.object({
+  tierId: z.string().uuid(),
+  change: z.number().int().min(-1000).max(1000).refine((n) => n !== 0),
+  note: z.string().trim().min(1).max(200),
+});
+export type QuotaAdjustInput = z.infer<typeof quotaAdjustInput>;
+export const agencyStatusRequest = z.object({ status: z.enum(['active', 'suspended']) });
 export const staffInput = z.object({
   name: z.string().trim().min(1).max(100),
   email: z.string().trim().toLowerCase().email().max(254),

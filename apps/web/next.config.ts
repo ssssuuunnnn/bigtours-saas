@@ -5,6 +5,9 @@ const config: NextConfig = {
   allowedDevOrigins: ['*.lvh.me'],
   agentRules: false,
   devIndicators: false,
+  async redirects() {
+    return [{ source: '/', has: [{ type: 'host', value: 'platform\\..*' }], destination: '/platform', permanent: false }];
+  },
   async rewrites() {
     return [{ source: '/api/:path*', destination: `${process.env.API_URL ?? 'http://localhost:4000'}/api/:path*` }];
   },

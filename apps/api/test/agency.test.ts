@@ -2248,3 +2248,151 @@ describe('人員管理與旅行社設定', () => {
     await http().get('/api/v1/agency/branding/logo').set('x-forwarded-host', a.host).expect(404);
   });
 });
+
+describe('平台後台', () => {
+  const HOST = 'platform.lvh.me';
+  const http = () => request(app.getHttpServer());
+  const mail = () => app.get(MailService);
+  const start = '2026-01-01';
+  const end = '2099-12-31';
+  let cookie = '';
+  const email = `pf-${randomUUID().slice(0, 8)}@example.com`;
+  const pf = {
+    get: (p: string) => http().get(`/api/v1/platform${p}`).set('x-forwarded-host', HOST).set('cookie', cookie),
+    post: (p: string, b: object = {}) => http().post(`/api/v1/platform${p}`).set('x-forwarded-host', HOST).set('cookie', cookie).send(b),
+    patch: (p: string, b: object) => http().patch(`/api/v1/platform${p}`).set('x-forwarded-host', HOST).set('cookie', cookie).send(b),
+  };
+  const newAgency = async (o: Record<string, unknown> = {}) => {
+    const code = `p${randomUUID().slice(0, 8)}`;
+    const adminEmail = `${code}@example.com`;
+    const res = await pf.post('/agencies', { name: `旅行社${code}`, code, adminName: '林管理', adminEmail, planNote: '一年期', contractStartsOn: start, contractEndsOn: end, ...o }).expect(201);
+    return { id: res.body.id as string, code, adminEmail };
+  };
+  const tiersList = async () => (await pf.get('/tiers').expect(200)).body as { id: string; minTravelers: number; maxTravelers: number }[];
+
+  beforeAll(async () => {
+    await admin.query(`INSERT INTO platform_users (email, password_hash, name) VALUES ($1, $2, '王平台')`, [email, await hashPassword('platform123')]);
+    const res = await http().post('/api/v1/platform/session').set('x-forwarded-host', HOST).send({ email, password: 'platform123' }).expect(204);
+    cookie = (res.headers['set-cookie'] as unknown as string[])[0]!.split(';')[0]!;
+  });
+
+  it('只有平台網址能用；旅行社帳號不能登入；未登入 401；錯 5 次鎖定', async () => {
+    expect((await pf.get('/me').expect(200)).body.user.name).toBe('王平台');
+    await http().get('/api/v1/platform/me').set('x-forwarded-host', HOST).expect(401);
+    const a = await makeAgency('admin');
+    await http().get('/api/v1/platform/me').set('x-forwarded-host', a.host).set('cookie', cookie).expect(404);
+    await http().post('/api/v1/platform/session').set('x-forwarded-host', a.host).send({ email, password: 'platform123' }).expect(404);
+    await http().post('/api/v1/platform/session').set('x-forwarded-host', HOST).send({ email: 'a@example.com', password: 'whatever12' }).expect(401);
+    await http().get('/api/v1/agency/branding').set('x-forwarded-host', HOST).expect(404);
+
+    const locked = `lock-${randomUUID().slice(0, 8)}@example.com`;
+    await admin.query(`INSERT INTO platform_users (email, password_hash, name) VALUES ($1, $2, 'L')`, [locked, await hashPassword('platform123')]);
+    for (let i = 0; i < 5; i++) await http().post('/api/v1/platform/session').set('x-forwarded-host', HOST).send({ email: locked, password: 'wrong' }).expect(401);
+    await http().post('/api/v1/platform/session').set('x-forwarded-host', HOST).send({ email: locked, password: 'platform123' }).expect(401);
+  });
+
+  it('開通旅行社：寄邀請給第一位管理員，開通後能登入；代號規則與重複都擋下', async () => {
+    const n = await newAgency();
+    const invite = mail().sent.filter((m) => m.to === n.adminEmail).at(-1)!;
+    expect(invite.text).toContain(`${n.code}.lvh.me`);
+    expect(invite.text).toContain('管理員');
+    const token = invite.text.match(/set-password\/([\w-]+)/)![1];
+    const row = (await pf.get('/agencies').expect(200)).body.find((a: any) => a.id === n.id);
+    expect(row).toMatchObject({ state: 'admin_pending', opened: 0, used: 0, remaining: 0, contractEndsOn: end });
+
+    const host = `${n.code}.lvh.me`;
+    await http().post(`/api/v1/agency/password-links/${token}`).set('x-forwarded-host', host).send({ password: 'admin12345' }).expect(204);
+    await http().post('/api/v1/agency/session').set('x-forwarded-host', host).send({ email: n.adminEmail, password: 'admin12345' }).expect(204);
+    expect((await pf.get(`/agencies/${n.id}`).expect(200)).body).toMatchObject({ state: 'active', admin: { name: '林管理', activated: true }, planNote: '一年期' });
+
+    expect((await pf.post('/agencies', { name: 'x', code: n.code, adminName: 'a', adminEmail: 'x1@example.com', planNote: 'p', contractStartsOn: start, contractEndsOn: end }).expect(409)).body.code).toBe('AGENCY_CODE_TAKEN');
+    for (const code of ['platform', 'www', 'AB', 'ab', '-abc', 'abc-', 'a_b']) {
+      await pf.post('/agencies', { name: 'x', code, adminName: 'a', adminEmail: 'x2@example.com', planNote: 'p', contractStartsOn: start, contractEndsOn: end }).expect(422);
+    }
+    await pf.post('/agencies', { name: 'x', code: 'okcode1', adminName: 'a', adminEmail: 'x3@example.com', planNote: 'p', contractStartsOn: '2027-01-01', contractEndsOn: '2026-01-01' }).expect(422);
+  });
+
+  it('邀請信寄失敗時旅行社仍建立，可以重寄；重寄會讓舊連結失效', async () => {
+    const code = `p${randomUUID().slice(0, 8)}`;
+    const adminEmail = `${code}@example.com`;
+    mail().failFor.add(adminEmail);
+    const res = await pf.post('/agencies', { name: 'x', code, adminName: 'a', adminEmail, planNote: 'p', contractStartsOn: start, contractEndsOn: end }).expect(201);
+    expect(res.body.mailFailed).toBe(true);
+    expect((await pf.post(`/agencies/${res.body.id}/admin-link`).expect(502)).body.code).toBe('MAIL_FAILED');
+    mail().failFor.delete(adminEmail);
+    await pf.post(`/agencies/${res.body.id}/admin-link`).expect(204);
+    expect(mail().sent.some((m) => m.to === adminEmail)).toBe(true);
+    await pf.get(`/agencies/${randomUUID()}`).expect(404);
+    await pf.post(`/agencies/${randomUUID()}/admin-link`).expect(404);
+  });
+
+  it('額度調整：增加、減少留下依據與人員；不能低於已使用；建立活動會扣額度並顯示已使用', async () => {
+    const n = await newAgency();
+    const tier = (await tiersList()).find((t) => t.maxTravelers >= 1000)!;
+    await pf.post(`/agencies/${n.id}/quota`, { tierId: tier.id, change: 2, note: '合約 2026-10 收款' }).expect(204);
+    let d = (await pf.get(`/agencies/${n.id}`).expect(200)).body;
+    expect(d.quota.find((q: any) => q.id === tier.id)).toMatchObject({ opened: 2, used: 0, remaining: 2 });
+    expect(d.ledger[0]).toMatchObject({ by: '王平台', change: 2, note: '合約 2026-10 收款' });
+
+    await admin.query(`INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason) VALUES ($1, $2, -1, 'event_created')`, [n.id, tier.id]);
+    d = (await pf.get(`/agencies/${n.id}`).expect(200)).body;
+    expect(d.quota.find((q: any) => q.id === tier.id)).toMatchObject({ opened: 2, used: 1, remaining: 1 });
+    expect((await pf.post(`/agencies/${n.id}/quota`, { tierId: tier.id, change: -2, note: '退款' }).expect(409)).body.code).toBe('QUOTA_BELOW_USED');
+    await pf.post(`/agencies/${n.id}/quota`, { tierId: tier.id, change: -1, note: '退款' }).expect(204);
+    await pf.post(`/agencies/${n.id}/quota`, { tierId: tier.id, change: 0, note: 'x' }).expect(422);
+    await pf.post(`/agencies/${n.id}/quota`, { tierId: tier.id, change: 1, note: '' }).expect(422);
+    await pf.post(`/agencies/${n.id}/quota`, { tierId: randomUUID(), change: 1, note: 'x' }).expect(404);
+  });
+
+  it('合約到期後不能建立活動；停用後後台與活動頁立即無法使用，可重新啟用', async () => {
+    const a = await makeAgency('admin');
+    const ev = await q1(`SELECT company_id, pricing_tier_id FROM events WHERE id = $1`, [a.eventId]);
+    const create = () => http().post('/api/v1/agency/events').set('x-forwarded-host', a.host).set('cookie', a.cookie).send({ companyId: ev.company_id, pricingTierId: ev.pricing_tier_id, name: '新活動', slug: `n-${randomUUID().slice(0, 6)}` });
+    await admin.query(`INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason) VALUES ($1, $2, 5, 'grant')`, [a.agencyId, ev.pricing_tier_id]);
+    await pf.patch(`/agencies/${a.agencyId}/contract`, { planNote: '過期', contractStartsOn: '2020-01-01', contractEndsOn: '2020-12-31' }).expect(204);
+    expect((await create().expect(409)).body.code).toBe('CONTRACT_EXPIRED');
+    expect((await pf.get(`/agencies/${a.agencyId}`).expect(200)).body).toMatchObject({ state: 'expired', planNote: '過期' });
+    // 已發布的活動可繼續進行
+    await http().get('/api/v1/public/events/evt/landing').set('x-forwarded-host', a.host).expect(200);
+    await pf.patch(`/agencies/${a.agencyId}/contract`, { planNote: '續約', contractStartsOn: start, contractEndsOn: end }).expect(204);
+    await create().expect(201);
+    for (const slug of ['company', 'platform', 'admin']) {
+      await http().post('/api/v1/agency/events').set('x-forwarded-host', a.host).set('cookie', a.cookie).send({ companyId: ev.company_id, pricingTierId: ev.pricing_tier_id, name: '保留字', slug }).expect(422);
+    }
+
+    await pf.patch(`/agencies/${a.agencyId}/status`, { status: 'suspended' }).expect(204);
+    await http().get('/api/v1/agency/me').set('x-forwarded-host', a.host).set('cookie', a.cookie).expect(404);
+    await http().get('/api/v1/public/events/evt/landing').set('x-forwarded-host', a.host).expect(404);
+    expect((await pf.get(`/agencies/${a.agencyId}`).expect(200)).body).toMatchObject({ state: 'suspended', suspended: true });
+    await pf.patch(`/agencies/${a.agencyId}/status`, { status: 'active' }).expect(204);
+    await http().get('/api/v1/agency/me').set('x-forwarded-host', a.host).set('cookie', a.cookie).expect(200);
+    const logs = await admin.query(`SELECT action, actor_type FROM audit_logs WHERE agency_id = $1 AND action LIKE 'platform.%'`, [a.agencyId]);
+    expect(logs.rows.map((r) => r.action)).toEqual(expect.arrayContaining(['platform.contract_updated', 'platform.agency_status']));
+    expect(logs.rows.every((r) => r.actor_type === 'platform_user')).toBe(true);
+  });
+
+  it('用量與提醒：80% 以上才列出、保留中也計入；列出需要跟進的旅行社；不含員工與旅客資料', async () => {
+    const a = await makeAgency('admin');
+    const tier = await q1(`SELECT t.max_travelers AS max, t.id FROM pricing_tiers t JOIN events e ON e.pricing_tier_id = t.id WHERE e.id = $1`, [a.eventId]);
+    const session = (await q1(`INSERT INTO event_sessions (agency_id, event_id, name, capacity, sold_count) VALUES ($1, $2, 'S', $3, $4) RETURNING id`, [a.agencyId, a.eventId, tier.max, Math.ceil(tier.max * 0.8) - 1])).id;
+    const find = async () => (await pf.get('/usage').expect(200)).body.events.find((e: any) => e.id === a.eventId);
+    expect(await find()).toBeUndefined();
+    const emp = (await q1(`INSERT INTO event_employees (agency_id, event_id, employee_no, name) VALUES ($1, $2, 'U1', '不該出現的員工') RETURNING id`, [a.agencyId, a.eventId])).id;
+    await admin.query(`INSERT INTO seat_holds (agency_id, event_id, event_employee_id, session_id, quantity, expires_at) VALUES ($1, $2, $3, $4, 1, now() + interval '10 minutes')`, [a.agencyId, a.eventId, emp, session]);
+    expect(await find()).toMatchObject({ full: false, people: Math.ceil(tier.max * 0.8), limit: tier.max });
+    await admin.query(`UPDATE event_sessions SET sold_count = $2 WHERE id = $1`, [session, tier.max]);
+    expect((await find()).full).toBe(true);
+
+    const soon = new Date(Date.now() + 10 * 86400000).toISOString().slice(0, 10);
+    await pf.patch(`/agencies/${a.agencyId}/contract`, { planNote: 'p', contractStartsOn: start, contractEndsOn: soon }).expect(204);
+    await admin.query(`INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason) VALUES ($1, $2, 1, 'grant'), ($1, $2, -1, 'event_created')`, [a.agencyId, tier.id]);
+    const n = await newAgency();
+    const usage = (await pf.get('/usage').expect(200)).body;
+    const kinds = (id: string) => usage.followUps.filter((f: any) => f.agencyId === id).map((f: any) => f.kind);
+    expect(kinds(a.agencyId)).toEqual(expect.arrayContaining(['contract_expiring', 'quota_empty']));
+    expect(kinds(n.id)).toEqual(['admin_pending']);
+    expect(JSON.stringify(usage)).not.toContain('不該出現的員工');
+    expect((await pf.get('/agencies').expect(200)).body.find((x: any) => x.id === a.agencyId).state).toBe('expiring');
+    expect((await pf.get(`/agencies?search=${n.code}`).expect(200)).body).toHaveLength(1);
+  });
+});

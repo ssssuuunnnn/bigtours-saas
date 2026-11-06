@@ -293,6 +293,9 @@ export class AgencyAdminService {
   }
 
   private async insertDraftEvent(tx: Tx, ctx: AgencyUserContext, input: NewEventInput) {
+    // 合約到期後不能建立新活動；已發布的活動可繼續進行到結束。
+    const contract = await tx.query(`SELECT contract_ends_on < (now() AT TIME ZONE 'Asia/Taipei')::date AS expired FROM agencies WHERE id = $1`, [ctx.agencyId]);
+    if (contract.rows[0]?.expired) throw new DomainError('CONTRACT_EXPIRED');
     // 同一旅行社、同一級距依序扣額度，避免同時建立時超扣。
     await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`quota:${ctx.agencyId}:${input.pricingTierId}`]);
     const { rows: tiers } = await tx.query(

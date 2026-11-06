@@ -329,3 +329,35 @@ export const contactApi = {
   ...rosterMethods(contact.call, contact.upload),
 };
 export const feeReportUrl = (id: string) => `/api/v1/company/events/${id}/fee-report`;
+
+// ===== 平台後台 =====
+
+export interface PlatformTier { id: string; minTravelers: number; maxTravelers: number; price: number }
+export type AgencyState = 'active' | 'expiring' | 'expired' | 'admin_pending' | 'suspended';
+export interface PlatformAgencyRow { id: string; name: string; code: string; contractStartsOn: string | null; contractEndsOn: string | null; state: AgencyState; opened: number; used: number; remaining: number }
+export interface PlatformAgency {
+  id: string; name: string; code: string; state: AgencyState; suspended: boolean; planNote: string | null; contractStartsOn: string | null; contractEndsOn: string | null;
+  admin: { id: string; name: string; email: string; activated: boolean } | null;
+  quota: (PlatformTier & { opened: number; used: number; remaining: number })[];
+  ledger: { id: string; at: string; by: string | null; change: number; note: string | null; minTravelers: number; maxTravelers: number }[];
+}
+export interface PlatformUsage {
+  events: { id: string; name: string; slug: string; agencyId: string; agencyName: string; people: number; limit: number; full: boolean; percent: number }[];
+  followUps: { agencyId: string; agencyName: string; kind: 'contract_expired' | 'contract_expiring' | 'quota_empty' | 'admin_pending'; date?: string | null; days?: number }[];
+}
+export interface ContractValues { planNote: string; contractStartsOn: string; contractEndsOn: string }
+const plat = clientFor('/api/v1/platform');
+export const platformApi = {
+  login: (email: string, password: string) => plat.call<void>('POST', '/session', { email, password }),
+  logout: () => plat.call<void>('DELETE', '/session'),
+  me: () => plat.call<{ user: { id: string; name: string }; domain: string }>('GET', '/me'),
+  tiers: () => plat.call<PlatformTier[]>('GET', '/tiers'),
+  agencies: (search: string) => plat.call<PlatformAgencyRow[]>('GET', `/agencies?search=${encodeURIComponent(search)}`),
+  agency: (id: string) => plat.call<PlatformAgency>('GET', `/agencies/${id}`),
+  create: (v: ContractValues & { name: string; code: string; adminName: string; adminEmail: string }) => plat.call<{ id: string; mailFailed: boolean }>('POST', '/agencies', v),
+  updateContract: (id: string, v: ContractValues) => plat.call<void>('PATCH', `/agencies/${id}/contract`, v),
+  adjustQuota: (id: string, v: { tierId: string; change: number; note: string }) => plat.call<void>('POST', `/agencies/${id}/quota`, v),
+  setStatus: (id: string, status: 'active' | 'suspended') => plat.call<void>('PATCH', `/agencies/${id}/status`, { status }),
+  sendAdminLink: (id: string) => plat.call<void>('POST', `/agencies/${id}/admin-link`, {}),
+  usage: () => plat.call<PlatformUsage>('GET', '/usage'),
+};
