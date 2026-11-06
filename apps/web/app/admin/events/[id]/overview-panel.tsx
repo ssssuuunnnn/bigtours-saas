@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { adminApi, type AdminEvent, type EventOverview } from '../../../../lib/admin-api';
 import { a } from '../../../../messages/admin';
 import { adminError, useAdminMe } from '../../admin-shell';
+import { tierUsage } from './sessions-panel';
 
 const when = (iso: string) => new Date(iso).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
 
@@ -50,6 +51,16 @@ export function OverviewPanel({ event }: { event: AdminEvent }) {
         </table>
       </div>
       <p className="muted">{a.overviewTravelers(data.travelers, data.tierMax)}</p>
+      {(() => {
+        const usage = tierUsage(data.tierMax, data.sessions.reduce((n, x) => n + x.sold + x.held, 0));
+        if (!usage) return null;
+        return (
+          <p className="admin-note" role="status">
+            {usage.text}{' '}
+            {can(me.user.role, 'configureEvents') && <Link href={`/admin/events/${event.id}/sessions`}>{a.tierGoUpgrade}</Link>}
+          </p>
+        );
+      })()}
     </section>
   );
 }

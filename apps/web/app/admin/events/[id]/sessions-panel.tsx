@@ -1,17 +1,20 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { adminApi, type AdminEvent, type AdminSession, type RoomTypeValues, type SessionValues } from '../../../../lib/admin-api';
+import { ApiError } from '../../../../lib/api';
+import { adminApi, type AdminEvent, type AdminSession, type RoomTypeValues, type SessionValues, type TierOptions } from '../../../../lib/admin-api';
 import { a } from '../../../../messages/admin';
 import { adminError, MoveButtons, swapped } from '../../admin-shell';
 
 const EMPTY: SessionValues = { name: '', departsOn: '', returnsOn: '', departureTime: '', returnArrivalTime: '', outboundFlightNo: '', returnFlightNo: '', capacity: 0, roomTypes: [] };
 const EMPTY_ROOM: RoomTypeValues = { id: null, name: '', capacity: 2, surcharge: 0, bedQuota: 0 };
 
-export function SessionsPanel({ event }: { event: AdminEvent }) {
+export function SessionsPanel({ event, onEventChanged }: { event: AdminEvent; onEventChanged: () => void }) {
   const [sessions, setSessions] = useState<AdminSession[] | null>(null);
   const [editing, setEditing] = useState<AdminSession | 'new' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [upgrade, setUpgrade] = useState<number | null>(null);
+  const [note, setNote] = useState<string | null>(null);
 
   const load = useCallback(() => adminApi.sessions(event.id).then(setSessions).catch((e) => setError(adminError(e))), [event.id]);
   useEffect(() => { void load(); }, [load]);
@@ -35,16 +38,31 @@ export function SessionsPanel({ event }: { event: AdminEvent }) {
     <section className="admin-panel">
       <div className="admin-panel-head">
         <p className="muted">{a.sessionsHint(event.tierMax, total)}</p>
-        <button type="button" className="primary" onClick={() => setEditing('new')}>{a.addSession}</button>
+        <div className="admin-actions">
+          <button type="button" className="ghost" onClick={() => { setNote(null); setUpgrade(total); }}>{a.tierUpgrade}</button>
+          <button type="button" className="primary" onClick={() => setEditing('new')}>{a.addSession}</button>
+        </div>
       </div>
       {error && <p className="error" role="alert">{error}</p>}
+      {note && <p className="admin-note" role="status">{note}</p>}
+      <TierAlert event={event} sessions={sessions} />
+      {upgrade !== null && (
+        <TierUpgrade
+          event={event}
+          needed={upgrade}
+          overLimit={upgrade > event.tierMax}
+          onCancel={() => setUpgrade(null)}
+          onDone={(max) => { setUpgrade(null); setNote(a.tierDone(max)); onEventChanged(); }}
+        />
+      )}
       {editing && (
         <SessionForm
           event={event}
           session={editing === 'new' ? null : editing}
           sessions={sessions}
           onCancel={() => setEditing(null)}
-          onSaved={() => { setEditing(null); void load(); }}
+          onSaved={() => { setEditing(null); setUpgrade(null); void load(); }}
+          onNeedsUpgrade={(needed) => { setNote(null); setUpgrade(needed); }}
         />
       )}
       {sessions.length === 0 ? <p className="muted">{a.noSessions}</p> : (
@@ -79,7 +97,7 @@ export function SessionsPanel({ event }: { event: AdminEvent }) {
   );
 }
 
-function SessionForm({ event, session, sessions, onCancel, onSaved }: { event: AdminEvent; session: AdminSession | null; sessions: AdminSession[]; onCancel: () => void; onSaved: () => void }) {
+function SessionForm({ event, session, sessions, onCancel, onSaved, onNeedsUpgrade }: { event: AdminEvent; session: AdminSession | null; sessions: AdminSession[]; onCancel: () => void; onSaved: () => void; onNeedsUpgrade: (needed: number) => void }) {
   const [v, setV] = useState<SessionValues>(session ?? EMPTY);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -99,6 +117,9 @@ function SessionForm({ event, session, sessions, onCancel, onSaved }: { event: A
     setV({ ...v, roomTypes: [...rooms, ...added] });
   };
 
+  // 升級後上限改變，先前的超過上限訊息已不適用。
+  useEffect(() => setError(null), [event.tierMax]);
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true); setError(null);
@@ -108,6 +129,8 @@ function SessionForm({ event, session, sessions, onCancel, onSaved }: { event: A
       onSaved();
     } catch (err) {
       setError(adminError(err));
+      // 名額超過級距時直接帶出升級畫面，升級後這份表單還在，再按一次儲存。
+      if (err instanceof ApiError && err.code === 'TIER_LIMIT_EXCEEDED') onNeedsUpgrade((err.detail?.otherSessions ?? 0) + v.capacity);
     } finally {
       setBusy(false);
     }
@@ -167,5 +190,77 @@ function SessionForm({ event, session, sessions, onCancel, onSaved }: { event: A
         <button type="submit" className="primary" disabled={busy}>{busy ? a.saving : a.save}</button>
       </div>
     </form>
+  );
+}
+
+/** 報名總覽與梯次與名額共用。人數含保留中的旅客。 */
+export function tierUsage(max: number, people: number) {
+  if (max <= 0) return null;
+  if (people >= max) return { full: true, text: a.tierFull(max) };
+  if (people >= max * 0.8) return { full: false, text: a.tierWarn(people, max, Math.floor((people / max) * 100)) };
+  return null;
+}
+
+function TierAlert({ event, sessions }: { event: AdminEvent; sessions: AdminSession[] }) {
+  const usage = tierUsage(event.tierMax, sessions.reduce((n, s) => n + s.soldCount, 0) + event.heldTravelers);
+  return usage ? <p className="admin-note" role="status">{usage.text}</p> : null;
+}
+
+const range = (t: { minTravelers: number; maxTravelers: number }) => a.tierRange(t.minTravelers, t.maxTravelers);
+
+function TierUpgrade({ event, needed, overLimit, onCancel, onDone }: { event: AdminEvent; needed: number; overLimit: boolean; onCancel: () => void; onDone: (max: number) => void }) {
+  const [data, setData] = useState<TierOptions | null>(null);
+  const [tierId, setTierId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    adminApi.tierOptions(event.id, needed).then((d) => { setData(d); setTierId(d.recommendedId ?? d.options[0]?.id ?? ''); }).catch((e) => setError(adminError(e)));
+  }, [event.id, needed]);
+
+  const target = data?.options.find((o) => o.id === tierId);
+  const confirm = async () => {
+    if (!target) return;
+    setBusy(true); setError(null);
+    try {
+      await adminApi.upgradeTier(event.id, target.id);
+      onDone(target.maxTravelers);
+    } catch (e) {
+      setError(adminError(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="admin-card" role="region" aria-label={a.tierTitle}>
+      <h2>{a.tierTitle}</h2>
+      <p className="muted">{overLimit ? a.tierNeeded(needed) : a.tierIntro}</p>
+      {error && <p className="error" role="alert">{error}</p>}
+      {!data && !error && <p aria-busy="true">{a.loading}</p>}
+      {data && (
+        <>
+          <p>{a.tierCurrent}：<strong>{a.tierLine(range(data.current), data.current.price)}</strong></p>
+          {data.options.length === 0 ? <p className="muted">{a.tierNoOptions}</p> : (
+            <label className="field">
+              <span>{a.tierAfter}</span>
+              <select value={tierId} onChange={(e) => setTierId(e.target.value)}>
+                {data.options.map((o) => <option key={o.id} value={o.id}>{a.tierOption(range(o), o.price, o.remaining)}</option>)}
+              </select>
+            </label>
+          )}
+          {target && (
+            <>
+              <p>{a.tierQuota}：{a.tierQuotaLine(range(data.current), range(target))}</p>
+              <small className="muted">{a.tierDiff(Math.max(target.price - data.current.price, 0))}</small>
+              {target.remaining < 1 && <p className="error" role="alert">{a.tierNoQuota}</p>}
+            </>
+          )}
+          {data.contractExpired && <p className="error" role="alert">{a.tierExpired}</p>}
+        </>
+      )}
+      <div className="admin-form-actions">
+        <button type="button" className="ghost" onClick={onCancel}>{a.cancel}</button>
+        <button type="button" className="primary" disabled={busy || !target || target.remaining < 1 || data?.contractExpired} onClick={confirm}>{a.tierConfirm}</button>
+      </div>
+    </div>
   );
 }

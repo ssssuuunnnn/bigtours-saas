@@ -830,4 +830,26 @@ describe('報名相關通知信', () => {
     await until(() => sent().some((m) => m.to === team && m.subject.includes('取消申請')));
     expect(sent().find((m) => m.to === team && m.subject.includes('取消申請'))!.text).toContain('S1');
   });
+
+  it('報名送出後人數達級距 80% 通知旅行社，同一門檻只寄一次', async () => {
+    const f = await makeFixture();
+    const team = `tier-${randomUUID().slice(0, 8)}@example.com`;
+    const { max } = await q1(`SELECT t.max_travelers AS max FROM events e JOIN pricing_tiers t ON t.id = e.pricing_tier_id WHERE e.agency_id = $1`, [f.agencyId]);
+    const start = Math.ceil(max * 0.8) - 1;
+    await admin.query(`UPDATE events SET notify_emails = $2 WHERE agency_id = $1`, [f.agencyId, [team]]);
+    await admin.query(`UPDATE event_sessions SET capacity = $2, sold_count = $3 WHERE id = $1`, [f.sessionId, max, start]);
+    const register = async () => {
+      const { token } = await makeEmployee(f, { subsidy: 1000 });
+      const api = call(f, token);
+      const self = sel(f.selfType);
+      await api.hold({ sessionId: f.sessionId, travelers: [self] });
+      expect((await api.submit({ travelers: [details(self)], termsAccepted: true })).status).toBe(201);
+    };
+    await register();
+    await until(() => sent().some((m) => m.to === team));
+    expect(sent().find((m) => m.to === team)!.subject).toContain('80%');
+    await register();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(sent().filter((m) => m.to === team)).toHaveLength(1);
+  });
 });

@@ -15,6 +15,7 @@ export type MailTemplate =
   | { key: 'room_published'; sessionName: string; rooms: string }
   | { key: 'reassigned'; reason: string; changes: { traveler: string; from: string; to: string }[]; total: number; selfPay: number }
   | { key: 'agency_cancel_requested'; employeeName: string; employeeNo: string; sessionName: string; eventId: string; registrationId: string }
+  | { key: 'agency_tier_alert'; people: number; limit: number; percent: number; eventId: string }
   | { key: 'agency_modified'; employeeName: string; employeeNo: string; from: number; to: number; eventId: string; registrationId: string };
 
 export interface MailEvent { name: string; slug: string; agency_code: string; agency_name: string }
@@ -45,6 +46,8 @@ function values(event: MailEvent, employee: MailEmployee, t: MailTemplate): Reco
       return { ...base, 改派原因: t.reason, 改派內容: t.changes.map((c) => `${c.traveler}：${c.from} → ${c.to}`).join('\n'), 整筆費用: money(t.total), 自付金額: money(t.selfPay) };
     case 'agency_cancel_requested':
       return { ...base, 員工姓名: t.employeeName, 員工編號: t.employeeNo, 梯次: t.sessionName, 後台連結: admin(t.eventId, t.registrationId) };
+    case 'agency_tier_alert':
+      return { ...base, 人數: t.people.toLocaleString('en-US'), 級距上限: t.limit.toLocaleString('en-US'), 使用比例: `${t.percent}%`, 後台連結: `${siteBase(event)}/admin/events/${t.eventId}/sessions` };
     case 'agency_modified':
       return { ...base, 員工姓名: t.employeeName, 員工編號: t.employeeNo, 原費用: money(t.from), 整筆費用: money(t.to), 後台連結: admin(t.eventId, t.registrationId) };
     default: return base;
@@ -124,6 +127,33 @@ export class NotificationService {
       await Promise.all(emails.map((email) => this.deliver(agencyId, eventId, event, { id: null, name: event.agency_name, email }, template)));
     } catch (err) {
       this.logger.error(`通知旅行社失敗：${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * 人數含保留中的旅客。達 80% 與達到上限各通知一次，升級級距後重新計算。
+   * 同一筆更新同時確認與標記，兩筆報名同時送出也只會寄一次。
+   */
+  async checkTierUsage(agencyId: string, eventId: string) {
+    try {
+      const result = await this.db.withTenant(agencyId, async (tx) => {
+        const { rows } = await tx.query(
+          `SELECT t.max_travelers,
+                  COALESCE((SELECT sum(s.sold_count) FROM event_sessions s WHERE s.event_id = e.id), 0)::int
+                  + COALESCE((SELECT sum(h.quantity) FROM seat_holds h WHERE h.event_id = e.id AND h.status = 'active' AND h.expires_at > now()), 0)::int AS people
+             FROM events e JOIN pricing_tiers t ON t.id = e.pricing_tier_id WHERE e.id = $1`,
+          [eventId],
+        );
+        const r = rows[0];
+        if (!r || r.max_travelers <= 0) return null;
+        const level = r.people >= r.max_travelers ? 100 : r.people >= r.max_travelers * 0.8 ? 80 : 0;
+        if (!level) return null;
+        const updated = await tx.query(`UPDATE events SET tier_alert_level = $2 WHERE id = $1 AND tier_alert_level < $2`, [eventId, level]);
+        return updated.rowCount ? { people: r.people as number, limit: r.max_travelers as number } : null;
+      });
+      if (result) await this.notifyAgency(agencyId, eventId, { key: 'agency_tier_alert', ...result, percent: Math.floor((result.people / result.limit) * 100), eventId });
+    } catch (err) {
+      this.logger.error(`用量提醒失敗：${(err as Error).message}`);
     }
   }
 
