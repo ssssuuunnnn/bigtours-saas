@@ -44,6 +44,16 @@ export function sendPdf(res: Response, name: string, content: Buffer) {
   res.end(content);
 }
 
+export function sendXlsx(res: Response, name: string, content: Buffer) {
+  res.set({
+    'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'content-disposition': `attachment; filename="export.xlsx"; filename*=UTF-8''${encodeURIComponent(name)}`,
+    'x-content-type-options': 'nosniff',
+    'cache-control': 'private, no-store',
+  });
+  res.end(content);
+}
+
 /** 前台圖片在登入前就要顯示，可以快取；網址帶版本，更換後會是新網址。 */
 export function sendImage(res: Response, contentType: string, content: Buffer, cache = 'public, max-age=86400') {
   res.set({ 'content-type': contentType, 'x-content-type-options': 'nosniff', 'cache-control': cache });

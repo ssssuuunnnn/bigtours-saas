@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { adminApi, type AdminEvent, type RoomOverview, type RoomSessionView, type RoomView } from '../../../../lib/admin-api';
 import { a } from '../../../../messages/admin';
@@ -109,6 +110,7 @@ export function RoomsPanel({ event }: { event: AdminEvent }) {
         <p>
           {!canPublish && s.stats.total > 0 ? a.roomsBlocked(unassignedCount, s.stats.over) : s.publication ? (changes.length ? '' : a.roomsPublishedAt(when(s.publication.publishedAt))) : s.stats.total > 0 ? a.roomsPublishHint(s.notifyCount) : ''}
         </p>
+        <Link className="ghost-link" href={`/admin/events/${event.id}/export?template=builtin:rooms&session=${s.id}`}>{a.roomsExport}</Link>
         {s.publication
           ? (changes.length > 0 && <button type="button" className="primary" disabled={busy || !canPublish} onClick={publish}>{a.roomsRepublish(s.notifyCount)}</button>)
           : <button type="button" className="primary" disabled={busy || !canPublish} onClick={publish}>{a.roomsPublish}</button>}

@@ -379,6 +379,21 @@ export const assignRoomRequest = z.object({
   travelerIds: z.array(z.string().uuid()).min(1).max(100),
 });
 
+const exportColumns = z.array(z.string().min(1).max(200)).min(1).max(100).refine((v) => new Set(v).size === v.length);
+export const exportRequest = z.object({
+  name: z.string().trim().min(1).max(60),
+  scope: z.enum(['travelers', 'registrations']),
+  sessionId: z.string().uuid().nullable(),
+  columns: exportColumns,
+});
+export type ExportRequest = z.infer<typeof exportRequest>;
+export const exportTemplateInput = z.object({
+  name: z.string().trim().min(1).max(60),
+  scope: z.enum(['travelers', 'registrations']),
+  columns: exportColumns,
+});
+export type ExportTemplateInput = z.infer<typeof exportTemplateInput>;
+
 export const EVENT_NAV_KEYS = [
   'basic', 'schedule', 'sessions', 'types', 'options', 'fields', 'payment-terms', 'contacts', 'publish',
   'overview', 'roster', 'registrations', 'emails',

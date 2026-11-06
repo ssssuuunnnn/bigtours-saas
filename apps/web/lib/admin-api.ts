@@ -65,6 +65,16 @@ export interface RoomSessionView {
 }
 export interface RoomOverview { sessions: { id: string; name: string }[]; session: RoomSessionView | null }
 export interface RoomValues { label: string; roomTypeId: string | null; capacity?: number; note: string | null }
+export interface ExportColumn { key: string; label: string; sensitive: boolean }
+export interface ExportTemplate { id: string; name: string; scope: 'travelers' | 'registrations'; columns: string[]; builtin: boolean }
+export interface ExportJob { id: string; name: string; sessionName: string | null; scope: string; status: 'pending' | 'running' | 'completed' | 'failed'; rowCount: number | null; containsSensitive: boolean; createdAt: string; expiresAt: string | null; createdByName: string | null }
+export interface ExportOverview {
+  catalog: { travelers: ExportColumn[]; registrations: ExportColumn[] };
+  canExportSensitive: boolean;
+  sessions: { id: string; name: string }[];
+  templates: ExportTemplate[];
+  jobs: ExportJob[];
+}
 export interface EmailTemplateView {
   key: string; label: string; audience: 'employee' | 'agency'; placeholders: string[]; required: string[];
   defaultSubject: string; defaultBody: string; subject: string; body: string; senderName: string | null; customized: boolean;
@@ -203,6 +213,10 @@ export const adminApi = {
   draftRooms: (id: string, sessionId: string) => call<{ created: number; placed: number }>('POST', `/events/${id}/rooms/draft`, { sessionId }),
   assignRoom: (id: string, sessionId: string, roomId: string | null, travelerIds: string[]) => call<void>('PUT', `/events/${id}/rooms/assignments`, { sessionId, roomId, travelerIds }),
   publishRooms: (id: string, sessionId: string) => call<{ notified: number }>('POST', `/events/${id}/rooms/publish`, { sessionId }),
+  exports: (id: string) => call<ExportOverview>('GET', `/events/${id}/exports`),
+  createExport: (id: string, body: { name: string; scope: string; sessionId: string | null; columns: string[] }) => call<{ id: string }>('POST', `/events/${id}/exports`, body),
+  saveExportTemplate: (id: string, body: { name: string; scope: string; columns: string[] }) => call<{ id: string }>('POST', `/events/${id}/export-templates`, body),
+  deleteExportTemplate: (id: string, templateId: string) => call<void>('DELETE', `/events/${id}/export-templates/${templateId}`),
   emails: (id: string) => call<EmailOverview>('GET', `/events/${id}/emails`),
   saveNotifyEmails: (id: string, emails: string[]) => call<void>('PUT', `/events/${id}/emails/notify-emails`, { emails }),
   saveEmailTemplate: (id: string, key: string, body: EmailTemplateValues) => call<void>('PUT', `/events/${id}/emails/templates/${key}`, body),

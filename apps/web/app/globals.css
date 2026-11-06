@@ -409,3 +409,17 @@ fieldset.admin-card { margin: 0; border: 0; min-width: 0; }
 @media (prefers-color-scheme: dark) { .admin-room.over { background: #451a03; border-color: #92400e; color: #fde68a; } }
 @media (max-width: 900px) { .admin-rooms-grid { grid-template-columns: minmax(0, 1fr); } }
 .admin-panel-head .admin-inline-field span { white-space: nowrap; }
+
+/* 資料匯出 */
+.admin-export-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+.admin-export-columns { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 4px 12px; margin: 0; }
+.admin-export-columns label { display: flex; align-items: center; gap: 6px; min-height: 32px; font-size: 14px; cursor: pointer; }
+.admin-export-columns input { accent-color: var(--brand); width: auto; }
+.admin-export-columns small { color: #b42318; }
+.admin-export-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; align-items: end; }
+.admin-export-saveas { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; flex: 1 1 260px; }
+.admin-export-saveas .field { flex: 1 1 160px; }
+.admin-export-job { display: grid; gap: 4px; padding: 10px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.admin-export-job:first-of-type { border-top: 0; }
+@media (max-width: 900px) { .admin-export-grid { grid-template-columns: minmax(0, 1fr); } }
+.admin-export-job a { color: var(--brand-text); }
