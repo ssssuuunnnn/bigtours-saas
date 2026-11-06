@@ -84,10 +84,10 @@ export class AgencyAdminService {
         `SELECT id, password_hash, locked_until > now() AS locked FROM agency_users WHERE email = $1 AND status = 'active'`,
         [email],
       );
-      return rows[0] as { id: string; password_hash: string; locked: boolean | null } | undefined;
+      return rows[0] as { id: string; password_hash: string | null; locked: boolean | null } | undefined;
     });
     const matched = await verifyPassword(password, user?.password_hash ?? (await DUMMY_HASH));
-    if (!user || user.locked) throw new DomainError('INVALID_CREDENTIALS');
+    if (!user?.password_hash || user.locked) throw new DomainError('INVALID_CREDENTIALS');
     if (!matched) {
       await this.db.withTenant(agency.id, (tx) =>
         tx.query(
@@ -102,7 +102,7 @@ export class AgencyAdminService {
     }
     const token = generateToken();
     await this.db.withTenant(agency.id, async (tx) => {
-      await tx.query(`UPDATE agency_users SET failed_login_count = 0, locked_until = NULL WHERE id = $1`, [user.id]);
+      await tx.query(`UPDATE agency_users SET failed_login_count = 0, locked_until = NULL, last_login_at = now() WHERE id = $1`, [user.id]);
       await tx.query(`DELETE FROM agency_user_sessions WHERE agency_user_id = $1 AND expires_at <= now()`, [user.id]);
       await tx.query(
         `INSERT INTO agency_user_sessions (agency_id, agency_user_id, token_hash, expires_at)

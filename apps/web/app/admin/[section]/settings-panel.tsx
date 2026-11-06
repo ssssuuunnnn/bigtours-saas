@@ -1,0 +1,70 @@
+'use client';
+
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { adminApi, type AgencySettings } from '../../../lib/admin-api';
+import { a } from '../../../messages/admin';
+import { adminError } from '../admin-shell';
+
+const MAX_BYTES = 5 * 1024 * 1024;
+
+export function SettingsPanel() {
+  const [s, setS] = useState<AgencySettings | null>(null);
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const file = useRef<HTMLInputElement>(null);
+  const load = useCallback(() => adminApi.settings().then((r) => { setS(r); setName(r.name); }).catch((e) => setError(adminError(e))), []);
+  useEffect(() => { void load(); }, [load]);
+  if (!s) return error ? <p className="error" role="alert">{error}</p> : <p aria-busy="true">{a.loading}</p>;
+
+  const run = async (action: () => Promise<unknown>) => {
+    setBusy(true); setNote(null); setError(null);
+    try {
+      await action();
+      setNote(a.settingsSaved);
+      await load();
+    } catch (e) {
+      setError(adminError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const pick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const chosen = e.target.files?.[0];
+    e.target.value = '';
+    if (!chosen) return;
+    if (chosen.size > MAX_BYTES) { setError(a.errors.FILE_TOO_LARGE ?? a.errors.fallback!); return; }
+    void run(() => adminApi.uploadLogo(chosen));
+  };
+
+  return (
+    <section className="admin-panel">
+      <p className="muted">{a.settingsHint}</p>
+      {error && <p className="error" role="alert">{error}</p>}
+      {note && <p className="admin-note" role="status">{note}</p>}
+      <div className="admin-card">
+        <h2>{a.settingsBrand}</h2>
+        <div>
+          <span>{a.settingsLogo}</span>
+          {s.logoUrl ? <img className="admin-settings-logo" src={s.logoUrl} alt={a.settingsLogoAlt(s.name)} /> : <p className="muted">{a.settingsLogoNone}</p>}
+        </div>
+        <div className="admin-file-row">
+          <input ref={file} className="admin-file-input" type="file" accept="image/jpeg,image/png,image/webp" aria-label={a.settingsLogoChange} hidden onChange={pick} />
+          <button type="button" className="ghost" disabled={busy} onClick={() => file.current?.click()}>{a.settingsLogoChange}</button>
+          {s.logoUrl && <button type="button" className="link" disabled={busy} onClick={() => run(() => adminApi.removeLogo())}>{a.settingsLogoRemove}</button>}
+          <small className="muted">{a.settingsLogoHint}</small>
+        </div>
+        <form className="admin-export-saveas" onSubmit={(e) => { e.preventDefault(); void run(() => adminApi.saveAgencyName(name)); }}>
+          <label className="field"><span>{a.settingsName}</span><input type="text" required maxLength={100} value={name} onChange={(e) => setName(e.target.value)} /></label>
+          <button type="submit" className="primary" disabled={busy}>{a.save}</button>
+        </form>
+      </div>
+      <div className="admin-card">
+        <h2>{a.settingsUrl}</h2>
+        <p><code>{window.location.host}</code></p>
+        <small className="muted">{a.settingsUrlHint}</small>
+      </div>
+    </section>
+  );
+}

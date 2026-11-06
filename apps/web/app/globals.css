@@ -430,3 +430,9 @@ fieldset.admin-card { margin: 0; border: 0; min-width: 0; }
 
 /* 企業窗口 */
 .contact-sum { display: grid; gap: 4px; padding: 12px 14px; background: var(--paper); border-radius: 4px; }
+
+/* 人員管理與旅行社設定 */
+.admin-login-logo { max-height: 56px; max-width: 200px; object-fit: contain; }
+.admin-settings-logo { max-height: 64px; max-width: 240px; object-fit: contain; display: block; }
+.admin-file-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.admin-matrix td:not(:first-child), .admin-matrix th:not(:first-child) { white-space: nowrap; }

@@ -1,5 +1,6 @@
 'use client';
 
+import { usePathname } from 'next/navigation';
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { ApiError } from '../../lib/api';
 import { adminApi, contactApi, type AdminMe } from '../../lib/admin-api';
@@ -19,6 +20,12 @@ export function useAdminMe() {
 
 /** 共用外框：確認登入狀態，未登入時顯示登入表單；登入後顯示左側選單。 */
 export function AdminShell({ children }: { children: React.ReactNode }) {
+  // 設定密碼頁不需要登入。
+  if (usePathname().startsWith('/admin/set-password')) return <>{children}</>;
+  return <Shell>{children}</Shell>;
+}
+
+function Shell({ children }: { children: React.ReactNode }) {
   const [me, setMe] = useState<AdminMe | null>(null);
   const [view, setView] = useState<'loading' | 'login' | 'ready' | 'failed'>('loading');
 
@@ -53,6 +60,8 @@ function AdminLogin({ onDone }: { onDone: () => void }) {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [brand, setBrand] = useState<{ name: string; logoUrl: string | null } | null>(null);
+  useEffect(() => { adminApi.branding().then(setBrand).catch(() => undefined); }, []);
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true); setError(null);
@@ -69,7 +78,8 @@ function AdminLogin({ onDone }: { onDone: () => void }) {
   return (
     <main className="admin-login">
       <form className="block auth-form" onSubmit={submit}>
-        <h1>{a.title}</h1>
+        {brand?.logoUrl && <img className="admin-login-logo" src={brand.logoUrl} alt={a.settingsLogoAlt(brand.name)} />}
+        <h1>{brand ? `${brand.name} ${a.title}` : a.title}</h1>
         {error && <p className="error" role="alert">{error}</p>}
         <label className="field"><span>{a.email}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></label>
         <label className="field"><span>{a.password}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></label>

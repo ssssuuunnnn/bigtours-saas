@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Put, Query, Req, Res } from '@nestjs/common';
-import { exportRequest, exportTemplateInput, assignRoomRequest, createRoomRequest, roomSessionRequest, updateRoomRequest, emailResendRequest, emailTemplateInput, notifyEmailsRequest, agencyLoginRequest, contactInput, contactStatusRequest, accountEmailRequest, agencyModifyRequest, companyInput, contactsRequest, createEventRequest, employeeInput, feeAdjustRequest, paymentStatusRequest, reassignRequest, rosterCopyRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
+import { agencyNameRequest, isValidPassword, staffInput, staffRoleRequest, exportRequest, exportTemplateInput, assignRoomRequest, createRoomRequest, roomSessionRequest, updateRoomRequest, emailResendRequest, emailTemplateInput, notifyEmailsRequest, agencyLoginRequest, contactInput, contactStatusRequest, accountEmailRequest, agencyModifyRequest, companyInput, contactsRequest, createEventRequest, employeeInput, feeAdjustRequest, paymentStatusRequest, reassignRequest, rosterCopyRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
 import type { Request, Response } from 'express';
 import type { ZodType } from 'zod';
 import { AgencyAdminService } from './agency-admin.service.ts';
@@ -9,6 +9,7 @@ import { EmailAdminService } from './email-admin.service.ts';
 import { RegistrationAdminService } from './registration-admin.service.ts';
 import { RoomService } from './rooms.service.ts';
 import { ContactService } from './contact.service.ts';
+import { StaffService } from './staff.service.ts';
 import { DataLogService, type DataLogQuery } from './data-log.service.ts';
 import { ExportService } from './export.service.ts';
 import { RosterService } from './roster.service.ts';
@@ -26,6 +27,7 @@ export class AgencyController {
     @Inject(RegistrationAdminService) private readonly regs: RegistrationAdminService,
     @Inject(EmailAdminService) private readonly emails: EmailAdminService,
     @Inject(RoomService) private readonly rooms: RoomService,
+    @Inject(StaffService) private readonly staff: StaffService,
     @Inject(ContactService) private readonly contactAccounts: ContactService,
     @Inject(DataLogService) private readonly dataLog: DataLogService,
     @Inject(ExportService) private readonly exports: ExportService,
@@ -102,6 +104,91 @@ export class AgencyController {
   @Get('data-log')
   async dataLogList(@Headers() h: RequestHeaders, @Query() query: DataLogQuery) {
     return this.dataLog.list(await this.allowed(h, 'viewSensitiveData'), query);
+  }
+
+  // ===== 人員管理 =====
+
+  private manager(h: RequestHeaders) {
+    return this.allowed(h, 'manageAgency');
+  }
+
+  @Get('staff')
+  async staffList(@Headers() h: RequestHeaders) {
+    return this.staff.list(await this.manager(h));
+  }
+
+  @Post('staff')
+  async createStaff(@Headers() h: RequestHeaders, @Body() body: unknown) {
+    return this.staff.create(await this.manager(h), parse(staffInput, body));
+  }
+
+  @Post('staff/:userId/link')
+  @HttpCode(204)
+  async staffLink(@Headers() h: RequestHeaders, @Param('userId') userId: string) {
+    const ctx = await this.manager(h);
+    await this.staff.sendLink({ agencyId: ctx.agencyId, userId, actorId: ctx.user.id });
+  }
+
+  @Patch('staff/:userId/role')
+  @HttpCode(204)
+  async staffRole(@Headers() h: RequestHeaders, @Param('userId') userId: string, @Body() body: unknown) {
+    await this.staff.changeRole(await this.manager(h), userId, parse(staffRoleRequest, body).role);
+  }
+
+  @Patch('staff/:userId/status')
+  @HttpCode(204)
+  async staffStatus(@Headers() h: RequestHeaders, @Param('userId') userId: string, @Body() body: unknown) {
+    await this.staff.setStatus(await this.manager(h), userId, parse(contactStatusRequest, body).status);
+  }
+
+  @Get('password-links/:token')
+  staffLookup(@Headers() h: RequestHeaders, @Param('token') token: string) {
+    return this.staff.lookupLink(requestHost(h), token);
+  }
+
+  @Post('password-links/:token')
+  @HttpCode(204)
+  async staffSetPassword(@Headers() h: RequestHeaders, @Param('token') token: string, @Body() body: { password?: unknown }) {
+    assertSameOrigin(h);
+    if (typeof body?.password !== 'string' || !isValidPassword(body.password)) throw new DomainError('INVALID_PASSWORD');
+    await this.staff.setPassword(requestHost(h), token, body.password);
+  }
+
+  // ===== 旅行社設定 =====
+
+  @Get('settings')
+  async settings(@Headers() h: RequestHeaders) {
+    await this.manager(h);
+    return this.staff.settings(requestHost(h));
+  }
+
+  @Put('settings/name')
+  @HttpCode(204)
+  async saveAgencyName(@Headers() h: RequestHeaders, @Body() body: unknown) {
+    await this.staff.updateName(await this.manager(h), parse(agencyNameRequest, body).name);
+  }
+
+  @Put('settings/logo')
+  async uploadLogo(@Headers() h: RequestHeaders, @Req() req: Request) {
+    return this.staff.uploadLogo(await this.manager(h), req.body);
+  }
+
+  @Delete('settings/logo')
+  @HttpCode(204)
+  async removeLogo(@Headers() h: RequestHeaders) {
+    await this.staff.removeLogo(await this.manager(h));
+  }
+
+  /** 登入頁在登入前就要顯示，不需登入。 */
+  @Get('branding')
+  branding(@Headers() h: RequestHeaders) {
+    return this.staff.branding(requestHost(h));
+  }
+
+  @Get('branding/logo')
+  async logo(@Headers() h: RequestHeaders, @Res() res: Response) {
+    const file = await this.staff.readLogo(requestHost(h));
+    sendImage(res, file.contentType, file.content);
   }
 
   // ===== 企業窗口帳號 =====
