@@ -52,6 +52,13 @@ export class AccountService {
     return { contentType: imageContentType(key), content: await this.storage.get(key) };
   }
 
+  async readCompanyLogo(host: string | undefined, slug: string) {
+    const agency = await this.access.findAgency(host);
+    const event = await this.access.findEvent(agency.id, slug);
+    if (!event.companyLogoKey) throw new DomainError('NOT_FOUND');
+    return { contentType: imageContentType(event.companyLogoKey), content: await this.storage.get(event.companyLogoKey) };
+  }
+
   /** 帳號不存在、密碼錯誤與鎖定中都回傳相同錯誤。 */
   async login(host: string | undefined, slug: string, employeeNo: string, password: string) {
     const agency = await this.access.findAgency(host);

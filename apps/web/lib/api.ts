@@ -52,6 +52,8 @@ export interface Registration {
 }
 export interface EventState {
   agency: { name: string };
+  company: { name: string; logoUrl: string | null };
+  serviceContacts: { name: string; phone: string; scope: string }[];
   event: { slug: string; name: string; hasTerms: boolean; paymentInstructions: string | null; images: EventFrontImages; themeColor: string; itinerary: { summary?: string; days?: { title: string; description: string }[] }; openState: 'not_open' | 'open' | 'closed'; registrationOpensAt: string | null; registrationClosesAt: string | null; allowDependentsOnly: boolean };
   employee: { name: string; subsidyAmount: number; dependentLimit: number };
   travelerTypes: TravelerType[];

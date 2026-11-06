@@ -2499,3 +2499,54 @@ describe('升級級距與用量提醒', () => {
     expect(count()).toBe(3);
   });
 });
+
+describe('企業名稱與 Logo', () => {
+  const http = () => request(app.getHttpServer());
+  const authed = (a: Ag, r: request.Test) => r.set('x-forwarded-host', a.host).set('cookie', a.cookie);
+  const companyOf = async (a: Ag) => (await q1(`SELECT company_id AS id FROM events WHERE id = $1`, [a.eventId])).id as string;
+  const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  const put = (a: Ag, id: string, type: string, body: Buffer) => authed(a, http().put(`/api/v1/agency/companies/${id}/logo`)).set('content-type', type).send(body);
+
+  it('可改名與上傳 PNG、SVG、移除；列表帶回網址；SVG 有沙箱標頭', async () => {
+    const a = await makeAgency('admin');
+    const id = await companyOf(a);
+    await authed(a, http().patch(`/api/v1/agency/companies/${id}`)).send({ name: '新名稱' }).expect(204);
+    await put(a, id, 'image/png', PNG).expect(204);
+    let row = (await authed(a, http().get('/api/v1/agency/companies')).expect(200)).body.find((c: any) => c.id === id);
+    expect(row.name).toBe('新名稱');
+    expect(row.logoUrl).toContain(`/companies/${id}/logo`);
+
+    await put(a, id, 'image/svg+xml', Buffer.from('<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>')).expect(204);
+    const svg = await authed(a, http().get(`/api/v1/agency/companies/${id}/logo`)).expect(200);
+    expect(svg.headers['content-type']).toContain('image/svg+xml');
+    expect(svg.headers['content-security-policy']).toContain('sandbox');
+
+    await authed(a, http().delete(`/api/v1/agency/companies/${id}/logo`)).expect(204);
+    row = (await authed(a, http().get('/api/v1/agency/companies')).expect(200)).body.find((c: any) => c.id === id);
+    expect(row.logoUrl).toBeNull();
+  });
+
+  it.each([
+    ['腳本', '<svg><script>alert(1)</script></svg>'],
+    ['事件屬性', '<svg onload="alert(1)"></svg>'],
+    ['外部連結', '<svg><image href="https://evil.example/x.png"/></svg>'],
+    ['不是 SVG', '<html><svg></svg></html>'],
+  ])('拒絕有問題的 SVG：%s', async (_n, body) => {
+    const a = await makeAgency('admin');
+    expect((await put(a, await companyOf(a), 'image/svg+xml', Buffer.from(body)).expect(422)).body.code).toBe('INVALID_FILE');
+  });
+
+  it('JPG 不接受；超過 2 MB 不接受；權限與隔離', async () => {
+    const a = await makeAgency('admin');
+    const id = await companyOf(a);
+    await put(a, id, 'image/jpeg', Buffer.from([0xff, 0xd8, 0xff, 0xe0])).expect(422);
+    const big = Buffer.concat([PNG, Buffer.alloc(2 * 1024 * 1024 + 1)]);
+    expect((await put(a, id, 'image/png', big)).status).toBe(413);
+    const ops = await makeAgency('operations');
+    await put(ops, await companyOf(ops), 'image/png', PNG).expect(403);
+    const stranger = await makeAgency('admin');
+    await put(stranger, id, 'image/png', PNG).expect(404);
+    await authed(stranger, http().patch(`/api/v1/agency/companies/${id}`)).send({ name: 'x' }).expect(404);
+    await authed(stranger, http().get(`/api/v1/agency/companies/${id}/logo`)).expect(404);
+  });
+});

@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { publicImages, StorageService } from './storage.service.ts';
+import { publicCompanyLogo, publicImages, StorageService } from './storage.service.ts';
 import {
   calculateFees,
   maskValue,
@@ -101,6 +101,8 @@ export class RegistrationService {
       return {
         modificationSessionId: lastModification?.rows[0]?.session_id ?? null,
         agency: { name: ctx.agency.name },
+        company: { name: ctx.event.companyName, logoUrl: publicCompanyLogo(ctx.event.slug, ctx.event.companyLogoKey) },
+        serviceContacts: (await tx.query(`SELECT name, phone, scope FROM event_service_contacts WHERE event_id = $1 ORDER BY sort_order`, [ctx.event.id])).rows,
         event: {
           slug: ctx.event.slug,
           name: ctx.event.name,

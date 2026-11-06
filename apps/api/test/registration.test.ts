@@ -795,6 +795,19 @@ describe('修改報名', () => {
   });
 });
 
+describe('前台頁首與服務人員', () => {
+  it('活動資料帶企業名稱、Logo 網址與依順序排列的服務人員；Logo 不需登入可讀', async () => {
+    const f = await makeFixture();
+    const { token } = await makeEmployee(f, { subsidy: 0 });
+    const company = (await q1(`SELECT company_id AS id, id AS event FROM events WHERE agency_id = $1`, [f.agencyId]));
+    await admin.query(`UPDATE companies SET name = '永晟科技', logo_object_key = NULL WHERE id = $1`, [company.id]);
+    await admin.query(`INSERT INTO event_service_contacts (agency_id, event_id, name, phone, scope, sort_order) VALUES ($1, $2, '乙', '02-2', '', 2), ($1, $2, '甲', '02-1', '機票', 1)`, [f.agencyId, company.event]);
+    const state = (await call(f, token).state()).body;
+    expect(state.company).toEqual({ name: '永晟科技', logoUrl: null });
+    expect(state.serviceContacts).toEqual([{ name: '甲', phone: '02-1', scope: '機票' }, { name: '乙', phone: '02-2', scope: '' }]);
+  });
+});
+
 describe('報名相關通知信', () => {
   const sent = () => app.get(MailService).sent;
   const until = async (fn: () => boolean) => { for (let i = 0; i < 100; i++) { if (fn()) return; await new Promise((r) => setTimeout(r, 30)); } throw new Error('等待逾時'); };

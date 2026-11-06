@@ -6,7 +6,7 @@ import { AccessService } from './access.service.ts';
 import { DatabaseService, type Tx } from './database.service.ts';
 import { EncryptionService } from './encryption.service.ts';
 import { DomainError } from './errors.ts';
-import { agencyImages, imageContentType, imageExtension, isImageKind, StorageService, type ImageKind } from './storage.service.ts';
+import { agencyImages, companyLogoExtension, imageContentType, imageExtension, isImageKind, StorageService, type ImageKind } from './storage.service.ts';
 
 const SESSION_HOURS = 12;
 const MAX_FAILED_LOGINS = 5;
@@ -215,17 +215,63 @@ export class AgencyAdminService {
   listCompanies(ctx: AgencyUserContext) {
     return this.db.withTenant(ctx.agencyId, async (tx) => {
       const { rows } = await tx.query(
-        `SELECT c.id, c.name, (SELECT count(*)::int FROM events e WHERE e.company_id = c.id AND e.status <> 'archived') AS event_count
+        `SELECT c.id, c.name, c.logo_object_key, (SELECT count(*)::int FROM events e WHERE e.company_id = c.id AND e.status <> 'archived') AS event_count
            FROM companies c WHERE c.status = 'active' ORDER BY c.created_at`,
       );
-      return rows.map((r) => ({ id: r.id, name: r.name, eventCount: r.event_count }));
+      return rows.map((r) => ({ id: r.id, name: r.name, eventCount: r.event_count, logoUrl: this.companyLogoUrl(r.id, r.logo_object_key) }));
     });
   }
 
   createCompany(ctx: AgencyUserContext, name: string) {
     return this.db.withTenant(ctx.agencyId, async (tx) => {
       const { rows } = await tx.query(`INSERT INTO companies (agency_id, name) VALUES ($1, $2) RETURNING id, name`, [ctx.agencyId, name]);
-      return { id: rows[0].id, name: rows[0].name, eventCount: 0 };
+      return { id: rows[0].id, name: rows[0].name, eventCount: 0, logoUrl: null };
+    });
+  }
+
+  private companyLogoUrl(id: string, key: string | null) {
+    return key ? `/api/v1/agency/companies/${id}/logo?v=${key.split('/').pop()!.split('.')[0]}` : null;
+  }
+
+  /** 名稱與 Logo 改了，這間企業所有活動的前台頁首都會跟著變。 */
+  private audit(tx: Tx, ctx: AgencyUserContext, action: string, id: string) {
+    return tx.query(`INSERT INTO audit_logs (agency_id, actor_type, actor_id, action, target_type, target_id) VALUES ($1, 'agency_user', $2, $3, 'company', $4)`, [ctx.agencyId, ctx.user.id, action, id]);
+  }
+
+  renameCompany(ctx: AgencyUserContext, id: string, name: string) {
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      const { rowCount } = await tx.query(`UPDATE companies SET name = $2 WHERE id = $1 AND status = 'active'`, [id, name]);
+      if (!rowCount) throw new DomainError('NOT_FOUND');
+      await this.audit(tx, ctx, 'company.renamed', id);
+    });
+  }
+
+  async uploadCompanyLogo(ctx: AgencyUserContext, id: string, content: unknown) {
+    const ext = Buffer.isBuffer(content) ? companyLogoExtension(content) : null;
+    if (!ext) throw new DomainError('INVALID_FILE');
+    const key = `${ctx.agencyId}/company-${id}-${randomBytes(6).toString('hex')}.${ext}`;
+    await this.storage.put(key, content as Buffer);
+    await this.setCompanyLogo(ctx, id, key);
+  }
+
+  removeCompanyLogo(ctx: AgencyUserContext, id: string) {
+    return this.setCompanyLogo(ctx, id, null);
+  }
+
+  private setCompanyLogo(ctx: AgencyUserContext, id: string, key: string | null) {
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      const { rowCount } = await tx.query(`UPDATE companies SET logo_object_key = $2 WHERE id = $1 AND status = 'active'`, [id, key]);
+      if (!rowCount) throw new DomainError('NOT_FOUND');
+      await this.audit(tx, ctx, 'company.logo_changed', id);
+    });
+  }
+
+  readCompanyLogo(ctx: AgencyUserContext, id: string) {
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      const { rows } = await tx.query(`SELECT logo_object_key FROM companies WHERE id = $1`, [id]);
+      const key = rows[0]?.logo_object_key;
+      if (!key) throw new DomainError('NOT_FOUND');
+      return { contentType: imageContentType(key), content: await this.storage.get(key) };
     });
   }
 

@@ -230,6 +230,30 @@ export class AgencyController {
     return this.admin.createCompany(await this.configurer(h), parse(companyInput, body).name);
   }
 
+  @Patch('companies/:companyId')
+  @HttpCode(204)
+  async renameCompany(@Headers() h: RequestHeaders, @Param('companyId') id: string, @Body() body: unknown) {
+    await this.admin.renameCompany(await this.configurer(h), id, parse(companyInput, body).name);
+  }
+
+  @Put('companies/:companyId/logo')
+  @HttpCode(204)
+  async uploadCompanyLogo(@Headers() h: RequestHeaders, @Param('companyId') id: string, @Req() req: Request) {
+    await this.admin.uploadCompanyLogo(await this.configurer(h), id, req.body);
+  }
+
+  @Delete('companies/:companyId/logo')
+  @HttpCode(204)
+  async removeCompanyLogo(@Headers() h: RequestHeaders, @Param('companyId') id: string) {
+    await this.admin.removeCompanyLogo(await this.configurer(h), id);
+  }
+
+  @Get('companies/:companyId/logo')
+  async companyLogo(@Headers() h: RequestHeaders, @Param('companyId') id: string, @Res() res: Response) {
+    const file = await this.admin.readCompanyLogo(await this.configurer(h), id);
+    sendImage(res, file.contentType, file.content, 'private, no-store');
+  }
+
   @Post('events')
   async createEvent(@Headers() h: RequestHeaders, @Body() body: unknown) {
     return this.admin.createEvent(await this.configurer(h), parse(createEventRequest, body));

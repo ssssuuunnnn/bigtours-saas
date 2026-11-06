@@ -9,7 +9,7 @@ export type ImageKind = (typeof IMAGE_KINDS)[number];
 export type EventImages = Record<ImageKind, string | null>;
 export const isImageKind = (kind: string): kind is ImageKind => (IMAGE_KINDS as readonly string[]).includes(kind);
 
-const IMAGE_TYPES: Record<string, string> = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+const IMAGE_TYPES: Record<string, string> = { svg: 'image/svg+xml', jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
 export const imageContentType = (key: string) => IMAGE_TYPES[key.split('.').pop()!] ?? 'application/octet-stream';
 
 /** 依檔案內容判斷格式，不相信瀏覽器送來的類型；不是支援的格式回傳 null。 */
@@ -20,9 +20,26 @@ export function imageExtension(c: Buffer): string | null {
   return null;
 }
 
+/**
+ * 企業 Logo 只收 PNG 與 SVG。SVG 能夾帶程式，含腳本或事件屬性的一律不收；
+ * 送出時另外加上沙箱標頭（見 sendImage）。
+ */
+export function companyLogoExtension(c: Buffer): string | null {
+  if (imageExtension(c) === 'png') return 'png';
+  const head = c.subarray(0, 2048).toString('utf8').replace(/^\uFEFF/, '').trimStart();
+  if (!/^(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*(<!DOCTYPE[^>]*>\s*)?<svg[\s>]/i.test(head)) return null;
+  const text = c.toString('utf8');
+  if (/<script|<foreignObject|<!ENTITY|\son[a-z]+\s*=|javascript:|(?:href|src)\s*=\s*["']\s*(?:https?:|\/\/|data:text)/i.test(text)) return null;
+  return 'svg';
+}
+
 const version = (key: string) => key.split('/').pop()!.split('.')[0]!;
 
 /** 員工前台用的圖片網址；首頁圖片沒上傳時沿用登入頁背景。 */
+export function publicCompanyLogo(slug: string, key: string | null) {
+  return key ? `/api/v1/public/events/${slug}/company-logo?v=${version(key)}` : null;
+}
+
 export function publicImages(slug: string, images: EventImages) {
   const url = (kind: ImageKind, key: string | null) => (key ? `/api/v1/public/events/${slug}/images/${kind}?v=${version(key)}` : null);
   return {
