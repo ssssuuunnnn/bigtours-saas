@@ -6,6 +6,7 @@ import pg from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.ts';
+import { MailService } from '../src/mail.service.ts';
 import { RegistrationService } from '../src/registration.service.ts';
 
 let app: INestApplication;
@@ -791,5 +792,42 @@ describe('修改報名', () => {
     await api.modifyHold({ sessionId: f.sessionFull, travelers: edit.map(pick) });
     await api.modify({ travelers: edit, roomPreferences: [] });
     expect(await hasRow()).toBe(0);
+  });
+});
+
+describe('報名相關通知信', () => {
+  const sent = () => app.get(MailService).sent;
+  const until = async (fn: () => boolean) => { for (let i = 0; i < 100; i++) { if (fn()) return; await new Promise((r) => setTimeout(r, 30)); } throw new Error('等待逾時'); };
+
+  it('報名成功寄給員工；申請取消與員工修改寄給旅行社通知信箱，信中沒有身分證', async () => {
+    const f = await makeFixture();
+    const tag = randomUUID().slice(0, 8);
+    const team = `team-${tag}@example.com`;
+    const me = `me-${tag}@example.com`;
+    await admin.query(`UPDATE events SET notify_emails = $2, payment_instructions = '請匯款到 123' WHERE agency_id = $1`, [f.agencyId, [team]]);
+    const { token, id } = await makeEmployee(f, { subsidy: 1000 });
+    await admin.query(`UPDATE event_employees SET email = $2 WHERE id = $1`, [id, me]);
+    const api = call(f, token);
+    const self = sel(f.selfType);
+    await api.hold({ sessionId: f.sessionId, travelers: [self] });
+    const reg = (await api.submit({ travelers: [details(self)], termsAccepted: true })).body;
+    await until(() => sent().some((m) => m.to === me));
+    const success = sent().find((m) => m.to === me)!;
+    expect(success.subject).toContain('報名成功');
+    expect(success.text).toContain('S1');
+    expect(success.text).toContain('$14,000');
+    expect(success.text).toContain('請匯款到 123');
+    expect(success.text).not.toContain('A123456789');
+
+    const t = reg.travelers[0];
+    const edit = [{ key: t.id, travelerTypeId: t.travelerTypeId, optionIds: [f.freeOption], name: '王', fieldValues: {}, requestedRoomNo: 1 }];
+    await api.modifyHold({ sessionId: f.sessionId, travelers: edit.map(({ key, travelerTypeId, optionIds }) => ({ key, travelerTypeId, optionIds })) });
+    expect((await api.modify({ travelers: edit, roomPreferences: [] })).status).toBe(200);
+    await until(() => sent().some((m) => m.to === team && m.subject.includes('修改')));
+    expect(sent().find((m) => m.to === team)!.text).toContain(`registration=${reg.id}`);
+
+    await api.cancel();
+    await until(() => sent().some((m) => m.to === team && m.subject.includes('取消申請')));
+    expect(sent().find((m) => m.to === team && m.subject.includes('取消申請'))!.text).toContain('S1');
   });
 });

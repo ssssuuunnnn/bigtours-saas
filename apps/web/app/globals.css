@@ -368,3 +368,24 @@ fieldset.admin-card { margin: 0; border: 0; min-width: 0; }
 .admin-modify-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 @media (prefers-color-scheme: dark) { .admin-diff-changed { background: #451a03; color: #fde68a; } .admin-diff-tag { color: #fbbf24; } }
 @media (max-width: 640px) { .admin-diff { grid-template-columns: minmax(0, 1fr); } }
+
+/* Email 通知 */
+.admin-reg-col { display: grid; gap: 16px; min-width: 0; }
+.admin-email-grid { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 16px; align-items: start; }
+.admin-email-list { display: grid; gap: 2px; padding: 6px; background: var(--paper); border-radius: 4px; }
+.admin-email-list button { display: flex; justify-content: space-between; gap: 8px; align-items: center; width: 100%; min-height: 40px; padding: 6px 10px; border: 0; border-radius: 4px; background: transparent; color: inherit; font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+.admin-email-list button:hover { background: var(--line); }
+.admin-email-list button[aria-current='true'] { background: color-mix(in srgb, var(--brand) 14%, transparent); font-weight: 700; }
+.admin-email-list small { flex: none; color: var(--ink-soft); font-weight: 400; }
+.admin-email-editor { display: grid; gap: 12px; padding: 16px; background: var(--paper); border-radius: 4px; }
+.admin-email-editor input, .admin-email-editor textarea, .admin-card textarea { width: 100%; font: inherit; }
+.admin-email-editor textarea { min-height: 260px; line-height: 1.6; }
+.admin-email-tokens { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.admin-email-tokens code { padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px; font-size: 13px; }
+.admin-email-actions { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: center; }
+.admin-email-actions > div { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.admin-failure { display: grid; gap: 6px; padding: 10px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.admin-failure-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.admin-failure-fix { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.admin-failure-fix input { flex: 1 1 220px; min-width: 0; font: inherit; }
+@media (max-width: 900px) { .admin-email-grid { grid-template-columns: minmax(0, 1fr); } }
