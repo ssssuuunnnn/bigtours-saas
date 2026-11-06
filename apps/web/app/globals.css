@@ -423,3 +423,7 @@ fieldset.admin-card { margin: 0; border: 0; min-width: 0; }
 .admin-export-job:first-of-type { border-top: 0; }
 @media (max-width: 900px) { .admin-export-grid { grid-template-columns: minmax(0, 1fr); } }
 .admin-export-job a { color: var(--brand-text); }
+
+/* 個資紀錄 */
+.admin-log-filters { display: flex; flex-wrap: wrap; gap: 12px; }
+.admin-log-filters .field { flex: 1 1 160px; }

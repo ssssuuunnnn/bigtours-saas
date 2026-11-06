@@ -75,6 +75,11 @@ export interface ExportOverview {
   templates: ExportTemplate[];
   jobs: ExportJob[];
 }
+export interface DataLogRow {
+  id: string; at: string; action: string; actorName: string | null; eventName: string | null; employeeName: string | null; employeeNo: string | null;
+  travelerCount: number | null; name: string | null; sessionName: string | null; rows: number | null; fields: string[];
+}
+export interface DataLogPage { rows: DataLogRow[]; hasMore: boolean; events: { id: string; name: string }[]; actors: { id: string; name: string }[] }
 export interface EmailTemplateView {
   key: string; label: string; audience: 'employee' | 'agency'; placeholders: string[]; required: string[];
   defaultSubject: string; defaultBody: string; subject: string; body: string; senderName: string | null; customized: boolean;
@@ -217,6 +222,7 @@ export const adminApi = {
   createExport: (id: string, body: { name: string; scope: string; sessionId: string | null; columns: string[] }) => call<{ id: string }>('POST', `/events/${id}/exports`, body),
   saveExportTemplate: (id: string, body: { name: string; scope: string; columns: string[] }) => call<{ id: string }>('POST', `/events/${id}/export-templates`, body),
   deleteExportTemplate: (id: string, templateId: string) => call<void>('DELETE', `/events/${id}/export-templates/${templateId}`),
+  dataLog: (query: string) => call<DataLogPage>('GET', `/data-log?${query}`),
   emails: (id: string) => call<EmailOverview>('GET', `/events/${id}/emails`),
   saveNotifyEmails: (id: string, emails: string[]) => call<void>('PUT', `/events/${id}/emails/notify-emails`, { emails }),
   saveEmailTemplate: (id: string, key: string, body: EmailTemplateValues) => call<void>('PUT', `/events/${id}/emails/templates/${key}`, body),

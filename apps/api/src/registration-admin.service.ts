@@ -259,11 +259,15 @@ export class RegistrationAdminService {
     return this.db.withTenant(ctx.agencyId, async (tx) => {
       await this.lockRegistration(tx, eventId, registrationId);
       const { rows } = await tx.query(`SELECT id, sensitive_values_encrypted FROM travelers WHERE registration_id = $1`, [registrationId]);
+      const values: Record<string, Record<string, unknown>> = Object.fromEntries(rows.map((r) => [r.id, r.sensitive_values_encrypted ? this.encryption.decryptJson<Record<string, unknown>>(r.sensitive_values_encrypted) : {}]));
+      // 紀錄只寫看了哪些欄位，不寫內容。
+      const keys = [...new Set(Object.values(values).flatMap((v) => Object.keys(v)))];
+      const fields = await tx.query(`SELECT label FROM event_fields WHERE event_id = $1 AND field_key = ANY($2::text[]) ORDER BY sort_order`, [eventId, keys]);
       await tx.query(
-        `INSERT INTO audit_logs (agency_id, actor_type, actor_id, action, target_type, target_id) VALUES ($1, 'agency_user', $2, 'registration.sensitive_viewed', 'registration', $3)`,
-        [ctx.agencyId, ctx.user.id, registrationId],
+        `INSERT INTO audit_logs (agency_id, actor_type, actor_id, action, target_type, target_id, metadata) VALUES ($1, 'agency_user', $2, 'registration.sensitive_viewed', 'registration', $3, $4)`,
+        [ctx.agencyId, ctx.user.id, registrationId, JSON.stringify({ fields: fields.rows.map((f) => f.label) })],
       );
-      return Object.fromEntries(rows.map((r) => [r.id, r.sensitive_values_encrypted ? this.encryption.decryptJson<Record<string, unknown>>(r.sensitive_values_encrypted) : {}]));
+      return values;
     });
   }
 
