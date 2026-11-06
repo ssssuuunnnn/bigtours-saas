@@ -6,7 +6,7 @@ import { AccountService } from './account.service.ts';
 import type { AgencyUserContext } from './agency-admin.service.ts';
 import { DatabaseService, type Tx } from './database.service.ts';
 import { DomainError } from './errors.ts';
-import { MailService } from './mail.service.ts';
+import { NotificationService } from './notification.service.ts';
 
 const PAGE_SIZE = 50;
 const MAX_IMPORT_ROWS = 5000;
@@ -151,7 +151,7 @@ export class RosterService {
   constructor(
     @Inject(DatabaseService) private readonly db: DatabaseService,
     @Inject(AccountService) private readonly accounts: AccountService,
-    @Inject(MailService) private readonly mail: MailService,
+    @Inject(NotificationService) private readonly notifications: NotificationService,
   ) {}
 
   private async assertEvent(tx: Tx, eventId: string, forUpdate = false) {
@@ -399,7 +399,7 @@ export class RosterService {
     const { token, expiresAt } = await this.accounts.issuePasswordLink(ctx.agencyId, employeeId, { type: 'agency_user', id: ctx.user.id }, 'manual');
     const notified = r.employee.email !== null;
     if (notified) {
-      void this.deliver(ctx.agencyId, eventId, r.event, { id: employeeId, name: r.employee.name, email: r.employee.email }, 'link_notice', null);
+      void this.notifications.deliver(ctx.agencyId, eventId, r.event, { id: employeeId, name: r.employee.name, email: r.employee.email }, { key: 'link_notice' });
     }
     return { token, slug: r.event.slug as string, expiresAt, notified, issuedBy: ctx.user.name };
   }
@@ -437,67 +437,13 @@ export class RosterService {
       for (let r = queue.shift(); r; r = queue.shift()) {
         try {
           const { token } = await this.accounts.issuePasswordLink(ctx.agencyId, r.id, { type: 'agency_user', id: ctx.user.id }, 'email');
-          await this.deliver(ctx.agencyId, eventId, event, r, 'account', token, true);
+          await this.notifications.deliver(ctx.agencyId, eventId, event, r, { key: 'account', token }, true);
         } catch (err) {
           this.logger.error(`帳號信處理失敗：${(err as Error).message}`);
-          await this.markLatest(ctx.agencyId, r.id, 'failed', (err as Error).message);
+          await this.notifications.markLatest(ctx.agencyId, r.id, 'account', 'failed', (err as Error).message.slice(0, 500));
         }
       }
     };
     await Promise.all(Array.from({ length: SEND_CONCURRENCY }, worker));
   }
-
-  async deliver(agencyId: string, eventId: string, event: any, employee: { id: string; name: string; email: string }, template: 'account' | 'link_notice', token: string | null, existingRow = false) {
-    const mail = composeMail(event, employee, template, token);
-    if (!existingRow) {
-      await this.db.withTenant(agencyId, (tx) => tx.query(
-        `INSERT INTO email_messages (agency_id, event_id, event_employee_id, recipient_email, template_key, idempotency_key) VALUES ($1, $2, $3, $4, $5, $6)`,
-        [agencyId, eventId, employee.id, employee.email, template, randomUUID()],
-      ));
-    }
-    try {
-      await this.mail.send(mail);
-      await this.markLatest(agencyId, employee.id, 'sent', null, template);
-    } catch (err) {
-      this.logger.error(`寄信失敗：${(err as Error).message}`);
-      await this.markLatest(agencyId, employee.id, 'failed', (err as Error).message.slice(0, 500), template);
-    }
-  }
-
-  private markLatest(agencyId: string, employeeId: string, status: 'sent' | 'failed', error: string | null, template = 'account') {
-    return this.db.withTenant(agencyId, (tx) => tx.query(
-      `UPDATE email_messages SET status = $3, error = $4, sent_at = CASE WHEN $3 = 'sent' THEN now() END
-        WHERE id = (SELECT id FROM email_messages WHERE event_employee_id = $1 AND template_key = $2 ORDER BY created_at DESC LIMIT 1)`,
-      [employeeId, template, status, error],
-    ));
-  }
-}
-
-const escapeHtml = (v: string) => v.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
-
-function eventUrl(event: any) {
-  const base = process.env.WEB_BASE_URL ?? 'http://{agency}.lvh.me:3000';
-  return `${base.replace('{agency}', event.agency_code)}/${event.slug}`;
-}
-
-function composeMail(event: any, employee: { name: string; email: string }, template: 'account' | 'link_notice', token: string | null) {
-  const paragraphs = template === 'account'
-    ? [
-      `${employee.name} 您好：`,
-      `「${event.name}」已開放帳號設定，請點下方連結設定密碼，之後以員工編號與這組密碼登入報名網站。`,
-      `${eventUrl(event)}/set-password/${token}`,
-      '這個連結 14 天內有效，只能使用一次。如果您不需要報名，可以忽略這封信。',
-    ]
-    : [
-      `${employee.name} 您好：`,
-      `有人為您產生了「${event.name}」的設定密碼連結，連結會由承辦人員另外提供給您，這封信不含連結。`,
-      '如果您不知道這件事，請聯繫公司的活動窗口。',
-    ];
-  return {
-    to: employee.email,
-    fromName: event.agency_name as string,
-    subject: template === 'account' ? `【${event.name}】請設定報名網站密碼` : `【${event.name}】設定密碼連結已產生`,
-    text: paragraphs.join('\n\n'),
-    html: paragraphs.map((p) => (p.startsWith('http') ? `<p><a href="${escapeHtml(p)}">${escapeHtml(p)}</a></p>` : `<p>${escapeHtml(p)}</p>`)).join(''),
-  };
 }

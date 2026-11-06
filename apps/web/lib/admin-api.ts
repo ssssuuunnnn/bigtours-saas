@@ -21,6 +21,41 @@ export interface RosterPage {
 export interface ImportIssue { row: number; employeeNo: string; name: string; code: string; value?: string; firstRow?: number }
 export interface ImportPreview { newCount: number; updateCount: number; errorCount: number; duplicateCount: number; issues: ImportIssue[]; issuesTruncated: boolean }
 export interface PasswordLink { token: string; slug: string; expiresAt: string; notified: boolean; issuedBy: string }
+export interface EventOverview {
+  status: string; registrationOpensAt: string | null; registrationClosesAt: string | null; tierMax: number;
+  roster: number; registered: number; pendingCancels: number; unpaid: number; travelers: number;
+  sessions: { id: string; name: string; capacity: number; sold: number; held: number; remaining: number }[];
+}
+export interface RegistrationRow {
+  id: string; employeeName: string; employeeNo: string; sessionName: string; travelerCount: number;
+  totalAmount: number; subsidyAmount: number; selfPayAmount: number; paymentStatus: string; status: string; submittedAt: string;
+}
+export interface RegistrationPage { rows: RegistrationRow[]; total: number; page: number; pageSize: number; registrations: number; travelers: number; sessions: { id: string; name: string }[] }
+export type RevisionSummary =
+  | { action: 'created' | 'cancel_requested' | 'cancel_confirmed' | 'cancel_rejected' }
+  | { action: 'payment'; from: string; to: string }
+  | { action: 'fee_adjusted'; from: number; to: number; reason: string }
+  | { action: 'reassigned'; from: number; to: number; reason: string; changes: { traveler: string; from: string; to: string }[] };
+export interface RegistrationDetail {
+  id: string; employeeName: string; employeeNo: string; sessionName: string; status: string;
+  totalAmount: number; subsidyAmount: number; subsidyApplied: number; selfPayAmount: number; paymentStatus: string;
+  submittedAt: string; cancelRequestedAt: string | null; cancelledAt: string | null; canViewSensitive: boolean;
+  travelers: {
+    id: string; name: string; typeName: string; isEmployeeSelf: boolean; basePrice: number; requestedRoomNo: number | null; fee: number;
+    roomType: { name: string; surcharge: number } | null;
+    fields: { key: string; label: string; value: string; sensitive: boolean }[];
+    options: { name: string; price: number }[];
+    preferences: { rank: number; optionName: string }[];
+  }[];
+  coworkers: { requestedRoomNo: number; name: string }[];
+  revisions: { at: string; actorName: string | null; actorType: string; summary: RevisionSummary }[];
+}
+export interface ReassignSource { sessionId: string; sessionName: string; optionId: string; optionName: string; groupName: string; travelers: number }
+export interface ReassignPlan {
+  option: { id: string; name: string };
+  targets: { id: string; name: string; price: number; remaining: number | null }[];
+  travelers: { id: string; name: string; isEmployeeSelf: boolean; employeeName: string; employeeNo: string; currentPrice: number; preferences: string[]; excluded: string[]; suggested: string | null }[];
+}
 export interface ContactValues { id: string | null; name: string; phone: string; scope: string }
 export type PublishCheckKey = 'basic' | 'heroImage' | 'schedule' | 'sessions' | 'types' | 'options' | 'fields' | 'terms' | 'payment' | 'contacts' | 'roster';
 export interface PublishCheck { key: PublishCheckKey; state: 'ok' | 'warn' | 'block' | 'confirm'; data: Record<string, any> }
@@ -111,6 +146,20 @@ export const adminApi = {
   copyRoster: (id: string, fromEventId: string) => call<{ added: number; skipped: number }>('POST', `/events/${id}/employees/copy`, { fromEventId }),
   sendAccountEmails: (id: string, body: { employeeIds: string[] } | { allPending: true }) => call<{ queued: number; skipped: number }>('POST', `/events/${id}/employees/account-emails`, body),
   passwordLink: (id: string, eid: string) => call<PasswordLink>('POST', `/events/${id}/employees/${eid}/password-link`, {}),
+  overview: (id: string) => call<EventOverview>('GET', `/events/${id}/overview`),
+  registrations: (id: string, q: { search?: string; session?: string; payment?: string; status?: string; page?: number }) => {
+    const params = new URLSearchParams(Object.entries(q).flatMap(([k, v]) => (v ? [[k, String(v)]] : [])));
+    return call<RegistrationPage>('GET', `/events/${id}/registrations?${params}`);
+  },
+  registration: (id: string, rid: string) => call<RegistrationDetail>('GET', `/events/${id}/registrations/${rid}`),
+  revealSensitive: (id: string, rid: string) => call<Record<string, Record<string, unknown>>>('POST', `/events/${id}/registrations/${rid}/sensitive`, {}),
+  setPayment: (id: string, rid: string, status: string) => call<void>('PUT', `/events/${id}/registrations/${rid}/payment`, { status }),
+  adjustFee: (id: string, rid: string, totalAmount: number, reason: string) => call<void>('PUT', `/events/${id}/registrations/${rid}/fee`, { totalAmount, reason }),
+  confirmCancel: (id: string, rid: string) => call<void>('POST', `/events/${id}/registrations/${rid}/cancel/confirm`, {}),
+  rejectCancel: (id: string, rid: string) => call<void>('POST', `/events/${id}/registrations/${rid}/cancel/reject`, {}),
+  reassignSources: (id: string) => call<ReassignSource[]>('GET', `/events/${id}/reassign/sources`),
+  reassignPlan: (id: string, sessionId: string, optionId: string) => call<ReassignPlan>('GET', `/events/${id}/reassign/plan?sessionId=${sessionId}&optionId=${optionId}`),
+  reassign: (id: string, body: { sessionId: string; optionId: string; reason: string; assignments: { travelerId: string; toOptionId: string }[] }) => call<{ moved: number; registrations: number }>('POST', `/events/${id}/reassign`, body),
   contacts: (id: string) => call<ContactValues[]>('GET', `/events/${id}/contacts`),
   saveContacts: (id: string, contacts: ContactValues[]) => call<ContactValues[]>('PUT', `/events/${id}/contacts`, { contacts }),
   publishCheck: (id: string) => call<{ status: string; checks: PublishCheck[] }>('GET', `/events/${id}/publish-check`),

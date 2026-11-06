@@ -88,7 +88,7 @@ export const ERROR_CODES = [
   'UNAUTHENTICATED', 'INVALID_CREDENTIALS', 'PAGE_CLOSED', 'FORBIDDEN_ORIGIN', 'LINK_INVALID', 'INVALID_PASSWORD',
   'INVALID_INPUT', 'CAPACITY_BELOW_SOLD', 'TIER_LIMIT_EXCEEDED', 'SESSION_IN_USE', 'FIELD_LOCKED',
   'FORBIDDEN', 'QUOTA_EMPTY', 'SLUG_TAKEN', 'EVENT_NOT_DRAFT', 'EVENT_NOT_PUBLISHED', 'PAGE_MODE_MISMATCH',
-  'DUPLICATE_NAME', 'TRAVELER_TYPE_IN_USE', 'ROOM_TYPE_IN_USE', 'OPTION_IN_USE', 'QUOTA_IN_USE', 'ROOM_FULL',
+  'DUPLICATE_NAME', 'TRAVELER_TYPE_IN_USE', 'ROOM_TYPE_IN_USE', 'OPTION_IN_USE', 'QUOTA_IN_USE', 'PAYMENT_NOT_REQUIRED', 'REGISTRATION_CANCELLED', 'ROOM_FULL',
   'DUPLICATE_EMPLOYEE_NO', 'EMPLOYEE_NO_LOCKED', 'EMPLOYEE_HAS_REGISTRATION', 'CSV_BAD_HEADER', 'CSV_TOO_MANY_ROWS',
   'PUBLISH_BLOCKED', 'PUBLISH_REQUIREMENT', 'INVALID_FILE', 'FILE_TOO_LARGE',
 ] as const;
@@ -249,6 +249,24 @@ export const accountEmailRequest = z.union([
 ]);
 
 export const rosterCopyRequest = z.object({ fromEventId: z.string().uuid() });
+
+/** 已付、未付、已退款由旅行社手動標記；無需付款由費用決定。 */
+export const paymentStatusRequest = z.object({ status: z.enum(['unpaid', 'paid', 'refunded']) });
+
+/** 手動調整整筆費用要留下原因。 */
+export const feeAdjustRequest = z.object({
+  totalAmount: z.number().int().min(0).max(100_000_000),
+  reason: z.string().trim().min(1).max(200),
+});
+export type FeeAdjustInput = z.infer<typeof feeAdjustRequest>;
+
+export const reassignRequest = z.object({
+  sessionId: z.string().uuid(),
+  optionId: z.string().uuid(),
+  reason: z.string().trim().min(1).max(200),
+  assignments: z.array(z.object({ travelerId: z.string().uuid(), toOptionId: z.string().uuid() })).min(1).max(5000),
+});
+export type ReassignInput = z.infer<typeof reassignRequest>;
 
 export const orderRequest = z.object({ ids: z.array(z.string().uuid()).min(1).max(200) });
 
