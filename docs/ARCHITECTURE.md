@@ -81,4 +81,5 @@
 - [ ] 檔案儲存：目前只有磁碟實作（`StorageService`），只適用單一 API 主機。確定部署方式後改用 S3，或為 `STORAGE_DIR` 設定可備份的持久磁碟
 - [ ] 運算平台：建議 ECS 容器；替代方案為 Lambda
 - [ ] 區域：建議 AWS 台北區域（ap-east-2）；須以 AWS 官方清單確認 Fargate、SES 等服務，並請法務確認個資儲存位置與跨境傳輸
-- [ ] 平台網域：正式環境建議使用專屬網域，並設定 SPF、DKIM、DMARC
+- [x] 平台網域：`tours.bookdex.cc`，旅行社使用 `*.tours.bookdex.cc`（見 PRD 第 15 章）
+- [ ] 寄信網域設定 SPF、DKIM、DMARC
