@@ -24,6 +24,9 @@ import { NotificationService } from './notification.service.ts';
 import { RegistrationAdminService } from './registration-admin.service.ts';
 import { RosterService } from './roster.service.ts';
 import { StorageService } from './storage.service.ts';
+import { DemoService } from './demo.service.ts';
+import { DemoController, SiteController } from './site.controller.ts';
+import { SiteService } from './site.service.ts';
 
 const pdfBody = raw({ type: 'application/pdf', limit: '10mb' });
 const csvBody = raw({ type: 'text/csv', limit: '5mb' });
@@ -36,8 +39,8 @@ const parseFile = (parser: typeof pdfBody) => (req: Request, res: Response, next
 };
 
 @Module({
-  controllers: [PlatformController, ContactController, AccountController, AgencyController, PublicController],
-  providers: [PlatformService, StaffService, ContactService, DataLogService, ExportService, RoomService, EmailAdminService, DatabaseService, EncryptionService, AccessService, AccountService, AgencyAdminService, RegistrationService, StorageService, MailService, RosterService, NotificationService, RegistrationAdminService],
+  controllers: [SiteController, DemoController, PlatformController, ContactController, AccountController, AgencyController, PublicController],
+  providers: [SiteService, DemoService, PlatformService, StaffService, ContactService, DataLogService, ExportService, RoomService, EmailAdminService, DatabaseService, EncryptionService, AccessService, AccountService, AgencyAdminService, RegistrationService, StorageService, MailService, RosterService, NotificationService, RegistrationAdminService],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {

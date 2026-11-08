@@ -76,6 +76,15 @@
 | KMS | 本機開發金鑰 | 敏感欄位加密，僅限開發使用 |
 | 子網域 | `abc-travel.lvh.me` | 指回本機，用於測試多旅行社 |
 
+官網相關設定：
+
+| 環境變數 | 用途 |
+|---|---|
+| `TRIAL_NOTIFY_EMAIL` | 試用申請的通知信收件人；留空時只寄確認信給申請人 |
+| `DEMO_ENABLED` | `true` 時 API 啟動後建立試玩活動，並每 10 分鐘檢查是否該重建 |
+| `SITE_LINE_URL` | 官網的 LINE 官方帳號網址；留空時不顯示 LINE 按鈕 |
+| `SITE_SIBLING_URL` | 頁尾連到 Bookdex 預約簿的網址，預設 `https://bookdex.cc` |
+
 ## 7. 部署前待決
 
 - [ ] 檔案儲存：目前只有磁碟實作（`StorageService`），只適用單一 API 主機。確定部署方式後改用 S3，或為 `STORAGE_DIR` 設定可備份的持久磁碟

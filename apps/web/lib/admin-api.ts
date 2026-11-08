@@ -367,4 +367,22 @@ export const platformApi = {
   setStatus: (id: string, status: 'active' | 'suspended') => plat.call<void>('PATCH', `/agencies/${id}/status`, { status }),
   sendAdminLink: (id: string) => plat.call<void>('POST', `/agencies/${id}/admin-link`, {}),
   usage: () => plat.call<PlatformUsage>('GET', '/usage'),
+  trialApplications: (status: string) => plat.call<TrialApplication[]>('GET', `/trial-applications${status ? `?status=${status}` : ''}`),
+  setTrialStatus: (id: string, status: TrialApplication['status']) => plat.call<void>('PATCH', `/trial-applications/${id}`, { status }),
 };
+
+export interface TrialApplication {
+  id: string;
+  agencyName: string;
+  code: string;
+  contactName: string;
+  phone: string;
+  email: string;
+  expectedSize: string;
+  note: string | null;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: string;
+  handledAt: string | null;
+  handledByName: string | null;
+  codeTaken: boolean;
+}

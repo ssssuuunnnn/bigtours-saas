@@ -18,6 +18,11 @@ x-app: &app
     STORAGE_DIR: /data/storage
     SMTP_URL: smtp://mailpit:1025
     MAIL_FROM: no-reply@bigtours.example
+    # 官網試用申請的通知信收件人，以及是否啟用公開試玩（demo.平台網域）
+    TRIAL_NOTIFY_EMAIL: platform@bigtours.example
+    DEMO_ENABLED: "true"
+    # 官網的 LINE 官方帳號網址，留空時不顯示 LINE 按鈕
+    SITE_LINE_URL: ""
 
 services:
   postgres:

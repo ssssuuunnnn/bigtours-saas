@@ -100,6 +100,7 @@ export const ERROR_CODES = [
   'DUPLICATE_NAME', 'TRAVELER_TYPE_IN_USE', 'ROOM_TYPE_IN_USE', 'OPTION_IN_USE', 'QUOTA_IN_USE', 'TEMPLATE_INVALID', 'TIER_NOT_HIGHER', 'AGENCY_CODE_TAKEN', 'QUOTA_BELOW_USED', 'CONTRACT_EXPIRED', 'LAST_ADMIN', 'CANNOT_CHANGE_SELF', 'EMAIL_TAKEN', 'MAIL_FAILED', 'ROOM_LABEL_TAKEN', 'ROOMS_NOT_READY', 'NOT_MODIFIABLE', 'PAYMENT_NOT_REQUIRED', 'REGISTRATION_CANCELLED', 'ROOM_FULL',
   'DUPLICATE_EMPLOYEE_NO', 'EMPLOYEE_NO_LOCKED', 'EMPLOYEE_HAS_REGISTRATION', 'CSV_BAD_HEADER', 'CSV_TOO_MANY_ROWS',
   'PUBLISH_BLOCKED', 'PUBLISH_REQUIREMENT', 'INVALID_FILE', 'FILE_TOO_LARGE',
+  'TOO_MANY_REQUESTS', 'CODE_UNAVAILABLE', 'DEMO_UNAVAILABLE',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
@@ -281,7 +282,7 @@ export const orderRequest = z.object({ ids: z.array(z.string().uuid()).min(1).ma
 
 // ===== 活動設定 =====
 
-const eventSlug = z.string().trim().toLowerCase().min(2).max(50).regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/).refine((v) => !['admin', 'company', 'platform', 'api'].includes(v));
+const eventSlug = z.string().trim().toLowerCase().min(2).max(50).regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/).refine((v) => !['admin', 'company', 'platform', 'api', 'try'].includes(v));
 const eventName = z.string().trim().min(1).max(100);
 const optionalText = (max: number) => z.string().trim().max(max).nullable().transform((v) => v || null);
 const isoDateTime = z.string().datetime({ offset: true }).nullable();
@@ -395,7 +396,35 @@ export const exportTemplateInput = z.object({
 export type ExportTemplateInput = z.infer<typeof exportTemplateInput>;
 
 /** 這些代碼會和系統網址衝突，不能當旅行社代號。 */
-export const RESERVED_AGENCY_CODES = ['www', 'admin', 'api', 'platform', 'app', 'mail', 'static', 'assets', 'help', 'support', 'status'];
+export const RESERVED_AGENCY_CODES = ['www', 'admin', 'api', 'platform', 'app', 'mail', 'static', 'assets', 'help', 'support', 'status', 'demo'];
+
+/** 公開試玩報名使用的旅行社代號，網址為 demo.平台網域。 */
+export const DEMO_AGENCY_CODE = 'demo';
+export const AGENCY_CODE_PATTERN = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
+
+export type CodeCheck = { available: true } | { available: false; reason: 'format' | 'reserved' | 'taken' };
+export function agencyCodeFormat(code: string): CodeCheck {
+  if (!AGENCY_CODE_PATTERN.test(code)) return { available: false, reason: 'format' };
+  if (RESERVED_AGENCY_CODES.includes(code)) return { available: false, reason: 'reserved' };
+  return { available: true };
+}
+
+export const TRIAL_SIZES = ['100 人以下', '100～500 人', '500～1,000 人', '1,000 人以上'] as const;
+
+/** 官網的試用申請。website 是給機器人的陷阱欄位，真人看不到也不會填。 */
+export const trialApplicationInput = z.object({
+  agencyName: z.string().trim().min(1).max(100),
+  code: z.string().trim().toLowerCase().regex(AGENCY_CODE_PATTERN).refine((c) => !RESERVED_AGENCY_CODES.includes(c)),
+  contactName: z.string().trim().min(1).max(100),
+  phone: z.string().trim().min(6).max(30).regex(/^[0-9+\-()# ]+$/),
+  email: z.string().trim().toLowerCase().email().max(254),
+  expectedSize: z.enum(TRIAL_SIZES),
+  note: z.string().trim().max(1000).optional().default(''),
+  consent: z.literal(true),
+  website: z.string().max(200).optional().default(''),
+});
+export type TrialApplicationInput = z.infer<typeof trialApplicationInput>;
+export const trialStatusInput = z.object({ status: z.enum(['pending', 'approved', 'rejected']) });
 export const platformLoginRequest = z.object({ email: z.string().trim().min(1).max(200), password: z.string().min(1).max(128) });
 const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 export const contractInput = z.object({
@@ -406,7 +435,7 @@ export const contractInput = z.object({
 export type ContractInput = z.infer<typeof contractInput>;
 export const agencyCreateInput = z.object({
   name: z.string().trim().min(1).max(100),
-  code: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/).refine((c) => !RESERVED_AGENCY_CODES.includes(c)),
+  code: z.string().trim().regex(AGENCY_CODE_PATTERN).refine((c) => !RESERVED_AGENCY_CODES.includes(c)),
   adminName: z.string().trim().min(1).max(100),
   adminEmail: z.string().trim().toLowerCase().email().max(254),
   planNote: z.string().trim().min(1).max(200),

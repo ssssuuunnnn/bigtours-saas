@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { platformApi } from '../../../../lib/admin-api';
 import { p } from '../../../../messages/platform';
 import { platformError, usePlatformMe } from '../../platform-shell';
@@ -11,6 +11,14 @@ export default function PlatformCreateAgency() {
   const me = usePlatformMe();
   const router = useRouter();
   const [v, setV] = useState({ name: '', code: '', adminName: '', adminEmail: '', planNote: '', contractStartsOn: '', contractEndsOn: '' });
+  // 從試用申請開通時，帶入申請的資料與 30 天試用期
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    if (!q.get('code')) return;
+    const today = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
+    const end = new Date(Date.now() + (8 * 3600 + 29 * 86400) * 1000).toISOString().slice(0, 10);
+    setV({ name: q.get('name') ?? '', code: q.get('code') ?? '', adminName: q.get('adminName') ?? '', adminEmail: q.get('adminEmail') ?? '', planNote: p.trial.planNote, contractStartsOn: today, contractEndsOn: end });
+  }, []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const field = (key: keyof typeof v) => ({ value: v[key], onChange: (e: React.ChangeEvent<HTMLInputElement>) => setV({ ...v, [key]: e.target.value }) });
