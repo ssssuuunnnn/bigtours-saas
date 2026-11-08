@@ -1,0 +1,171 @@
+# 自動部署到 AWS Lightsail（見 deploy/lightsail/README.md「自動部署」）
+#
+# main 的 CI 通過後部署那個 commit（只部署 main 最新的）；也可以在 Actions 頁手動執行（Run workflow）。
+# 流程：建置映像檔推到 GHCR → 在 Lightsail 防火牆暫時加上這台 runner 的 IP（22 埠）
+#       → 執行 deploy/lightsail/deploy.sh → 只移除這次加上的 IP → 確認網站有回應。
+# 主機與 Bookdex 預約簿共用，防火牆只增減自己的 IP，不整份還原，避免兩邊同時部署時互相蓋掉。
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # 連續合併兩個 PR 時，兩次 CI 完成的先後不一定；不是 main 最新的 commit 就跳過，交給最新的那次部署
+  check:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.latest.outputs.deploy }}
+      sha: ${{ steps.latest.outputs.sha }}
+    steps:
+      - id: latest
+        name: 確認是 main 最新的 commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          tip=$(gh api "repos/${{ github.repository }}/commits/main" --jq .sha)
+          echo "main 最新：$tip，這次要部署：$CANDIDATE"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$tip" = "$CANDIDATE" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"; echo "sha=$tip" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::$CANDIDATE 不是 main 最新的 commit，跳過"
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.name.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+      - id: name
+        name: 映像檔名稱
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}:${{ needs.check.outputs.sha }}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ steps.name.outputs.image }}
+          build-args: |
+            PLATFORM_DOMAIN=${{ vars.PLATFORM_DOMAIN || 'tours.bookdex.cc' }}
+            GIT_SHA=${{ needs.check.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    environment:
+      name: production
+      url: https://${{ vars.PLATFORM_DOMAIN || 'tours.bookdex.cc' }}
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-2' }}
+      LIGHTSAIL_INSTANCE: ${{ vars.LIGHTSAIL_INSTANCE || 'gym-system' }}
+      HEALTHCHECK_URL: ${{ vars.HEALTHCHECK_URL || format('https://{0}/api/v1/health', vars.PLATFORM_DOMAIN || 'tours.bookdex.cc') }}
+    steps:
+      - name: 檢查設定
+        env:
+          AWS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_KEY_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          missing=""
+          [ -n "$AWS_KEY_ID" ] || missing="$missing AWS_ACCESS_KEY_ID"
+          [ -n "$AWS_KEY_SECRET" ] || missing="$missing AWS_SECRET_ACCESS_KEY"
+          [ -n "$HOST" ] || missing="$missing DEPLOY_HOST"
+          [ -n "$KEY" ] || missing="$missing DEPLOY_SSH_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::production 環境還沒設定密鑰：$missing（見 deploy/lightsail/README.md「自動部署」）"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          # 這個 AWS 帳號的 SCP 禁止 iam:*Provider*，無法用 GitHub OIDC，只能用 IAM 使用者金鑰
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: 暫時開放 SSH 給這台 runner
+        run: |
+          set -euo pipefail
+          ip=$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')
+          echo "RUNNER_CIDR=$ip/32" >> "$GITHUB_ENV"
+          sh deploy/lightsail/firewall.sh add "$ip/32"
+          echo "PORTS_CHANGED=1" >> "$GITHUB_ENV"
+          sleep 10
+
+      - name: 準備 SSH 金鑰
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ -n "$KNOWN_HOSTS" ]; then printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts; chmod 600 ~/.ssh/known_hosts; fi
+
+      - name: 部署
+        env:
+          BIGTOURS_DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          BIGTOURS_DEPLOY_KEY: /home/runner/.ssh/deploy_key
+          APP_IMAGE: ${{ needs.build.outputs.image }}
+          # 主機用這次工作的權杖下載私有映像檔，部署完立即登出；權杖在工作結束後失效
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ github.token }}
+        run: sh deploy/lightsail/deploy.sh
+
+      - name: 移除這次開放的 SSH
+        if: always() && env.PORTS_CHANGED == '1'
+        run: sh deploy/lightsail/firewall.sh remove "$RUNNER_CIDR"
+
+      - name: 確認網站有回應
+        run: |
+          for i in $(seq 1 20); do
+            if curl -fsS -o /dev/null "$HEALTHCHECK_URL"; then echo "OK：$HEALTHCHECK_URL"; exit 0; fi
+            sleep 6
+          done
+          echo "::error::部署後 2 分鐘內 $HEALTHCHECK_URL 沒有正常回應，請到主機看 docker compose logs"
+          exit 1
+
+      - name: 清除金鑰
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

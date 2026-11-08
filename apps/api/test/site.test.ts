@@ -62,6 +62,12 @@ afterAll(async () => {
   await admin?.end();
 });
 
+describe('健康檢查', () => {
+  it('回報服務正常，不需要網址或登入', async () => {
+    expect((await http().get('/api/v1/health').expect(200)).body.ok).toBe(true);
+  });
+});
+
 describe('試用申請', () => {
   it('存下申請，並寄確認信給申請人', async () => {
     const body = application();

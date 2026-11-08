@@ -87,8 +87,9 @@
 
 ## 7. 部署前待決
 
-- [ ] 檔案儲存：目前只有磁碟實作（`StorageService`），只適用單一 API 主機。確定部署方式後改用 S3，或為 `STORAGE_DIR` 設定可備份的持久磁碟
-- [ ] 運算平台：建議 ECS 容器；替代方案為 Lambda
-- [ ] 區域：建議 AWS 台北區域（ap-east-2）；須以 AWS 官方清單確認 Fargate、SES 等服務，並請法務確認個資儲存位置與跨境傳輸
+- [x] 檔案儲存：試營運使用單台主機的具名 volume，隨 Lightsail 每日快照備份；改成多台 API 時再換 S3
+- [x] 運算平台：試營運與 Bookdex 預約簿共用一台 AWS Lightsail（docker compose），見 [deploy/lightsail/README.md](../deploy/lightsail/README.md)；用量變大再換 ECS
+- [x] 區域：沿用現有主機的雪梨區域（ap-southeast-2）；個資儲存在境外，仍須請法務確認跨境傳輸
 - [x] 平台網域：`tours.bookdex.cc`，旅行社使用 `*.tours.bookdex.cc`（見 PRD 第 15 章）
-- [ ] 寄信網域設定 SPF、DKIM、DMARC
+- [ ] 寄信：選定 SMTP 服務（例如 Amazon SES）並為寄件網域設定 SPF、DKIM、DMARC
+- [ ] `*.tours.bookdex.cc` 的 Cloudflare 邊緣憑證（免費憑證不涵蓋第二層子網域）
