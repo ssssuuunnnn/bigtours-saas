@@ -76,7 +76,6 @@ jobs:
           push: true
           tags: ${{ steps.name.outputs.image }}
           build-args: |
-            PLATFORM_DOMAIN=${{ vars.PLATFORM_DOMAIN || 'tours.bookdex.cc' }}
             GIT_SHA=${{ needs.check.outputs.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -90,11 +89,11 @@ jobs:
       packages: read
     environment:
       name: production
-      url: https://${{ vars.PLATFORM_DOMAIN || 'tours.bookdex.cc' }}
+      url: https://${{ vars.PLATFORM_DOMAIN || 'bigtour.bookdex.cc' }}
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-2' }}
       LIGHTSAIL_INSTANCE: ${{ vars.LIGHTSAIL_INSTANCE || 'gym-system' }}
-      HEALTHCHECK_URL: ${{ vars.HEALTHCHECK_URL || format('https://{0}/api/v1/health', vars.PLATFORM_DOMAIN || 'tours.bookdex.cc') }}
+      HEALTHCHECK_URL: ${{ vars.HEALTHCHECK_URL || format('https://{0}/api/v1/health', vars.PLATFORM_DOMAIN || 'bigtour.bookdex.cc') }}
     steps:
       - name: 檢查設定
         env:

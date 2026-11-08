@@ -25,7 +25,7 @@ export function lastResetAt(now: Date): Date {
 }
 
 /**
- * 官網的公開試玩：demo.平台網域 是一間示範旅行社，每位訪客按「開始試玩」就得到一個新的員工身分，
+ * 官網的公開試玩：平台網域/demo 是一間示範旅行社，每位訪客按「開始試玩」就得到一個新的員工身分，
  * 不用帳號密碼。整間示範旅行社每天重建一次，所以試玩的資料最多留到隔天清晨。
  */
 @Injectable()
@@ -101,10 +101,11 @@ export class DemoService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** 每位訪客一個新的員工身分與登入狀態；只在 demo.平台網域 提供。 */
-  async start(host: string | undefined, ip: string | null) {
-    const agency = await this.access.findAgency(host);
-    if (agency.code !== DEMO_AGENCY_CODE) throw new DomainError('NOT_FOUND');
+  /** 每位訪客一個新的員工身分與登入狀態。 */
+  async start(ip: string | null) {
+    const agency = await this.access.findAgency(DEMO_AGENCY_CODE).catch(() => {
+      throw new DomainError('DEMO_UNAVAILABLE');
+    });
     this.limiter.hit(ip ?? 'unknown');
     const event = await this.access.findEvent(agency.id, DEMO_SLUG).catch(() => {
       throw new DomainError('DEMO_UNAVAILABLE');

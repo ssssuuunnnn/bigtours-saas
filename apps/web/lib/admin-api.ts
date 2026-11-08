@@ -1,4 +1,5 @@
 import type { EventNavKey } from '@bigtours/shared';
+import { agencyApi, currentAgency } from './agency-path';
 import { ApiError } from './api';
 
 export interface AdminEventSummary { id: string; slug: string; name: string; status: string; companyName: string; registrationOpensAt: string | null; registrationClosesAt: string | null; tierMax: number; travelerCount: number }
@@ -147,9 +148,10 @@ export interface AdminOptionGroup extends OptionGroupValues { id: string; option
 export interface FieldValues { label: string; type: string; choices: string[] | null; isRequired: boolean; isSensitive: boolean }
 export interface AdminField extends FieldValues { id: string }
 
-const clientFor = (prefix: string) => {
+const clientFor = (base: string | (() => string)) => {
+  const prefixOf = () => (typeof base === 'string' ? base : base());
   const call: Call = async <T,>(method: string, path: string, body?: unknown): Promise<T> => {
-  const res = await fetch(`${prefix}${path}`, {
+  const res = await fetch(`${prefixOf()}${path}`, {
     method,
     headers: body ? { 'content-type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
@@ -161,14 +163,14 @@ const clientFor = (prefix: string) => {
   };
   /** 檔案以原始內容送出，不走 JSON。 */
   const upload: Upload = async <T,>(path: string, file: File, contentType: string, method = 'PUT'): Promise<T> => {
-  const res = await fetch(`${prefix}${path}`, { method, headers: { 'content-type': contentType }, body: file });
+  const res = await fetch(`${prefixOf()}${path}`, { method, headers: { 'content-type': contentType }, body: file });
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new ApiError(res.status, data?.code ?? 'fallback', data?.detail);
   return data as T;
   };
   return { call, upload };
 };
-const { call, upload } = clientFor('/api/v1/agency');
+const { call, upload } = clientFor(() => agencyApi(currentAgency(), '/agency'));
 
 export type ImageKind = 'login' | 'login-mobile' | 'home';
 
@@ -320,7 +322,7 @@ export interface ContactRegistration {
   travelers: { id: string; name: string; typeName: string; roomTypeName: string | null; options: string[]; fee: number }[];
 }
 
-const contact = clientFor('/api/v1/company');
+const contact = clientFor(() => agencyApi(currentAgency(), '/company'));
 export const contactApi = {
   me: () => contact.call<ContactMe>('GET', '/me'),
   logout: () => contact.call<void>('DELETE', '/session'),
@@ -335,7 +337,7 @@ export const contactApi = {
   setPassword: (token: string, password: string) => contact.call<void>('POST', `/password-links/${encodeURIComponent(token)}`, { password }),
   ...rosterMethods(contact.call, contact.upload),
 };
-export const feeReportUrl = (id: string) => `/api/v1/company/events/${id}/fee-report`;
+export const feeReportUrl = (agency: string, id: string) => agencyApi(agency, `/company/events/${id}/fee-report`);
 
 // ===== 平台後台 =====
 

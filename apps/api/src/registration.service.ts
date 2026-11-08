@@ -101,7 +101,7 @@ export class RegistrationService {
       return {
         modificationSessionId: lastModification?.rows[0]?.session_id ?? null,
         agency: { name: ctx.agency.name },
-        company: { name: ctx.event.companyName, logoUrl: publicCompanyLogo(ctx.event.slug, ctx.event.companyLogoKey) },
+        company: { name: ctx.event.companyName, logoUrl: publicCompanyLogo(ctx.agency.code, ctx.event.slug, ctx.event.companyLogoKey) },
         serviceContacts: (await tx.query(`SELECT name, phone, scope FROM event_service_contacts WHERE event_id = $1 ORDER BY sort_order`, [ctx.event.id])).rows,
         event: {
           slug: ctx.event.slug,
@@ -114,7 +114,7 @@ export class RegistrationService {
           termsVersion: ctx.event.termsVersion,
           hasTerms: ctx.event.hasTerms,
           paymentInstructions: ctx.event.paymentInstructions,
-          images: publicImages(ctx.event.slug, ctx.event.images),
+          images: publicImages(ctx.agency.code, ctx.event.slug, ctx.event.images),
           isOpen: this.openState(ctx) === 'open',
           openState: this.openState(ctx),
         },

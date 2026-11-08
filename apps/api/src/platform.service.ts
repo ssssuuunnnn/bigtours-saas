@@ -33,12 +33,6 @@ export class PlatformService {
     @Inject(StaffService) private readonly staff: StaffService,
   ) {}
 
-  /** 只有 platform.平台網域 能使用，其他網址一律視為不存在。 */
-  assertHost(host: string | undefined) {
-    const hostname = (host ?? '').split(',')[0]!.trim().split(':')[0]!.toLowerCase();
-    if (hostname !== `platform.${process.env.PLATFORM_DOMAIN}`) throw new DomainError('NOT_FOUND');
-  }
-
   async login(email: string, password: string) {
     const { rows } = await this.db.pool.query(`SELECT id, password_hash, locked_until > now() AS locked FROM platform_users WHERE email = $1 AND status = 'active'`, [email]);
     const user = rows[0] as { id: string; password_hash: string; locked: boolean | null } | undefined;

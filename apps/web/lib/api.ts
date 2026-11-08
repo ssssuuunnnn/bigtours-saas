@@ -1,3 +1,5 @@
+import { agencyApi } from './agency-path';
+
 export class ApiError extends Error {
   constructor(public status: number, public code: string, public detail: any) {
     super(code);
@@ -77,9 +79,9 @@ export interface PasswordLink {
   employee: { name: string };
 }
 
-export function createClient(slug: string) {
+export function createClient(agency: string, slug: string) {
   const call = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
-    const res = await fetch(`/api/v1/public/events/${encodeURIComponent(slug)}${path}`, {
+    const res = await fetch(agencyApi(agency, `/public/events/${encodeURIComponent(slug)}${path}`), {
       method,
       headers: body ? { 'content-type': 'application/json' } : {},
       body: body ? JSON.stringify(body) : undefined,

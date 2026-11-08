@@ -396,9 +396,17 @@ export const exportTemplateInput = z.object({
 export type ExportTemplateInput = z.infer<typeof exportTemplateInput>;
 
 /** 這些代碼會和系統網址衝突，不能當旅行社代號。 */
-export const RESERVED_AGENCY_CODES = ['www', 'admin', 'api', 'platform', 'app', 'mail', 'static', 'assets', 'help', 'support', 'status', 'demo'];
+/**
+ * 旅行社代號是網址路徑第一段（平台網域/{代號}/...），不能和平台本身的頁面撞名。
+ * 新增平台頁面（例如 /pricing）前，先確認沒有旅行社用了那個代號，再加進這裡。
+ */
+export const RESERVED_AGENCY_CODES = [
+  'www', 'admin', 'api', 'platform', 'app', 'mail', 'static', 'assets', 'help', 'support', 'status', 'demo',
+  'try', 'site', 'login', 'logout', 'signup', 'register', 'account', 'company', 'pricing', 'about', 'contact',
+  'privacy', 'terms', 'blog', 'docs', 'news', 'robots', 'sitemap', 'favicon', 'icon', 'bigtour', 'bookdex',
+];
 
-/** 公開試玩報名使用的旅行社代號，網址為 demo.平台網域。 */
+/** 公開試玩報名使用的旅行社代號，網址為 平台網域/demo/活動代號。 */
 export const DEMO_AGENCY_CODE = 'demo';
 export const AGENCY_CODE_PATTERN = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 

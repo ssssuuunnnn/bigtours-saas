@@ -19,7 +19,7 @@ export function TryDemo() {
       .then(async (res) => {
         const data = await res.json().catch(() => null);
         if (!res.ok) throw new Error(data?.code ?? 'fallback');
-        window.location.replace(`/${encodeURIComponent(data.slug)}`);
+        window.location.replace(`/${encodeURIComponent(data.agency)}/${encodeURIComponent(data.slug)}`);
       })
       .catch((e: Error) => setError(MESSAGES[e.message] ?? '無法開始試玩，請重新整理頁面。'));
   }, []);
