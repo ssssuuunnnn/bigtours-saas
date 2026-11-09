@@ -5,6 +5,7 @@ import { hashPassword } from '@bigtours/shared/crypto';
 import pg from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { configureApp } from '../src/agency-path.ts';
 import { AppModule } from '../src/app.module.ts';
 import { AGENCY_TABLES } from '../src/demo-event.ts';
 import { DEMO_SLUG, DemoService, lastResetAt } from '../src/demo.service.ts';
@@ -16,8 +17,7 @@ let mail: MailService;
 let demo: DemoService;
 
 const SITE = 'lvh.me';
-const DEMO = 'demo.lvh.me';
-const PLATFORM = 'platform.lvh.me';
+const DEMO_API = `/api/v1/a/demo/public/events/${DEMO_SLUG}`;
 const http = () => request(app.getHttpServer());
 const q1 = async (sql: string, params: unknown[] = []) => (await admin.query(sql, params)).rows[0];
 
@@ -44,14 +44,14 @@ const apply = (body: object, ip = nextIp(), host = SITE) =>
 async function platformCookie() {
   const email = `p-${randomUUID().slice(0, 8)}@example.com`;
   await admin.query(`INSERT INTO platform_users (email, password_hash, name) VALUES ($1, $2, '王平台')`, [email, await hashPassword('platform123')]);
-  const res = await http().post('/api/v1/platform/session').set('x-forwarded-host', PLATFORM).send({ email, password: 'platform123' }).expect(204);
+  const res = await http().post('/api/v1/platform/session').send({ email, password: 'platform123' }).expect(204);
   return (res.headers['set-cookie'] as unknown as string[])[0]!.split(';')[0]!;
 }
 
 beforeAll(async () => {
   admin = new pg.Client({ connectionString: process.env.DATABASE_ADMIN_URL });
   await admin.connect();
-  app = await NestFactory.create(AppModule, { logger: false });
+  app = configureApp(await NestFactory.create(AppModule, { logger: false }));
   await app.init();
   mail = app.get(MailService);
   demo = app.get(DemoService);
@@ -79,12 +79,6 @@ describe('試用申請', () => {
       const sent = mail.sent.slice(before).map((m) => m.to);
       expect(sent).toContain(body.email);
     }
-  });
-
-  it('只接受官網網址', async () => {
-    await apply(application(), nextIp(), 'abc.lvh.me').expect(404);
-    await apply(application(), nextIp(), PLATFORM).expect(404);
-    await apply(application(), nextIp(), 'www.lvh.me').expect(204);
   });
 
   it('欄位錯誤時回報欄位名稱；沒同意不能送出', async () => {
@@ -129,23 +123,22 @@ describe('試用申請', () => {
     await apply(application()).set('origin', 'http://evil.lvh.me').expect(403);
   });
 
-  it('平台後台可以查看與更新狀態；其他網址與未登入都不行', async () => {
+  it('平台後台可以查看與更新狀態；未登入不行', async () => {
     const body = application();
     await apply(body).expect(204);
     const cookie = await platformCookie();
-    const list = await http().get('/api/v1/platform/trial-applications?status=pending').set('x-forwarded-host', PLATFORM).set('cookie', cookie).expect(200);
+    const list = await http().get('/api/v1/platform/trial-applications?status=pending').set('cookie', cookie).expect(200);
     const row = list.body.find((a: { code: string }) => a.code === body.code);
     expect(row).toMatchObject({ agencyName: '晴天旅行社', status: 'pending', codeTaken: false });
-    await http().get('/api/v1/platform/trial-applications').set('x-forwarded-host', PLATFORM).expect(401);
-    await http().get('/api/v1/platform/trial-applications').set('x-forwarded-host', SITE).set('cookie', cookie).expect(404);
+    await http().get('/api/v1/platform/trial-applications').expect(401);
 
-    await http().patch(`/api/v1/platform/trial-applications/${row.id}`).set('x-forwarded-host', PLATFORM).set('cookie', cookie).send({ status: 'approved' }).expect(204);
+    await http().patch(`/api/v1/platform/trial-applications/${row.id}`).set('cookie', cookie).send({ status: 'approved' }).expect(204);
     const after = await q1(`SELECT status, handled_by, handled_at FROM trial_applications WHERE id = $1`, [row.id]);
     expect(after.status).toBe('approved');
     expect(after.handled_by).not.toBeNull();
     // 處理完成後，同一個網址可以再申請
     await apply(application({ code: body.code })).expect(204);
-    await http().patch(`/api/v1/platform/trial-applications/not-a-uuid`).set('x-forwarded-host', PLATFORM).set('cookie', cookie).send({ status: 'approved' }).expect(404);
+    await http().patch(`/api/v1/platform/trial-applications/not-a-uuid`).set('cookie', cookie).send({ status: 'approved' }).expect(404);
   });
 });
 
@@ -157,31 +150,29 @@ describe('公開試玩', () => {
 
   it('每位訪客取得新的員工身分，可以直接報名', async () => {
     await demo.ensureFresh();
-    const start = await http().post('/api/v1/public/demo/start').set('x-forwarded-host', DEMO).set('x-forwarded-for', nextIp()).expect(201);
-    expect(start.body).toEqual({ slug: DEMO_SLUG });
+    const start = await http().post('/api/v1/public/demo/start').set('x-forwarded-for', nextIp()).expect(201);
+    expect(start.body).toEqual({ agency: 'demo', slug: DEMO_SLUG });
     const cookie = (start.headers['set-cookie'] as unknown as string[])[0]!;
-    expect(cookie).toContain(`Path=/api/v1/public/events/${DEMO_SLUG}`);
+    expect(cookie).toContain(`Path=${DEMO_API}`);
     expect(cookie).toContain('HttpOnly');
 
-    const state = await http().get(`/api/v1/public/events/${DEMO_SLUG}`).set('x-forwarded-host', DEMO).set('cookie', cookie.split(';')[0]!).expect(200);
+    const state = await http().get(DEMO_API).set('cookie', cookie.split(';')[0]!).expect(200);
     expect(state.body.employee.name).toBe('試玩旅客');
 
-    const other = await http().post('/api/v1/public/demo/start').set('x-forwarded-host', DEMO).set('x-forwarded-for', nextIp()).expect(201);
+    const other = await http().post('/api/v1/public/demo/start').set('x-forwarded-for', nextIp()).expect(201);
     expect((other.headers['set-cookie'] as unknown as string[])[0]).not.toBe(cookie);
   });
 
-  it('只在 demo 網址提供；同一來源有次數上限', async () => {
+  it('同一來源有次數上限', async () => {
     await demo.ensureFresh();
-    await http().post('/api/v1/public/demo/start').set('x-forwarded-host', SITE).expect(404);
-    await http().post('/api/v1/public/demo/start').set('x-forwarded-host', 'demo-travel.lvh.me').expect(404);
     const ip = nextIp();
-    for (let i = 0; i < 10; i += 1) await http().post('/api/v1/public/demo/start').set('x-forwarded-host', DEMO).set('x-forwarded-for', ip).expect(201);
-    await http().post('/api/v1/public/demo/start').set('x-forwarded-host', DEMO).set('x-forwarded-for', ip).expect(429);
+    for (let i = 0; i < 10; i += 1) await http().post('/api/v1/public/demo/start').set('x-forwarded-for', ip).expect(201);
+    await http().post('/api/v1/public/demo/start').set('x-forwarded-for', ip).expect(429);
   });
 
   it('過了重設時間會整個重建，試玩資料清空；沒過就不動', async () => {
     await demo.ensureFresh();
-    await http().post('/api/v1/public/demo/start').set('x-forwarded-host', DEMO).set('x-forwarded-for', nextIp()).expect(201);
+    await http().post('/api/v1/public/demo/start').set('x-forwarded-for', nextIp()).expect(201);
     const before = await q1(`SELECT id FROM agencies WHERE code = 'demo'`);
     expect(await demo.ensureFresh()).toBe(false);
 

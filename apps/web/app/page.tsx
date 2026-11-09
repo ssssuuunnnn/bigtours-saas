@@ -7,7 +7,6 @@ const DESCRIPTION = '給旅行社的團體旅遊報名系統。員工登入就�
 
 export async function generateMetadata(): Promise<Metadata> {
   const site = await siteContext();
-  if (!site.isSite) return {};
   return {
     title: TITLE,
     description: DESCRIPTION,
@@ -19,15 +18,12 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function Home() {
   const site = await siteContext();
-  if (site.isSite) {
-    return (
-      <Landing
-        domain={site.domain}
-        demoUrl={`${site.proto}://demo.${site.domain}${site.port}/try`}
-        lineUrl={process.env.SITE_LINE_URL || null}
-        siblingUrl={process.env.SITE_SIBLING_URL || 'https://bookdex.cc'}
-      />
-    );
-  }
-  return <main className="center-note"><h1>請使用公司提供的報名網址</h1></main>;
+  return (
+    <Landing
+      domain={site.domain}
+      demoUrl="/try"
+      lineUrl={process.env.SITE_LINE_URL || null}
+      siblingUrl={process.env.SITE_SIBLING_URL || 'https://bookdex.cc'}
+    />
+  );
 }

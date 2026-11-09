@@ -3,7 +3,7 @@ import { accountEmailRequest, employeeInput, isValidPassword, rosterCopyRequest 
 import type { Request, Response } from 'express';
 import { ContactService, type ContactContext } from './contact.service.ts';
 import { DomainError } from './errors.ts';
-import { assertSameOrigin, CONTACT_COOKIE, contactCookieOptions, cookieValue, requestHost, sendXlsx, type RequestHeaders } from './http.ts';
+import { assertSameOrigin, CONTACT_COOKIE, contactCookieOptions, cookieValue, requestAgency, sendXlsx, type RequestHeaders } from './http.ts';
 import { parse } from './parse.ts';
 import { RosterService } from './roster.service.ts';
 
@@ -17,7 +17,7 @@ export class ContactController {
 
   private ctx(h: RequestHeaders): Promise<ContactContext> {
     assertSameOrigin(h);
-    return this.contacts.resolve(requestHost(h), cookieValue(h, CONTACT_COOKIE));
+    return this.contacts.resolve(requestAgency(h), cookieValue(h, CONTACT_COOKIE));
   }
 
   private async own(h: RequestHeaders, eventId: string) {
@@ -30,13 +30,13 @@ export class ContactController {
   @HttpCode(204)
   async logout(@Headers() h: RequestHeaders, @Res({ passthrough: true }) res: Response) {
     assertSameOrigin(h);
-    await this.contacts.logout(requestHost(h), cookieValue(h, CONTACT_COOKIE));
-    res.clearCookie(CONTACT_COOKIE, contactCookieOptions());
+    await this.contacts.logout(requestAgency(h), cookieValue(h, CONTACT_COOKIE));
+    res.clearCookie(CONTACT_COOKIE, contactCookieOptions(requestAgency(h)!));
   }
 
   @Get('password-links/:token')
   lookupLink(@Headers() h: RequestHeaders, @Param('token') token: string) {
-    return this.contacts.lookupLink(requestHost(h), token);
+    return this.contacts.lookupLink(requestAgency(h), token);
   }
 
   @Post('password-links/:token')
@@ -44,7 +44,7 @@ export class ContactController {
   async setPassword(@Headers() h: RequestHeaders, @Param('token') token: string, @Body() body: { password?: unknown }) {
     assertSameOrigin(h);
     if (typeof body?.password !== 'string' || !isValidPassword(body.password)) throw new DomainError('INVALID_PASSWORD');
-    await this.contacts.setPassword(requestHost(h), token, body.password);
+    await this.contacts.setPassword(requestAgency(h), token, body.password);
   }
 
   @Get('me')

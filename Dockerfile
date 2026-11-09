@@ -16,12 +16,10 @@ RUN pnpm install --frozen-lockfile
 
 COPY . .
 
-# next.config.ts 的轉址與 /api 轉發在建置時就固定下來，所以平台網域要在建置時給
-ARG PLATFORM_DOMAIN
-ENV PLATFORM_DOMAIN=${PLATFORM_DOMAIN}
+# next.config.ts 的 /api 轉發在建置時就固定下來；平台網域在執行時由 .env 提供
 ENV API_URL=http://api:4000
 ENV NODE_ENV=production
-RUN test -n "$PLATFORM_DOMAIN" && pnpm --filter @bigtours/web build
+RUN pnpm --filter @bigtours/web build
 
 # 上傳檔案的位置（具名 volume 第一次掛載時會沿用這個目錄的擁有者）
 RUN mkdir -p /data/storage && chown node:node /data/storage

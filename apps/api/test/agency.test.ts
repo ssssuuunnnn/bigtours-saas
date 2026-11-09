@@ -6,6 +6,7 @@ import { hashPassword, generateToken, hashToken } from '@bigtours/shared/crypto'
 import pg from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { configureApp } from '../src/agency-path.ts';
 import { AppModule } from '../src/app.module.ts';
 import { DatabaseService } from '../src/database.service.ts';
 import { EncryptionService } from '../src/encryption.service.ts';
@@ -38,14 +39,14 @@ async function makeAgency(role = 'event_operator') {
   const userId = (await q1(`SELECT id FROM agency_users WHERE agency_id = $1`, [agencyId])).id;
   await admin.query(`INSERT INTO agency_user_sessions (agency_id, agency_user_id, token_hash, expires_at) VALUES ($1, $2, $3, now() + interval '1 hour')`,
     [agencyId, userId, hashToken(process.env.TOKEN_HASH_KEY!, token)]);
-  return { agencyId, eventId, host: `${code}.lvh.me`, cookie: `bt_agency_session=${token}` };
+  return { agencyId, eventId, prefix: `/api/v1/a/${code}`, cookie: `bt_agency_session=${token}` };
 }
 type Ag = Awaited<ReturnType<typeof makeAgency>>;
 
 const api = (a: Ag) => {
   const http = request(app.getHttpServer());
-  const h = (r: request.Test) => r.set('x-forwarded-host', a.host).set('cookie', a.cookie);
-  const b = `/api/v1/agency/events/${a.eventId}`;
+  const h = (r: request.Test) => r.set('cookie', a.cookie);
+  const b = `${a.prefix}/agency/events/${a.eventId}`;
   return {
     get: (p: string) => h(http.get(`${b}${p}`)),
     post: (p: string, body: object) => h(http.post(`${b}${p}`)).send(body),
@@ -67,7 +68,7 @@ beforeAll(async () => {
   tierId = (await q1(`INSERT INTO pricing_tiers (min_travelers, max_travelers, price_amount) VALUES (1, 199, 500)
                       ON CONFLICT (min_travelers, max_travelers) DO UPDATE SET price_amount = EXCLUDED.price_amount RETURNING id`)).id;
   hash = await hashPassword(PASSWORD);
-  app = await NestFactory.create(AppModule, { logger: false });
+  app = configureApp(await NestFactory.create(AppModule, { logger: false }));
   await app.init();
   await app.listen(0);
 });
@@ -81,23 +82,23 @@ describe('旅行社登入', () => {
   it('登入後可用，登出後失效；Cookie 限定後台路徑', async () => {
     const a = await makeAgency();
     const http = () => request(app.getHttpServer());
-    const res = await http().post('/api/v1/agency/session').set('x-forwarded-host', a.host).send({ email: 'A@example.com', password: PASSWORD });
+    const res = await http().post(`${a.prefix}/agency/session`).send({ email: 'A@example.com', password: PASSWORD });
     expect(res.status).toBe(204);
     const header = (res.headers['set-cookie'] as unknown as string[])[0]!;
     expect(header).toContain('HttpOnly');
-    expect(header).toContain('Path=/api/v1/agency');
+    expect(header).toContain(`Path=${a.prefix}/agency`);
     const cookie = header.split(';')[0]!;
-    const me = await http().get('/api/v1/agency/me').set('x-forwarded-host', a.host).set('cookie', cookie);
+    const me = await http().get(`${a.prefix}/agency/me`).set('cookie', cookie);
     expect(me.status).toBe(200);
     expect(me.body.user.name).toBe('A');
-    await http().delete('/api/v1/agency/session').set('x-forwarded-host', a.host).set('cookie', cookie);
-    expect((await http().get('/api/v1/agency/me').set('x-forwarded-host', a.host).set('cookie', cookie)).status).toBe(401);
+    await http().delete(`${a.prefix}/agency/session`).set('cookie', cookie);
+    expect((await http().get(`${a.prefix}/agency/me`).set('cookie', cookie)).status).toBe(401);
   });
 
   it('密碼錯誤與帳號不存在回傳相同錯誤，連續失敗後鎖定', async () => {
     const a = await makeAgency();
     const login = (email: string, password: string) =>
-      request(app.getHttpServer()).post('/api/v1/agency/session').set('x-forwarded-host', a.host).send({ email, password });
+      request(app.getHttpServer()).post(`${a.prefix}/agency/session`).send({ email, password });
     expect((await login('none@example.com', PASSWORD)).body.code).toBe('INVALID_CREDENTIALS');
     for (let i = 0; i < 5; i += 1) expect((await login('a@example.com', 'wrong1234')).status).toBe(401);
     expect((await login('a@example.com', PASSWORD)).status).toBe(401);
@@ -106,17 +107,17 @@ describe('旅行社登入', () => {
   it('未登入不能存取；其他旅行社的登入狀態與活動都不能使用', async () => {
     const a = await makeAgency();
     const b = await makeAgency();
-    expect((await request(app.getHttpServer()).get(`/api/v1/agency/events/${a.eventId}/sessions`).set('x-forwarded-host', a.host)).status).toBe(401);
+    expect((await request(app.getHttpServer()).get(`${a.prefix}/agency/events/${a.eventId}/sessions`)).status).toBe(401);
     expect((await api({ ...a, cookie: b.cookie }).get('/sessions')).status).toBe(401);
     expect((await api({ ...b, eventId: a.eventId }).get('/sessions')).status).toBe(404);
     expect((await api({ ...b, eventId: a.eventId }).post('/sessions', session())).status).toBe(404);
-    const list = await request(app.getHttpServer()).get('/api/v1/agency/events').set('x-forwarded-host', b.host).set('cookie', b.cookie);
+    const list = await request(app.getHttpServer()).get(`${b.prefix}/agency/events`).set('cookie', b.cookie);
     expect(list.body.map((e: { id: string }) => e.id)).toEqual([b.eventId]);
   });
 
   it('員工的登入狀態不能進入後台', async () => {
     const a = await makeAgency();
-    const r = await request(app.getHttpServer()).get('/api/v1/agency/me').set('x-forwarded-host', a.host).set('cookie', a.cookie.replace('bt_agency_session', 'bt_session'));
+    const r = await request(app.getHttpServer()).get(`${a.prefix}/agency/me`).set('cookie', a.cookie.replace('bt_agency_session', 'bt_session'));
     expect(r.status).toBe(401);
   });
 });
@@ -134,7 +135,7 @@ describe('梯次設定', () => {
     const token = generateToken();
     await admin.query(`INSERT INTO employee_sessions (agency_id, event_employee_id, token_hash, expires_at) VALUES ($1, $2, $3, now() + interval '1 hour')`,
       [a.agencyId, emp, hashToken(process.env.TOKEN_HASH_KEY!, token)]);
-    const front = await request(app.getHttpServer()).get('/api/v1/public/events/evt').set('x-forwarded-host', a.host).set('cookie', `bt_session=${token}`);
+    const front = await request(app.getHttpServer()).get(`${a.prefix}/public/events/evt`).set('cookie', `bt_session=${token}`);
     expect(front.body.availability[0]).toMatchObject({ name: '快樂東京5日遊', outboundFlightNo: 'CX001', departureTime: '08:30' });
   });
 
@@ -257,8 +258,8 @@ describe('旅客資料欄位設定', () => {
 });
 
 describe('角色權限', () => {
-  const me = (a: Ag) => request(app.getHttpServer()).get('/api/v1/agency/me').set('x-forwarded-host', a.host).set('cookie', a.cookie);
-  const pin = (a: Ag, items: unknown) => request(app.getHttpServer()).put('/api/v1/agency/me/pinned-nav').set('x-forwarded-host', a.host).set('cookie', a.cookie).send({ items });
+  const me = (a: Ag) => request(app.getHttpServer()).get(`${a.prefix}/agency/me`).set('cookie', a.cookie);
+  const pin = (a: Ag, items: unknown) => request(app.getHttpServer()).put(`${a.prefix}/agency/me/pinned-nav`).set('cookie', a.cookie).send({ items });
 
   it('登入資訊回傳角色與釘選項目', async () => {
     const a = await makeAgency('admin');
@@ -285,14 +286,14 @@ describe('角色權限', () => {
 
   it('營運人員仍可看到活動資訊', async () => {
     const a = await makeAgency('operations');
-    const res = await request(app.getHttpServer()).get('/api/v1/agency/events').set('x-forwarded-host', a.host).set('cookie', a.cookie).expect(200);
+    const res = await request(app.getHttpServer()).get(`${a.prefix}/agency/events`).set('cookie', a.cookie).expect(200);
     expect(res.body).toHaveLength(1);
     await api(a).get('').expect(200);
   });
 
   it('沒有登入時回 401，不回 403', async () => {
     const a = await makeAgency('operations');
-    await request(app.getHttpServer()).get(`/api/v1/agency/events/${a.eventId}/sessions`).set('x-forwarded-host', a.host).expect(401);
+    await request(app.getHttpServer()).get(`${a.prefix}/agency/events/${a.eventId}/sessions`).expect(401);
   });
 
   it('釘選項目依順序保存，下次登入仍在', async () => {
@@ -317,9 +318,9 @@ describe('角色權限', () => {
 describe('活動設定', () => {
   const http = () => request(app.getHttpServer());
   const root = (a: Ag) => ({
-    get: (p: string) => http().get(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie),
-    post: (p: string, b: object) => http().post(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie).send(b),
-    del: (p: string) => http().delete(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie),
+    get: (p: string) => http().get(`${a.prefix}/agency${p}`).set('cookie', a.cookie),
+    post: (p: string, b: object) => http().post(`${a.prefix}/agency${p}`).set('cookie', a.cookie).send(b),
+    del: (p: string) => http().delete(`${a.prefix}/agency${p}`).set('cookie', a.cookie),
   });
   const grant = (a: Ag, n: number) => admin.query(`INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason) VALUES ($1, $2, $3, 'grant')`, [a.agencyId, tierId, n]);
   const remaining = async (a: Ag) => (await root(a).get('/quota').expect(200)).body.find((t: any) => t.id === tierId).remaining as number;
@@ -391,7 +392,7 @@ describe('活動設定', () => {
     const detail = (await api(a).get('').expect(200)).body;
     expect(detail).toMatchObject({ name: '花東三日遊', themeColor: '#1F3A8A', supportPhone: '0800-000-000', supportHours: null });
     expect(detail.days).toHaveLength(1);
-    const landing = await http().get('/api/v1/public/events/evt/landing').set('x-forwarded-host', a.host);
+    const landing = await http().get(`${a.prefix}/public/events/evt/landing`);
     expect(landing.body.event.themeColor).toBe('#1F3A8A');
   });
 
@@ -434,7 +435,7 @@ describe('活動設定', () => {
     expect((await api(a).get('')).body.pageState).toBe('open');
     await grant(a, 1);
     const { body } = await create(a, 'draft-1');
-    const res = await http().put(`/api/v1/agency/events/${body.id}/page`).set('x-forwarded-host', a.host).set('cookie', a.cookie).send({ open: true }).expect(409);
+    const res = await http().put(`${a.prefix}/agency/events/${body.id}/page`).set('cookie', a.cookie).send({ open: true }).expect(409);
     expect(res.body.code).toBe('EVENT_NOT_PUBLISHED');
   });
 
@@ -644,10 +645,10 @@ describe('旅客類型、房型與自選行程', () => {
 
 describe('付款說明、條款、服務人員與發布', () => {
   const PDF = Buffer.from('%PDF-1.4 test');
-  const root = (a: Ag) => ({ get: (p: string) => request(app.getHttpServer()).get(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie) });
+  const root = (a: Ag) => ({ get: (p: string) => request(app.getHttpServer()).get(`${a.prefix}/agency${p}`).set('cookie', a.cookie) });
   const upload = (a: Ag, content: Buffer, type = 'application/pdf', name = '條款.pdf') =>
-    request(app.getHttpServer()).put(`/api/v1/agency/events/${a.eventId}/terms`).query({ name })
-      .set('x-forwarded-host', a.host).set('cookie', a.cookie).set('content-type', type).send(content);
+    request(app.getHttpServer()).put(`${a.prefix}/agency/events/${a.eventId}/terms`).query({ name })
+      .set('cookie', a.cookie).set('content-type', type).send(content);
   const contact = (o: object = {}) => ({ id: null, name: '李冠廷', phone: '0912-000-111', scope: '報名與付款問題', ...o });
   const paymentBody = (o: object = {}) => ({ paymentInstructions: '請匯款', retentionDays: 180, ...o });
 
@@ -789,11 +790,11 @@ describe('前台圖片、行程 PDF 與複製活動', () => {
   const WEBP = Buffer.from('RIFF0000WEBPVP8 ');
   const PDF = Buffer.from('%PDF-1.4 itinerary');
   const binary = (req: request.Test) => req.buffer(true).parse((res, cb) => { const c: Buffer[] = []; res.on('data', (d) => c.push(d)); res.on('end', () => cb(null, Buffer.concat(c))); });
-  const put = (a: Ag, path: string, content: Buffer, type: string) => request(app.getHttpServer()).put(`/api/v1/agency/events/${a.eventId}${path}`)
-    .set('x-forwarded-host', a.host).set('cookie', a.cookie).set('content-type', type).send(content);
+  const put = (a: Ag, path: string, content: Buffer, type: string) => request(app.getHttpServer()).put(`${a.prefix}/agency/events/${a.eventId}${path}`)
+    .set('cookie', a.cookie).set('content-type', type).send(content);
   const grant = (a: Ag) => admin.query(`INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason) VALUES ($1, $2, 5, 'grant')`, [a.agencyId, tierId]);
-  const pub = (a: Ag, path: string) => request(app.getHttpServer()).get(`/api/v1/public/events/evt${path}`).set('x-forwarded-host', a.host);
-  const agencyGet = (a: Ag, path: string) => request(app.getHttpServer()).get(`/api/v1/agency${path}`).set('x-forwarded-host', a.host).set('cookie', a.cookie);
+  const pub = (a: Ag, path: string) => request(app.getHttpServer()).get(`${a.prefix}/public/events/evt${path}`);
+  const agencyGet = (a: Ag, path: string) => request(app.getHttpServer()).get(`${a.prefix}/agency${path}`).set('cookie', a.cookie);
   const session1 = async (a: Ag) => (await api(a).post('/sessions', session()).expect(201)).body.id as string;
   const option = async (a: Ag, name = '獨木舟') => {
     const g = (await api(a).post('/option-groups', { name: `${name}群組`, isRequired: false, maxSelect: 1, preferenceCount: 3 }).expect(201)).body.id as string;
@@ -814,7 +815,7 @@ describe('前台圖片、行程 PDF 與複製活動', () => {
 
     await put(a, '/images/login', PNG, 'image/png').expect(200);
     landing = (await pub(a, '/landing').expect(200)).body.event.images;
-    expect(landing.login).toMatch(/^\/api\/v1\/public\/events\/evt\/images\/login\?v=/);
+    expect(landing.login).toMatch(new RegExp(`^${a.prefix}/public/events/evt/images/login\\?v=`));
     expect(landing.home).toBe(landing.login);
     const img = await binary(pub(a, '/images/login')).expect(200);
     expect(img.headers['content-type']).toBe('image/png');
@@ -829,7 +830,7 @@ describe('前台圖片、行程 PDF 與複製活動', () => {
     expect((await pub(a, '/landing').expect(200)).body.event.images.login).not.toBe(landing.login);
 
     const detail = (await agencyGet(a, `/events/${a.eventId}`).expect(200)).body;
-    expect(detail.images.login).toContain(`/api/v1/agency/events/${a.eventId}/images/login`);
+    expect(detail.images.login).toContain(`${a.prefix}/agency/events/${a.eventId}/images/login`);
     expect((await binary(agencyGet(a, `/events/${a.eventId}/images/login`)).expect(200)).headers['cache-control']).toBe('private, no-store');
 
     await api(a).del('/images/home').expect(204);
@@ -924,7 +925,7 @@ describe('前台圖片、行程 PDF 與複製活動', () => {
     expect(taken.body.code).toBe('SLUG_TAKEN');
     const other = await makeAgency('admin');
     const otherCompany = (await q1(`SELECT company_id FROM events WHERE id = $1`, [other.eventId])).company_id;
-    await request(app.getHttpServer()).post(`/api/v1/agency/events/${a.eventId}/copy`).set('x-forwarded-host', other.host).set('cookie', other.cookie)
+    await request(app.getHttpServer()).post(`${other.prefix}/agency/events/${a.eventId}/copy`).set('cookie', other.cookie)
       .send({ companyId: otherCompany, name: 'X', slug: `steal-${Date.now()}`, pricingTierId: tierId }).expect(404);
     const ops = await makeAgency('operations');
     await api(ops).post('/copy', body('nope-1')).expect(403);
@@ -935,8 +936,8 @@ describe('前台圖片、行程 PDF 與複製活動', () => {
 
 describe('員工名單與帳號開通', () => {
   const emp = (o: object = {}) => ({ employeeNo: 'E001', name: '陳怡君', email: 'e001@example.com', department: '研發部', subsidyAmount: null, dependentLimit: null, ...o });
-  const csv = (a: Ag, path: string, content: string | Buffer) => request(app.getHttpServer()).post(`/api/v1/agency/events/${a.eventId}/employees/import${path}`)
-    .set('x-forwarded-host', a.host).set('cookie', a.cookie).set('content-type', 'text/csv').send(Buffer.from(content));
+  const csv = (a: Ag, path: string, content: string | Buffer) => request(app.getHttpServer()).post(`${a.prefix}/agency/events/${a.eventId}/employees/import${path}`)
+    .set('cookie', a.cookie).set('content-type', 'text/csv').send(Buffer.from(content));
   const list = async (a: Ag, query = '') => (await api(a).get(`/employees${query}`).expect(200)).body;
   const mail = () => app.get(MailService);
   const until = async (fn: () => Promise<boolean>) => { for (let i = 0; i < 100; i++) { if (await fn()) return; await new Promise((r) => setTimeout(r, 30)); } throw new Error('等待逾時'); };
@@ -1083,7 +1084,7 @@ describe('員工名單與帳號開通', () => {
     expect(mail().sent.filter((m) => m.to === addr('ok'))).toHaveLength(1);
 
     // 連結可用且設定後變已開通
-    await request(app.getHttpServer()).post('/api/v1/public/events/evt/password-links/set').set('x-forwarded-host', a.host).set('origin', `http://${a.host}`).send({ token, password: 'abcd1234' }).expect((r) => { if (r.status >= 300) throw new Error(`${r.status} ${JSON.stringify(r.body)}`); });
+    await request(app.getHttpServer()).post(`${a.prefix}/public/events/evt/password-links/set`).set('x-forwarded-host', 'lvh.me').set('origin', 'http://lvh.me').send({ token, password: 'abcd1234' }).expect((r) => { if (r.status >= 300) throw new Error(`${r.status} ${JSON.stringify(r.body)}`); });
     expect(await stateOf(a, 'E001')).toBe('activated');
     // 指定寄給已開通的員工（忘記密碼）仍然可以
     expect((await api(a).post('/employees/account-emails', { employeeIds: [ok] }).expect(202)).body.queued).toBe(1);
@@ -1136,7 +1137,7 @@ describe('員工名單與帳號開通', () => {
 describe('報名管理、取消與改派', () => {
   const mail = () => app.get(MailService);
   const until = async (fn: () => boolean) => { for (let i = 0; i < 100; i++) { if (fn()) return; await new Promise((r) => setTimeout(r, 30)); } throw new Error('等待逾時'); };
-  const get = (a: Ag, path: string) => request(app.getHttpServer()).get(`/api/v1/agency/events/${a.eventId}${path}`).set('x-forwarded-host', a.host).set('cookie', a.cookie);
+  const get = (a: Ag, path: string) => request(app.getHttpServer()).get(`${a.prefix}/agency/events/${a.eventId}${path}`).set('cookie', a.cookie);
   const ENC = () => app.get(EncryptionService);
 
   const setup = async (role = 'admin') => {
@@ -1197,7 +1198,7 @@ describe('報名管理、取消與改派', () => {
     expect((await get(c.a, `/registrations?search=${r1.no}`).expect(200)).body.rows.map((r: any) => r.id)).toEqual([r1.id]);
     expect((await get(c.a, `/registrations?session=${randomUUID()}`).expect(200)).body.total).toBe(0);
     const other = await makeAgency('admin');
-    await request(app.getHttpServer()).get(`/api/v1/agency/events/${c.a.eventId}/registrations/${r1.id}`).set('x-forwarded-host', other.host).set('cookie', other.cookie).expect(404);
+    await request(app.getHttpServer()).get(`${other.prefix}/agency/events/${c.a.eventId}/registrations/${r1.id}`).set('cookie', other.cookie).expect(404);
   });
 
   it('明細只顯示遮罩；完整個資限管理員且留下紀錄', async () => {
@@ -1416,7 +1417,7 @@ describe('報名管理、取消與改派', () => {
       await get(c.a, `/registrations/${r.id}/revisions/99`).expect(404);
 
       const other = await makeAgency('admin');
-      await request(app.getHttpServer()).put(`/api/v1/agency/events/${c.a.eventId}/registrations/${r.id}`).set('x-forwarded-host', other.host).set('cookie', other.cookie).send(edit(c, r, o.id)).expect(404);
+      await request(app.getHttpServer()).put(`${other.prefix}/agency/events/${c.a.eventId}/registrations/${r.id}`).set('cookie', other.cookie).send(edit(c, r, o.id)).expect(404);
 
       await admin.query(`UPDATE registrations SET status = 'cancelled' WHERE id = $1`, [r.id]);
       expect((await put(c, r.id, edit(c, r, o.id)).expect(409)).body.code).toBe('NOT_MODIFIABLE');
@@ -1430,7 +1431,7 @@ describe('報名管理、取消與改派', () => {
     const token = generateToken();
     await admin.query(`INSERT INTO employee_sessions (agency_id, event_employee_id, token_hash, expires_at) VALUES ($1, $2, $3, now() + interval '1 hour')`, [c.a.agencyId, r.employeeId, hashToken(process.env.TOKEN_HASH_KEY!, token)]);
     await admin.query(`UPDATE events SET page_is_open = true WHERE id = $1`, [c.a.eventId]);
-    await request(app.getHttpServer()).post('/api/v1/public/events/evt/registrations/current/cancel-request').set('x-forwarded-host', c.a.host).set('cookie', `bt_session=${token}`).expect(200);
+    await request(app.getHttpServer()).post(`${c.a.prefix}/public/events/evt/registrations/current/cancel-request`).set('cookie', `bt_session=${token}`).expect(200);
     const d = (await get(c.a, `/registrations/${r.id}`).expect(200)).body;
     expect(d.status).toBe('cancel_requested');
     expect(d.revisions[0]).toMatchObject({ actorType: 'employee', summary: { action: 'cancel_requested' } });
@@ -1574,13 +1575,13 @@ describe('Email 通知', () => {
     await api(ops).get('/emails').expect(403);
     const a = await makeAgency('admin');
     const other = await makeAgency('admin');
-    await request(app.getHttpServer()).get(`/api/v1/agency/events/${a.eventId}/emails`).set('x-forwarded-host', other.host).set('cookie', other.cookie).expect(404);
+    await request(app.getHttpServer()).get(`${other.prefix}/agency/events/${a.eventId}/emails`).set('cookie', other.cookie).expect(404);
     await api(a).put('/emails/templates/deadline_reminder', body).expect(204);
     await api(a).put('/emails/notify-emails', { emails: ['team@example.com'] }).expect(204);
     await admin.query(`INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason) SELECT agency_id, pricing_tier_id, 1, 'grant' FROM events WHERE id = $1`, [a.eventId]);
     const ev = await q1(`SELECT company_id, pricing_tier_id FROM events WHERE id = $1`, [a.eventId]);
     const copy = await api(a).post('/copy', { companyId: ev.company_id, pricingTierId: ev.pricing_tier_id, name: '複製活動', slug: `copy-${randomUUID().slice(0, 6)}` }).expect(201);
-    const copied = await request(app.getHttpServer()).get(`/api/v1/agency/events/${copy.body.id}/emails`).set('x-forwarded-host', a.host).set('cookie', a.cookie).expect(200);
+    const copied = await request(app.getHttpServer()).get(`${a.prefix}/agency/events/${copy.body.id}/emails`).set('cookie', a.cookie).expect(200);
     expect(copied.body.notifyEmails).toEqual(['team@example.com']);
     expect(copied.body.templates.find((x: any) => x.key === 'deadline_reminder')).toMatchObject({ customized: true, senderName: '山海旅遊' });
   });
@@ -1741,7 +1742,7 @@ describe('分房', () => {
     await api(c.a).put('/rooms/assignments', { sessionId: c.s, roomId: free.id, travelerIds: [p.ids[0]] }).expect(404);
     await api(c.a).put('/rooms/assignments', { sessionId: other.id, roomId: free.id, travelerIds: [p.ids[0]] }).expect(404);
     const stranger = await makeAgency('admin');
-    await request(app.getHttpServer()).post(`/api/v1/agency/events/${c.a.eventId}/rooms/draft`).set('x-forwarded-host', stranger.host).set('cookie', stranger.cookie).send({ sessionId: c.s }).expect(404);
+    await request(app.getHttpServer()).post(`${stranger.prefix}/agency/events/${c.a.eventId}/rooms/draft`).set('cookie', stranger.cookie).send({ sessionId: c.s }).expect(404);
   });
 });
 
@@ -1853,7 +1854,7 @@ describe('資料匯出', () => {
     expect((await api(c.a).get('/exports').expect(200)).body.jobs.map((j: any) => j.id)).toContain(own.id);
 
     const stranger = await makeAgency('admin');
-    await request(app.getHttpServer()).get(`/api/v1/agency/events/${c.a.eventId}/exports/${own.id}/download`).set('x-forwarded-host', stranger.host).set('cookie', stranger.cookie).expect(404);
+    await request(app.getHttpServer()).get(`${stranger.prefix}/agency/events/${c.a.eventId}/exports/${own.id}/download`).set('cookie', stranger.cookie).expect(404);
   });
 
   it('費用報表每筆報名一列，可篩梯次；分房表依房號排並列出同房', async () => {
@@ -1905,7 +1906,7 @@ describe('資料匯出', () => {
 });
 
 describe('個資紀錄', () => {
-  const root = (a: Ag) => (p: string) => request(app.getHttpServer()).get(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie);
+  const root = (a: Ag) => (p: string) => request(app.getHttpServer()).get(`${a.prefix}/agency${p}`).set('cookie', a.cookie);
   const setup = async (role = 'admin') => {
     const a = await makeAgency(role);
     const session = (await q1(`INSERT INTO event_sessions (agency_id, event_id, name, capacity) VALUES ($1, $2, 'A 梯', 10) RETURNING id`, [a.agencyId, a.eventId])).id as string;
@@ -1972,9 +1973,9 @@ describe('企業窗口', () => {
   const http = () => request(app.getHttpServer());
   const mail = () => app.get(MailService);
   const agencyCall = (a: Ag) => ({
-    get: (p: string) => http().get(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie),
-    post: (p: string, b: object) => http().post(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie).send(b),
-    patch: (p: string, b: object) => http().patch(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie).send(b),
+    get: (p: string) => http().get(`${a.prefix}/agency${p}`).set('cookie', a.cookie),
+    post: (p: string, b: object) => http().post(`${a.prefix}/agency${p}`).set('cookie', a.cookie).send(b),
+    patch: (p: string, b: object) => http().patch(`${a.prefix}/agency${p}`).set('cookie', a.cookie).send(b),
   });
   const company = async (a: Ag) => (await q1(`SELECT company_id FROM events WHERE id = $1`, [a.eventId])).company_id as string;
   const tokenFrom = (to: string) => mail().sent.filter((m) => m.to === to).at(-1)!.text.match(/set-password\/([\w-]+)/)![1]!;
@@ -1983,10 +1984,10 @@ describe('企業窗口', () => {
     const cid = companyId ?? await company(a);
     const email = `c-${randomUUID().slice(0, 8)}@example.com`;
     const { id } = (await agencyCall(a).post(`/companies/${cid}/contacts`, { name: '林窗口', email }).expect(201)).body;
-    await http().post(`/api/v1/company/password-links/${tokenFrom(email)}`).set('x-forwarded-host', a.host).send({ password: 'contact1234' }).expect(204);
-    const login = await http().post('/api/v1/agency/session').set('x-forwarded-host', a.host).send({ email, password: 'contact1234' }).expect(204);
+    await http().post(`${a.prefix}/company/password-links/${tokenFrom(email)}`).send({ password: 'contact1234' }).expect(204);
+    const login = await http().post(`${a.prefix}/agency/session`).send({ email, password: 'contact1234' }).expect(204);
     const cookie = (login.headers['set-cookie'] as unknown as string[]).find((c) => c.startsWith('bt_contact_session='))!.split(';')[0]!;
-    const call = (method: 'get' | 'post' | 'patch' | 'delete', p: string) => (http() as any)[method](`/api/v1/company${p}`).set('x-forwarded-host', a.host).set('cookie', cookie);
+    const call = (method: 'get' | 'post' | 'patch' | 'delete', p: string) => (http() as any)[method](`${a.prefix}/company${p}`).set('cookie', cookie);
     return { id, email, cookie, cid, get: (p: string) => call('get', p), post: (p: string, b: object) => call('post', p).send(b), patch: (p: string, b: object) => call('patch', p).send(b), del: (p: string) => call('delete', p) };
   };
   const booked = async (a: Ag, no: string, status = 'confirmed') => {
@@ -2003,18 +2004,18 @@ describe('企業窗口', () => {
     const a = await makeAgency('admin');
     const c = await contactOf(a);
     expect((await c.get('/me').expect(200)).body).toMatchObject({ companyName: expect.any(String), user: { name: '林窗口', email: c.email } });
-    await http().get('/api/v1/agency/me').set('x-forwarded-host', a.host).set('cookie', c.cookie).expect(401);
-    await http().get('/api/v1/company/me').set('x-forwarded-host', a.host).set('cookie', a.cookie).expect(401);
+    await http().get(`${a.prefix}/agency/me`).set('cookie', c.cookie).expect(401);
+    await http().get(`${a.prefix}/company/me`).set('cookie', a.cookie).expect(401);
     const list = (await agencyCall(a).get(`/companies/${c.cid}/contacts`).expect(200)).body;
     expect(list[0]).toMatchObject({ name: '林窗口', status: 'active', activated: true });
-    await http().post('/api/v1/agency/session').set('x-forwarded-host', a.host).send({ email: c.email, password: 'wrong-pass1' }).expect(401);
+    await http().post(`${a.prefix}/agency/session`).send({ email: c.email, password: 'wrong-pass1' }).expect(401);
 
     const invite = mail().sent.filter((m) => m.to === c.email).at(-1)!;
     expect(invite.subject).toContain('企業窗口帳號邀請');
     const used = tokenFrom(c.email);
-    await http().get(`/api/v1/company/password-links/${used}`).set('x-forwarded-host', a.host).expect(410);
-    await http().post(`/api/v1/company/password-links/${used}`).set('x-forwarded-host', a.host).send({ password: 'other12345' }).expect(410);
-    await http().post(`/api/v1/company/password-links/nope`).set('x-forwarded-host', a.host).send({ password: 'short' }).expect(422);
+    await http().get(`${a.prefix}/company/password-links/${used}`).expect(410);
+    await http().post(`${a.prefix}/company/password-links/${used}`).send({ password: 'other12345' }).expect(410);
+    await http().post(`${a.prefix}/company/password-links/nope`).send({ password: 'short' }).expect(422);
   });
 
   it('Email 不能和旅行社人員或其他窗口重複；重設連結讓舊連結失效；停用後立即不能使用', async () => {
@@ -2029,17 +2030,17 @@ describe('企業窗口', () => {
     const first = tokenFrom(c.email);
     expect(mail().sent.filter((m) => m.to === c.email).at(-1)!.subject).toContain('重設');
     await agencyCall(a).post(`/companies/${cid}/contacts/${c.id}/link`, {}).expect(204);
-    await http().get(`/api/v1/company/password-links/${first}`).set('x-forwarded-host', a.host).expect(410);
+    await http().get(`${a.prefix}/company/password-links/${first}`).expect(410);
     const second = tokenFrom(c.email);
-    await http().get(`/api/v1/company/password-links/${second}`).set('x-forwarded-host', a.host).expect(200);
+    await http().get(`${a.prefix}/company/password-links/${second}`).expect(200);
 
     await agencyCall(a).patch(`/companies/${cid}/contacts/${c.id}`, { status: 'disabled' }).expect(204);
     await c.get('/me').expect(401);
-    await http().get(`/api/v1/company/password-links/${second}`).set('x-forwarded-host', a.host).expect(410);
-    await http().post('/api/v1/agency/session').set('x-forwarded-host', a.host).send({ email: c.email, password: 'contact1234' }).expect(401);
+    await http().get(`${a.prefix}/company/password-links/${second}`).expect(410);
+    await http().post(`${a.prefix}/agency/session`).send({ email: c.email, password: 'contact1234' }).expect(401);
     await agencyCall(a).post(`/companies/${cid}/contacts/${c.id}/link`, {}).expect(404);
     await agencyCall(a).patch(`/companies/${cid}/contacts/${c.id}`, { status: 'active' }).expect(204);
-    await http().post('/api/v1/agency/session').set('x-forwarded-host', a.host).send({ email: c.email, password: 'contact1234' }).expect(204);
+    await http().post(`${a.prefix}/agency/session`).send({ email: c.email, password: 'contact1234' }).expect(204);
 
     mail().failFor.add('broken@example.com');
     expect((await agencyCall(a).post(`/companies/${cid}/contacts`, { name: 'Z', email: 'broken@example.com' }).expect(502)).body.code).toBe('MAIL_FAILED');
@@ -2072,7 +2073,7 @@ describe('企業窗口', () => {
     expect((await c.post(`/events/${a.eventId}/employees/copy`, { fromEventId: other }).expect(404)).body.code).toBe('NOT_FOUND');
 
     const stranger = await makeAgency('admin');
-    await http().get('/api/v1/company/me').set('x-forwarded-host', stranger.host).set('cookie', c.cookie).expect(401);
+    await http().get(`${stranger.prefix}/company/me`).set('cookie', c.cookie).expect(401);
   });
 
   it('報名明細唯讀且不含個資；已取消有列出但不計入補助合計；費用報表不含個資', async () => {
@@ -2123,9 +2124,9 @@ describe('企業窗口', () => {
     expect(logs.rows.every((l) => l.actor_type === 'company_contact' && l.actor_id === c.id)).toBe(true);
 
     const csv = Buffer.from('員工編號,姓名,Email,部門,補助金額,眷屬上限\nK2,小李,,人資部,,\n');
-    const preview = await http().post(`/api/v1/company${base}/import/preview`).set('x-forwarded-host', a.host).set('cookie', c.cookie).set('content-type', 'text/csv').send(csv).expect(200);
+    const preview = await http().post(`${a.prefix}/company${base}/import/preview`).set('cookie', c.cookie).set('content-type', 'text/csv').send(csv).expect(200);
     expect(preview.body.newCount).toBe(1);
-    await http().post(`/api/v1/company${base}/import`).set('x-forwarded-host', a.host).set('cookie', c.cookie).set('content-type', 'text/csv').send(csv).expect(200);
+    await http().post(`${a.prefix}/company${base}/import`).set('cookie', c.cookie).set('content-type', 'text/csv').send(csv).expect(200);
     expect((await c.get(base).expect(200)).body.rosterTotal).toBe(2);
   });
 });
@@ -2134,11 +2135,11 @@ describe('人員管理與旅行社設定', () => {
   const http = () => request(app.getHttpServer());
   const mail = () => app.get(MailService);
   const ag = (a: Ag) => ({
-    get: (p: string) => http().get(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie),
-    post: (p: string, b: object = {}) => http().post(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie).send(b),
-    patch: (p: string, b: object) => http().patch(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie).send(b),
-    put: (p: string, b: object) => http().put(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie).send(b),
-    del: (p: string) => http().delete(`/api/v1/agency${p}`).set('x-forwarded-host', a.host).set('cookie', a.cookie),
+    get: (p: string) => http().get(`${a.prefix}/agency${p}`).set('cookie', a.cookie),
+    post: (p: string, b: object = {}) => http().post(`${a.prefix}/agency${p}`).set('cookie', a.cookie).send(b),
+    patch: (p: string, b: object) => http().patch(`${a.prefix}/agency${p}`).set('cookie', a.cookie).send(b),
+    put: (p: string, b: object) => http().put(`${a.prefix}/agency${p}`).set('cookie', a.cookie).send(b),
+    del: (p: string) => http().delete(`${a.prefix}/agency${p}`).set('cookie', a.cookie),
   });
   const tokenFrom = (to: string) => mail().sent.filter((m) => m.to === to).at(-1)!.text.match(/set-password\/([\w-]+)/)![1]!;
   const invite = async (a: Ag, role = 'event_operator') => {
@@ -2147,8 +2148,8 @@ describe('人員管理與旅行社設定', () => {
     return { id: id as string, email };
   };
   const activate = async (a: Ag, email: string) => {
-    await http().post(`/api/v1/agency/password-links/${tokenFrom(email)}`).set('x-forwarded-host', a.host).send({ password: 'staff12345' }).expect(204);
-    const res = await http().post('/api/v1/agency/session').set('x-forwarded-host', a.host).send({ email, password: 'staff12345' }).expect(204);
+    await http().post(`${a.prefix}/agency/password-links/${tokenFrom(email)}`).send({ password: 'staff12345' }).expect(204);
+    const res = await http().post(`${a.prefix}/agency/session`).send({ email, password: 'staff12345' }).expect(204);
     return { ...a, cookie: (res.headers['set-cookie'] as unknown as string[]).find((c) => c.startsWith('bt_agency_session='))!.split(';')[0]! };
   };
 
@@ -2157,13 +2158,13 @@ describe('人員管理與旅行社設定', () => {
     const n = await invite(a);
     const pending = (await ag(a).get('/staff').expect(200)).body.find((u: any) => u.id === n.id);
     expect(pending).toMatchObject({ activated: false, lastLoginAt: null, isSelf: false, role: 'event_operator' });
-    await http().post('/api/v1/agency/session').set('x-forwarded-host', a.host).send({ email: n.email, password: 'staff12345' }).expect(401);
+    await http().post(`${a.prefix}/agency/session`).send({ email: n.email, password: 'staff12345' }).expect(401);
     expect(mail().sent.filter((m) => m.to === n.email).at(-1)!.text).toContain('活動操作員');
     const token = tokenFrom(n.email);
-    expect((await http().get(`/api/v1/agency/password-links/${token}`).set('x-forwarded-host', a.host).expect(200)).body.name).toBe('新人');
+    expect((await http().get(`${a.prefix}/agency/password-links/${token}`).expect(200)).body.name).toBe('新人');
     const b = await activate(a, n.email);
     expect((await ag(b).get('/me').expect(200)).body.user.role).toBe('event_operator');
-    await http().get(`/api/v1/agency/password-links/${token}`).set('x-forwarded-host', a.host).expect(410);
+    await http().get(`${a.prefix}/agency/password-links/${token}`).expect(410);
     const after = (await ag(a).get('/staff').expect(200)).body.find((u: any) => u.id === n.id);
     expect(after.activated).toBe(true);
     expect(after.lastLoginAt).not.toBeNull();
@@ -2187,7 +2188,7 @@ describe('人員管理與旅行社設定', () => {
     const first = tokenFrom(n.email);
     expect(mail().sent.filter((m) => m.to === n.email).at(-1)!.subject).toContain('重設');
     await ag(a).post(`/staff/${n.id}/link`).expect(204);
-    await http().get(`/api/v1/agency/password-links/${first}`).set('x-forwarded-host', a.host).expect(410);
+    await http().get(`${a.prefix}/agency/password-links/${first}`).expect(410);
     await activate(a, n.email);
     await ag(b).get('/me').expect(401);
   });
@@ -2219,10 +2220,10 @@ describe('人員管理與旅行社設定', () => {
     await ag(b).get('/data-log').expect(200);
     await ag(a).patch(`/staff/${n.id}/status`, { status: 'disabled' }).expect(204);
     await ag(b).get('/me').expect(401);
-    await http().post('/api/v1/agency/session').set('x-forwarded-host', a.host).send({ email: n.email, password: 'staff12345' }).expect(401);
+    await http().post(`${a.prefix}/agency/session`).send({ email: n.email, password: 'staff12345' }).expect(401);
     await ag(a).post(`/staff/${n.id}/link`).expect(404);
     await ag(a).patch(`/staff/${n.id}/status`, { status: 'active' }).expect(204);
-    await http().post('/api/v1/agency/session').set('x-forwarded-host', a.host).send({ email: n.email, password: 'staff12345' }).expect(204);
+    await http().post(`${a.prefix}/agency/session`).send({ email: n.email, password: 'staff12345' }).expect(204);
     const logs = await admin.query(`SELECT action FROM audit_logs WHERE agency_id = $1 AND target_id = $2 AND action LIKE 'staff.%'`, [a.agencyId, n.id]);
     expect(logs.rows.map((r) => r.action)).toEqual(expect.arrayContaining(['staff.link_sent', 'staff.password_set', 'staff.role_changed', 'staff.status_changed']));
 
@@ -2233,24 +2234,23 @@ describe('人員管理與旅行社設定', () => {
 
   it('旅行社設定：改名、上傳 Logo，登入前的頁面看得到；不是圖片不能上傳', async () => {
     const a = await makeAgency('admin');
-    const code = a.host.split('.')[0];
+    const code = a.prefix.split('/').pop();
     expect((await ag(a).get('/settings').expect(200)).body).toEqual({ name: 'T', code, logoUrl: null });
     await ag(a).put('/settings/name', { name: '山海旅行社' }).expect(204);
     const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16)]);
-    await http().put('/api/v1/agency/settings/logo').set('x-forwarded-host', a.host).set('cookie', a.cookie).set('content-type', 'image/png').send(png).expect(200);
-    const pub = (await http().get('/api/v1/agency/branding').set('x-forwarded-host', a.host).expect(200)).body;
+    await http().put(`${a.prefix}/agency/settings/logo`).set('cookie', a.cookie).set('content-type', 'image/png').send(png).expect(200);
+    const pub = (await http().get(`${a.prefix}/agency/branding`).expect(200)).body;
     expect(pub.name).toBe('山海旅行社');
-    expect(pub.logoUrl).toContain('/api/v1/agency/branding/logo');
-    const img = await http().get('/api/v1/agency/branding/logo').set('x-forwarded-host', a.host).expect(200);
+    expect(pub.logoUrl).toContain(`${a.prefix}/agency/branding/logo`);
+    const img = await http().get(`${a.prefix}/agency/branding/logo`).expect(200);
     expect(img.headers['content-type']).toContain('image/png');
-    await http().put('/api/v1/agency/settings/logo').set('x-forwarded-host', a.host).set('cookie', a.cookie).set('content-type', 'image/png').send(Buffer.from('<svg/>')).expect(422);
+    await http().put(`${a.prefix}/agency/settings/logo`).set('cookie', a.cookie).set('content-type', 'image/png').send(Buffer.from('<svg/>')).expect(422);
     await ag(a).del('/settings/logo').expect(204);
-    await http().get('/api/v1/agency/branding/logo').set('x-forwarded-host', a.host).expect(404);
+    await http().get(`${a.prefix}/agency/branding/logo`).expect(404);
   });
 });
 
 describe('平台後台', () => {
-  const HOST = 'platform.lvh.me';
   const http = () => request(app.getHttpServer());
   const mail = () => app.get(MailService);
   const start = '2026-01-01';
@@ -2258,9 +2258,9 @@ describe('平台後台', () => {
   let cookie = '';
   const email = `pf-${randomUUID().slice(0, 8)}@example.com`;
   const pf = {
-    get: (p: string) => http().get(`/api/v1/platform${p}`).set('x-forwarded-host', HOST).set('cookie', cookie),
-    post: (p: string, b: object = {}) => http().post(`/api/v1/platform${p}`).set('x-forwarded-host', HOST).set('cookie', cookie).send(b),
-    patch: (p: string, b: object) => http().patch(`/api/v1/platform${p}`).set('x-forwarded-host', HOST).set('cookie', cookie).send(b),
+    get: (p: string) => http().get(`/api/v1/platform${p}`).set('cookie', cookie),
+    post: (p: string, b: object = {}) => http().post(`/api/v1/platform${p}`).set('cookie', cookie).send(b),
+    patch: (p: string, b: object) => http().patch(`/api/v1/platform${p}`).set('cookie', cookie).send(b),
   };
   const newAgency = async (o: Record<string, unknown> = {}) => {
     const code = `p${randomUUID().slice(0, 8)}`;
@@ -2272,37 +2272,37 @@ describe('平台後台', () => {
 
   beforeAll(async () => {
     await admin.query(`INSERT INTO platform_users (email, password_hash, name) VALUES ($1, $2, '王平台')`, [email, await hashPassword('platform123')]);
-    const res = await http().post('/api/v1/platform/session').set('x-forwarded-host', HOST).send({ email, password: 'platform123' }).expect(204);
+    const res = await http().post('/api/v1/platform/session').send({ email, password: 'platform123' }).expect(204);
     cookie = (res.headers['set-cookie'] as unknown as string[])[0]!.split(';')[0]!;
   });
 
-  it('只有平台網址能用；旅行社帳號不能登入；未登入 401；錯 5 次鎖定', async () => {
+  it('旅行社帳號不能登入；平台 Cookie 不能用在旅行社；未登入 401；錯 5 次鎖定', async () => {
     expect((await pf.get('/me').expect(200)).body.user.name).toBe('王平台');
-    await http().get('/api/v1/platform/me').set('x-forwarded-host', HOST).expect(401);
+    await http().get('/api/v1/platform/me').expect(401);
     const a = await makeAgency('admin');
-    await http().get('/api/v1/platform/me').set('x-forwarded-host', a.host).set('cookie', cookie).expect(404);
-    await http().post('/api/v1/platform/session').set('x-forwarded-host', a.host).send({ email, password: 'platform123' }).expect(404);
-    await http().post('/api/v1/platform/session').set('x-forwarded-host', HOST).send({ email: 'a@example.com', password: 'whatever12' }).expect(401);
-    await http().get('/api/v1/agency/branding').set('x-forwarded-host', HOST).expect(404);
+    await http().get(`${a.prefix}/agency/me`).set('cookie', cookie).expect(401);
+    await http().post('/api/v1/platform/session').send({ email: 'a@example.com', password: 'whatever12' }).expect(401);
+    await http().get('/api/v1/agency/branding').expect(404);
+    await http().get('/api/v1/a/no-such-agency/agency/branding').expect(404);
 
     const locked = `lock-${randomUUID().slice(0, 8)}@example.com`;
     await admin.query(`INSERT INTO platform_users (email, password_hash, name) VALUES ($1, $2, 'L')`, [locked, await hashPassword('platform123')]);
-    for (let i = 0; i < 5; i++) await http().post('/api/v1/platform/session').set('x-forwarded-host', HOST).send({ email: locked, password: 'wrong' }).expect(401);
-    await http().post('/api/v1/platform/session').set('x-forwarded-host', HOST).send({ email: locked, password: 'platform123' }).expect(401);
+    for (let i = 0; i < 5; i++) await http().post('/api/v1/platform/session').send({ email: locked, password: 'wrong' }).expect(401);
+    await http().post('/api/v1/platform/session').send({ email: locked, password: 'platform123' }).expect(401);
   });
 
   it('開通旅行社：寄邀請給第一位管理員，開通後能登入；代號規則與重複都擋下', async () => {
     const n = await newAgency();
     const invite = mail().sent.filter((m) => m.to === n.adminEmail).at(-1)!;
-    expect(invite.text).toContain(`${n.code}.lvh.me`);
+    expect(invite.text).toContain(`/${n.code}/admin`);
     expect(invite.text).toContain('管理員');
     const token = invite.text.match(/set-password\/([\w-]+)/)![1];
     const row = (await pf.get('/agencies').expect(200)).body.find((a: any) => a.id === n.id);
     expect(row).toMatchObject({ state: 'admin_pending', opened: 0, used: 0, remaining: 0, contractEndsOn: end });
 
-    const host = `${n.code}.lvh.me`;
-    await http().post(`/api/v1/agency/password-links/${token}`).set('x-forwarded-host', host).send({ password: 'admin12345' }).expect(204);
-    await http().post('/api/v1/agency/session').set('x-forwarded-host', host).send({ email: n.adminEmail, password: 'admin12345' }).expect(204);
+    const p = `/api/v1/a/${n.code}`;
+    await http().post(`${p}/agency/password-links/${token}`).send({ password: 'admin12345' }).expect(204);
+    await http().post(`${p}/agency/session`).send({ email: n.adminEmail, password: 'admin12345' }).expect(204);
     expect((await pf.get(`/agencies/${n.id}`).expect(200)).body).toMatchObject({ state: 'active', admin: { name: '林管理', activated: true }, planNote: '一年期' });
 
     expect((await pf.post('/agencies', { name: 'x', code: n.code, adminName: 'a', adminEmail: 'x1@example.com', planNote: 'p', contractStartsOn: start, contractEndsOn: end }).expect(409)).body.code).toBe('AGENCY_CODE_TAKEN');
@@ -2347,25 +2347,25 @@ describe('平台後台', () => {
   it('合約到期後不能建立活動；停用後後台與活動頁立即無法使用，可重新啟用', async () => {
     const a = await makeAgency('admin');
     const ev = await q1(`SELECT company_id, pricing_tier_id FROM events WHERE id = $1`, [a.eventId]);
-    const create = () => http().post('/api/v1/agency/events').set('x-forwarded-host', a.host).set('cookie', a.cookie).send({ companyId: ev.company_id, pricingTierId: ev.pricing_tier_id, name: '新活動', slug: `n-${randomUUID().slice(0, 6)}` });
+    const create = () => http().post(`${a.prefix}/agency/events`).set('cookie', a.cookie).send({ companyId: ev.company_id, pricingTierId: ev.pricing_tier_id, name: '新活動', slug: `n-${randomUUID().slice(0, 6)}` });
     await admin.query(`INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason) VALUES ($1, $2, 5, 'grant')`, [a.agencyId, ev.pricing_tier_id]);
     await pf.patch(`/agencies/${a.agencyId}/contract`, { planNote: '過期', contractStartsOn: '2020-01-01', contractEndsOn: '2020-12-31' }).expect(204);
     expect((await create().expect(409)).body.code).toBe('CONTRACT_EXPIRED');
     expect((await pf.get(`/agencies/${a.agencyId}`).expect(200)).body).toMatchObject({ state: 'expired', planNote: '過期' });
     // 已發布的活動可繼續進行
-    await http().get('/api/v1/public/events/evt/landing').set('x-forwarded-host', a.host).expect(200);
+    await http().get(`${a.prefix}/public/events/evt/landing`).expect(200);
     await pf.patch(`/agencies/${a.agencyId}/contract`, { planNote: '續約', contractStartsOn: start, contractEndsOn: end }).expect(204);
     await create().expect(201);
     for (const slug of ['company', 'platform', 'admin']) {
-      await http().post('/api/v1/agency/events').set('x-forwarded-host', a.host).set('cookie', a.cookie).send({ companyId: ev.company_id, pricingTierId: ev.pricing_tier_id, name: '保留字', slug }).expect(422);
+      await http().post(`${a.prefix}/agency/events`).set('cookie', a.cookie).send({ companyId: ev.company_id, pricingTierId: ev.pricing_tier_id, name: '保留字', slug }).expect(422);
     }
 
     await pf.patch(`/agencies/${a.agencyId}/status`, { status: 'suspended' }).expect(204);
-    await http().get('/api/v1/agency/me').set('x-forwarded-host', a.host).set('cookie', a.cookie).expect(404);
-    await http().get('/api/v1/public/events/evt/landing').set('x-forwarded-host', a.host).expect(404);
+    await http().get(`${a.prefix}/agency/me`).set('cookie', a.cookie).expect(404);
+    await http().get(`${a.prefix}/public/events/evt/landing`).expect(404);
     expect((await pf.get(`/agencies/${a.agencyId}`).expect(200)).body).toMatchObject({ state: 'suspended', suspended: true });
     await pf.patch(`/agencies/${a.agencyId}/status`, { status: 'active' }).expect(204);
-    await http().get('/api/v1/agency/me').set('x-forwarded-host', a.host).set('cookie', a.cookie).expect(200);
+    await http().get(`${a.prefix}/agency/me`).set('cookie', a.cookie).expect(200);
     const logs = await admin.query(`SELECT action, actor_type FROM audit_logs WHERE agency_id = $1 AND action LIKE 'platform.%'`, [a.agencyId]);
     expect(logs.rows.map((r) => r.action)).toEqual(expect.arrayContaining(['platform.contract_updated', 'platform.agency_status']));
     expect(logs.rows.every((r) => r.actor_type === 'platform_user')).toBe(true);
@@ -2447,14 +2447,14 @@ describe('升級級距與用量提醒', () => {
     await api(ops).get('/tier-options?needed=1').expect(403);
     await api(ops).post('/tier-upgrade', { tierId: next.id }).expect(403);
     const stranger = await makeAgency('admin');
-    await request(app.getHttpServer()).post(`/api/v1/agency/events/${a.eventId}/tier-upgrade`).set('x-forwarded-host', stranger.host).set('cookie', stranger.cookie).send({ tierId: next.id }).expect(404);
+    await request(app.getHttpServer()).post(`${stranger.prefix}/agency/events/${a.eventId}/tier-upgrade`).set('cookie', stranger.cookie).send({ tierId: next.id }).expect(404);
   });
 
   it('同時升級不會超扣額度', async () => {
     const { a, next } = await setup();
     await grant(a, next.id);
     const b = (await q1(`INSERT INTO events (agency_id, company_id, slug, name, status, pricing_tier_id) SELECT agency_id, company_id, 'evt2', 'E2', 'draft', pricing_tier_id FROM events WHERE id = $1 RETURNING id`, [a.eventId])).id;
-    const call = (id: string) => request(app.getHttpServer()).post(`/api/v1/agency/events/${id}/tier-upgrade`).set('x-forwarded-host', a.host).set('cookie', a.cookie).send({ tierId: next.id });
+    const call = (id: string) => request(app.getHttpServer()).post(`${a.prefix}/agency/events/${id}/tier-upgrade`).set('cookie', a.cookie).send({ tierId: next.id });
     const [x, y] = await Promise.all([call(a.eventId), call(b)]);
     expect([x.status, y.status].sort()).toEqual([204, 409]);
     expect(await remaining(a, next.id)).toBe(0);
@@ -2502,27 +2502,27 @@ describe('升級級距與用量提醒', () => {
 
 describe('企業名稱與 Logo', () => {
   const http = () => request(app.getHttpServer());
-  const authed = (a: Ag, r: request.Test) => r.set('x-forwarded-host', a.host).set('cookie', a.cookie);
+  const authed = (a: Ag, r: request.Test) => r.set('cookie', a.cookie);
   const companyOf = async (a: Ag) => (await q1(`SELECT company_id AS id FROM events WHERE id = $1`, [a.eventId])).id as string;
   const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
-  const put = (a: Ag, id: string, type: string, body: Buffer) => authed(a, http().put(`/api/v1/agency/companies/${id}/logo`)).set('content-type', type).send(body);
+  const put = (a: Ag, id: string, type: string, body: Buffer) => authed(a, http().put(`${a.prefix}/agency/companies/${id}/logo`)).set('content-type', type).send(body);
 
   it('可改名與上傳 PNG、SVG、移除；列表帶回網址；SVG 有沙箱標頭', async () => {
     const a = await makeAgency('admin');
     const id = await companyOf(a);
-    await authed(a, http().patch(`/api/v1/agency/companies/${id}`)).send({ name: '新名稱' }).expect(204);
+    await authed(a, http().patch(`${a.prefix}/agency/companies/${id}`)).send({ name: '新名稱' }).expect(204);
     await put(a, id, 'image/png', PNG).expect(204);
-    let row = (await authed(a, http().get('/api/v1/agency/companies')).expect(200)).body.find((c: any) => c.id === id);
+    let row = (await authed(a, http().get(`${a.prefix}/agency/companies`)).expect(200)).body.find((c: any) => c.id === id);
     expect(row.name).toBe('新名稱');
     expect(row.logoUrl).toContain(`/companies/${id}/logo`);
 
     await put(a, id, 'image/svg+xml', Buffer.from('<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>')).expect(204);
-    const svg = await authed(a, http().get(`/api/v1/agency/companies/${id}/logo`)).expect(200);
+    const svg = await authed(a, http().get(`${a.prefix}/agency/companies/${id}/logo`)).expect(200);
     expect(svg.headers['content-type']).toContain('image/svg+xml');
     expect(svg.headers['content-security-policy']).toContain('sandbox');
 
-    await authed(a, http().delete(`/api/v1/agency/companies/${id}/logo`)).expect(204);
-    row = (await authed(a, http().get('/api/v1/agency/companies')).expect(200)).body.find((c: any) => c.id === id);
+    await authed(a, http().delete(`${a.prefix}/agency/companies/${id}/logo`)).expect(204);
+    row = (await authed(a, http().get(`${a.prefix}/agency/companies`)).expect(200)).body.find((c: any) => c.id === id);
     expect(row.logoUrl).toBeNull();
   });
 
@@ -2546,7 +2546,28 @@ describe('企業名稱與 Logo', () => {
     await put(ops, await companyOf(ops), 'image/png', PNG).expect(403);
     const stranger = await makeAgency('admin');
     await put(stranger, id, 'image/png', PNG).expect(404);
-    await authed(stranger, http().patch(`/api/v1/agency/companies/${id}`)).send({ name: 'x' }).expect(404);
-    await authed(stranger, http().get(`/api/v1/agency/companies/${id}/logo`)).expect(404);
+    await authed(stranger, http().patch(`${stranger.prefix}/agency/companies/${id}`)).send({ name: 'x' }).expect(404);
+    await authed(stranger, http().get(`${stranger.prefix}/agency/companies/${id}/logo`)).expect(404);
+  });
+});
+
+describe('網址路徑判定旅行社', () => {
+  const http = () => request(app.getHttpServer());
+
+  it('只認路徑中的代號：自己帶的標頭無效、沒有代號的舊路徑不存在、代號大小寫不影響', async () => {
+    const a = await makeAgency('admin');
+    const code = a.prefix.split('/').pop()!;
+    await http().get(`${a.prefix}/agency/me`).set('cookie', a.cookie).expect(200);
+    await http().get(`/api/v1/a/${code.toUpperCase()}/agency/me`).set('cookie', a.cookie).expect(200);
+    await http().get('/api/v1/agency/me').set('x-bt-agency', code).set('cookie', a.cookie).expect(404);
+    await http().get('/api/v1/company/me').set('x-bt-agency', code).expect(404);
+    await http().get('/api/v1/public/events/evt/landing').set('x-bt-agency', code).expect(404);
+    await http().get(`/api/v1/a/%E0%A4%A/agency/branding`).expect(404);
+  });
+
+  it('另一間旅行社的登入 Cookie 用在這間無效', async () => {
+    const a = await makeAgency('admin');
+    const b = await makeAgency('admin');
+    await http().get(`${a.prefix}/agency/me`).set('cookie', b.cookie).expect(401);
   });
 });

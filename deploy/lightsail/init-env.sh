@@ -11,7 +11,7 @@ if [ ! -f "$ENV_FILE" ]; then
   cat > "$ENV_FILE" <<EOF
 # 大團報名正式環境設定。資料庫密碼與金鑰在第一次部署時隨機產生。
 # 不要更換 DATA_ENCRYPTION_KEY 與 TOKEN_HASH_KEY：已加密的個資會解不開，已發出的登入狀態與連結也會失效。
-PLATFORM_DOMAIN=tours.bookdex.cc
+PLATFORM_DOMAIN=bigtour.bookdex.cc
 POSTGRES_PASSWORD=$(rand_hex 24)
 DB_APP_PASSWORD=$(rand_hex 24)
 DATA_ENCRYPTION_KEY=$(head -c 32 /dev/urandom | base64)

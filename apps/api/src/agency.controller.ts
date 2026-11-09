@@ -13,7 +13,7 @@ import { StaffService } from './staff.service.ts';
 import { DataLogService, type DataLogQuery } from './data-log.service.ts';
 import { ExportService } from './export.service.ts';
 import { RosterService } from './roster.service.ts';
-import { assertSameOrigin, cookieValue, requestHost, sendImage, sendPdf, sendXlsx, CONTACT_COOKIE, contactCookieOptions, cookieOptions, type RequestHeaders } from './http.ts';
+import { assertSameOrigin, cookieValue, requestAgency, sendImage, sendPdf, sendXlsx, CONTACT_COOKIE, contactCookieOptions, cookieOptions, type RequestHeaders } from './http.ts';
 
 const COOKIE = 'bt_agency_session';
 
@@ -35,7 +35,7 @@ export class AgencyController {
 
   private ctx(h: RequestHeaders) {
     assertSameOrigin(h);
-    return this.admin.resolve(requestHost(h), cookieValue(h, COOKIE));
+    return this.admin.resolve(requestAgency(h), cookieValue(h, COOKIE));
   }
 
   private async allowed(h: RequestHeaders, permission: AgencyPermission) {
@@ -60,23 +60,23 @@ export class AgencyController {
     const req = agencyLoginRequest.safeParse(body);
     if (!req.success) throw new DomainError('INVALID_CREDENTIALS');
     // 旅行社人員和企業窗口共用登入頁；同一個 Email 不會同時是兩種身分。
-    if (await this.contactAccounts.isContactEmail(requestHost(h), req.data.email)) {
-      const { token, maxAgeMs } = await this.contactAccounts.login(requestHost(h), req.data.email, req.data.password);
-      res.cookie(CONTACT_COOKIE, token, { ...contactCookieOptions(), maxAge: maxAgeMs });
-      res.clearCookie(COOKIE, cookieOptions());
+    if (await this.contactAccounts.isContactEmail(requestAgency(h), req.data.email)) {
+      const { token, maxAgeMs } = await this.contactAccounts.login(requestAgency(h), req.data.email, req.data.password);
+      res.cookie(CONTACT_COOKIE, token, { ...contactCookieOptions(requestAgency(h)!), maxAge: maxAgeMs });
+      res.clearCookie(COOKIE, cookieOptions(requestAgency(h)!));
       return;
     }
-    const { token, maxAgeMs } = await this.admin.login(requestHost(h), req.data.email, req.data.password);
-    res.cookie(COOKIE, token, { ...cookieOptions(), maxAge: maxAgeMs });
-    res.clearCookie(CONTACT_COOKIE, contactCookieOptions());
+    const { token, maxAgeMs } = await this.admin.login(requestAgency(h), req.data.email, req.data.password);
+    res.cookie(COOKIE, token, { ...cookieOptions(requestAgency(h)!), maxAge: maxAgeMs });
+    res.clearCookie(CONTACT_COOKIE, contactCookieOptions(requestAgency(h)!));
   }
 
   @Delete('session')
   @HttpCode(204)
   async logout(@Headers() h: RequestHeaders, @Res({ passthrough: true }) res: Response) {
     assertSameOrigin(h);
-    await this.admin.logout(requestHost(h), cookieValue(h, COOKIE));
-    res.clearCookie(COOKIE, cookieOptions());
+    await this.admin.logout(requestAgency(h), cookieValue(h, COOKIE));
+    res.clearCookie(COOKIE, cookieOptions(requestAgency(h)!));
   }
 
   @Get('me')
@@ -143,7 +143,7 @@ export class AgencyController {
 
   @Get('password-links/:token')
   staffLookup(@Headers() h: RequestHeaders, @Param('token') token: string) {
-    return this.staff.lookupLink(requestHost(h), token);
+    return this.staff.lookupLink(requestAgency(h), token);
   }
 
   @Post('password-links/:token')
@@ -151,7 +151,7 @@ export class AgencyController {
   async staffSetPassword(@Headers() h: RequestHeaders, @Param('token') token: string, @Body() body: { password?: unknown }) {
     assertSameOrigin(h);
     if (typeof body?.password !== 'string' || !isValidPassword(body.password)) throw new DomainError('INVALID_PASSWORD');
-    await this.staff.setPassword(requestHost(h), token, body.password);
+    await this.staff.setPassword(requestAgency(h), token, body.password);
   }
 
   // ===== 旅行社設定 =====
@@ -159,7 +159,7 @@ export class AgencyController {
   @Get('settings')
   async settings(@Headers() h: RequestHeaders) {
     await this.manager(h);
-    return this.staff.settings(requestHost(h));
+    return this.staff.settings(requestAgency(h));
   }
 
   @Put('settings/name')
@@ -182,12 +182,12 @@ export class AgencyController {
   /** 登入頁在登入前就要顯示，不需登入。 */
   @Get('branding')
   branding(@Headers() h: RequestHeaders) {
-    return this.staff.branding(requestHost(h));
+    return this.staff.branding(requestAgency(h));
   }
 
   @Get('branding/logo')
   async logo(@Headers() h: RequestHeaders, @Res() res: Response) {
-    const file = await this.staff.readLogo(requestHost(h));
+    const file = await this.staff.readLogo(requestAgency(h));
     sendImage(res, file.contentType, file.content);
   }
 
