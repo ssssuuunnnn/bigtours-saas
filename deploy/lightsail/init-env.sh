@@ -20,7 +20,7 @@ TOKEN_HASH_KEY=$(rand_hex 32)
 # 寄信（必填）：Amazon SES 的 SMTP 端點（見 deploy/lightsail/README.md「寄信」）
 # 密碼中的 / + = 要寫成 %2F %2B %3D
 # SMTP_URL=smtps://<SMTP 使用者>:<SMTP 密碼>@email-smtp.ap-southeast-2.amazonaws.com:465
-# MAIL_FROM=no-reply@bigtour.bookdex.cc（只填地址；寄件者名稱由每封信決定）
+# MAIL_FROM=no-reply@bookdex.cc（只填地址；寄件者名稱由每封信決定）
 SMTP_URL=
 MAIL_FROM=
 

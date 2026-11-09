@@ -32,6 +32,46 @@
 
 ## 一次性設定
 
+### 用 setup.sh 一次設定（建議）
+
+`deploy/lightsail/setup.sh` 把下面 1～4 的一次性設定與第一次部署寫成腳本，在本機 Mac 執行。每一步先查現況、已完成就跳過，可以重複執行；密碼與金鑰只寫進本機檔案，不會印在畫面上。用 Claude Code 時說「部署」或輸入 `/deploy`，會照 `.claude/skills/deploy/SKILL.md` 一步步執行。
+
+```bash
+deploy/lightsail/setup.sh check        # 檢查工具、登入狀態與權杖（不改任何東西）
+deploy/lightsail/setup.sh ses smtp     # SES 驗證 bookdex.cc、DKIM／DMARC、申請 production access、SMTP 帳密
+deploy/lightsail/setup.sh cloudflare   # DNS、Origin Rule（→ 8443）、Origin 憑證
+deploy/lightsail/setup.sh firewall     # Lightsail 8443 只開放給 Cloudflare
+deploy/lightsail/setup.sh host         # 上傳 Origin 憑證、在主機產生並填好 .env、備份到本機
+deploy/lightsail/setup.sh github       # 部署用 SSH 金鑰與 IAM 使用者、GitHub production Secrets
+deploy/lightsail/setup.sh deploy       # 執行 Actions 的 Deploy 並等到完成
+PLATFORM_ADMIN_EMAIL=<email> deploy/lightsail/setup.sh platform-user
+deploy/lightsail/setup.sh status
+```
+
+需要：`aws`（已登入，可建立 IAM 使用者、操作 SES 與 Lightsail）、`gh`（已登入）、`jq`、`curl`、`ssh`、`openssl`、`node`，以及主機 SSH 金鑰 `~/.ssh/gym-lightsail.pem`。
+
+**Cloudflare 權杖**：我的設定檔 → API 權杖 → 建立自訂權杖，區域資源限定 `bookdex.cc`，權限為「區域 → 區域 → 讀取」「區域 → DNS → 編輯」「區域 → SSL 和憑證 → 編輯」「區域 → Origin Rules → 編輯」（選填「區域 → 區域設定 → 讀取」，用來檢查 SSL 模式）。複製權杖後執行：
+
+```bash
+mkdir -p ~/.bigtours-deploy && chmod 700 ~/.bigtours-deploy
+pbpaste > ~/.bigtours-deploy/cloudflare-token && chmod 600 ~/.bigtours-deploy/cloudflare-token
+```
+
+本機產生的檔案：
+
+| 檔案 | 內容 |
+|---|---|
+| `~/.bigtours-deploy/ses-smtp-url` | 主機 `.env` 的 `SMTP_URL` |
+| `~/.bigtours-deploy/deploy-aws-key.json` | GitHub 部署用 IAM 使用者的金鑰 |
+| `~/.bigtours-deploy/host.env` | 主機 `.env` 的備份（含加密金鑰，請另存密碼管理器） |
+| `~/.bigtours-deploy/platform-user.txt` | 第一個平台人員帳密 |
+| `deploy/lightsail/certs/origin.pem`、`origin.key` | Origin 憑證（不進 git） |
+| `~/.ssh/bigtours-github-deploy` | GitHub Actions 用的 SSH 金鑰 |
+
+預設值（寄件地址、通知信箱、LINE 網址、主機名稱等）都可以用環境變數覆寫，見 `setup.sh` 開頭。腳本只做 1～4 的設定；預約簿的 `RESERVED_SUBDOMAINS` 要另外到 gym_system 修改。
+
+以下是各步驟的手動做法，也就是腳本做的事。
+
 ### 1. Cloudflare
 
 1. **DNS**：不用新增。`bigtour.bookdex.cc` 已由預約簿現有的 `*` 紀錄（已代理）接住。若想在 DNS 頁面一目了然，也可以另外新增 `A` 紀錄 `bigtour` 指向同一個固定 IP、已代理。
@@ -47,11 +87,13 @@ SSL/TLS 加密模式沿用預約簿的 Full (strict)。
 
 ### 1-1. 寄信：Amazon SES（ap-southeast-2）
 
-1. SES → Identities → Create identity → Domain：`bigtour.bookdex.cc`，Easy DKIM、RSA 2048。把產生的 3 筆 CNAME 加到 Cloudflare，**設為「僅 DNS」（灰色雲）**。
-2. Cloudflare 新增 TXT：名稱 `_dmarc.bigtour`，內容 `v=DMARC1; p=none; rua=mailto:<你的信箱>`。
+寄件地址用 `no-reply@bookdex.cc`，所以驗證根網域 `bookdex.cc`（與預約簿共用寄信信譽；之後要分開，再驗證 `bigtour.bookdex.cc` 並改 `MAIL_FROM`）。
+
+1. SES → Identities → Create identity → Domain：`bookdex.cc`（已存在就沿用），Easy DKIM、RSA 2048。把產生的 3 筆 CNAME 加到 Cloudflare，**設為「僅 DNS」（灰色雲）**。
+2. Cloudflare 的 `_dmarc`（`bookdex.cc`）若還沒有 DMARC，新增 TXT：`v=DMARC1; p=none; rua=mailto:service@bookdex.cc`。一個網域只能有一筆 DMARC，已有就沿用。
 3. Account dashboard → Request production access（用途 Transactional：報名確認、密碼設定連結等系統通知）。核准前只能寄給已驗證的信箱。
 4. SMTP settings → Create SMTP credentials，記下使用者與密碼（只顯示一次）。
-5. 填進主機 `.env`：`SMTP_URL=smtps://<使用者>:<密碼>@email-smtp.ap-southeast-2.amazonaws.com:465`（密碼中的 `/`、`+`、`=` 寫成 `%2F`、`%2B`、`%3D`）、`MAIL_FROM=no-reply@bigtour.bookdex.cc`。
+5. 填進主機 `.env`：`SMTP_URL=smtps://<使用者>:<密碼>@email-smtp.ap-southeast-2.amazonaws.com:465`（密碼中的 `/`、`+`、`=` 寫成 `%2F`、`%2B`、`%3D`）、`MAIL_FROM=no-reply@bookdex.cc`；另外填 `TRIAL_NOTIFY_EMAIL=service@bookdex.cc`、`SITE_LINE_URL=https://line.me/R/ti/p/@184nyral`。
 
 試用旅行社的寄信數量有上限（總共 100 封、每天 40 封），避免自助試用被拿來大量寄信、影響 SES 的寄信信譽。
 
