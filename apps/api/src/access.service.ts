@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { pageState, type PageState } from '@bigtours/shared';
+import { AGENCY_CODE_PATTERN, pageState, type PageState } from '@bigtours/shared';
 import { DatabaseService } from './database.service.ts';
 import { EncryptionService } from './encryption.service.ts';
 import { DomainError } from './errors.ts';
@@ -53,19 +53,10 @@ export class AccessService {
     @Inject(EncryptionService) private readonly encryption: EncryptionService,
   ) {}
 
-  /** 由網址判定旅行社：abc-travel.平台網域 */
-  agencyCodeFromHost(host: string | undefined): string {
-    const hostname = (host ?? '').split(',')[0]!.trim().split(':')[0]!.toLowerCase();
-    const suffix = `.${process.env.PLATFORM_DOMAIN}`;
-    if (!hostname.endsWith(suffix)) throw new DomainError('NOT_FOUND');
-    const code = hostname.slice(0, -suffix.length);
-    if (!code || code.includes('.')) throw new DomainError('NOT_FOUND');
-    return code;
-  }
-
-  /** 無法辨識旅行社時回傳 NOT_FOUND，不透露旅行社是否存在。 */
-  async findAgency(host: string | undefined): Promise<AgencyInfo> {
-    const code = this.agencyCodeFromHost(host);
+  /** 旅行社代號來自網址路徑第一段（見 agency-path.ts）；無法辨識旅行社時回傳 NOT_FOUND，不透露旅行社是否存在。 */
+  async findAgency(agencyCode: string | undefined): Promise<AgencyInfo> {
+    const code = (agencyCode ?? '').trim().toLowerCase();
+    if (!AGENCY_CODE_PATTERN.test(code)) throw new DomainError('NOT_FOUND');
     const { rows } = await this.db.pool.query(
       `SELECT id, code, name, logo_object_key, line_channel_id, line_liff_id FROM agencies WHERE code = $1 AND status = 'active'`,
       [code],
@@ -85,7 +76,8 @@ export class AccessService {
                 default_subsidy_amount, default_dependent_limit, allow_dependents_only, terms_version, terms_object_key, payment_instructions, hero_object_key, login_mobile_object_key, home_image_object_key,
                 page_mode, page_is_open, page_opens_at, page_closes_at, theme_color, line_enabled,
                 (SELECT c.name FROM companies c WHERE c.id = company_id) AS company_name,
-                (SELECT c.logo_object_key FROM companies c WHERE c.id = company_id) AS company_logo_key
+                (SELECT c.logo_object_key FROM companies c WHERE c.id = company_id) AS company_logo_key,
+                (SELECT a.is_trial AND a.contract_ends_on < (now() AT TIME ZONE 'Asia/Taipei')::date FROM agencies a WHERE a.id = agency_id) AS trial_expired
            FROM events WHERE slug = $1 AND status IN ('published', 'closed')`,
         [slug],
       );
@@ -110,15 +102,16 @@ export class AccessService {
       companyName: r.company_name,
       companyLogoKey: r.company_logo_key,
       images: { login: r.hero_object_key, 'login-mobile': r.login_mobile_object_key, home: r.home_image_object_key },
-      pageState: pageState({ mode: r.page_mode, isOpen: r.page_is_open, opensAt: r.page_opens_at, closesAt: r.page_closes_at }),
+      // 試用到期後員工報名頁一律關閉
+      pageState: r.trial_expired ? 'closed' : pageState({ mode: r.page_mode, isOpen: r.page_is_open, opensAt: r.page_opens_at, closesAt: r.page_closes_at }),
       pageOpensAt: r.page_mode === 'scheduled' ? r.page_opens_at : null,
       lineEnabled: r.line_enabled,
     };
   }
 
   /** 活動頁關閉時，已登入的員工也不能存取。 */
-  async resolve(host: string | undefined, slug: string, sessionToken: string | undefined): Promise<EmployeeContext> {
-    const agency = await this.findAgency(host);
+  async resolve(agencyCode: string | undefined, slug: string, sessionToken: string | undefined): Promise<EmployeeContext> {
+    const agency = await this.findAgency(agencyCode);
     const event = await this.findEvent(agency.id, slug);
     if (event.pageState !== 'open') throw new DomainError('PAGE_CLOSED', { pageState: event.pageState });
     if (!sessionToken) throw new DomainError('UNAUTHENTICATED');

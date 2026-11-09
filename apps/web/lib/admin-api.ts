@@ -1,4 +1,5 @@
 import type { EventNavKey } from '@bigtours/shared';
+import { agencyApi, currentAgency } from './agency-path';
 import { ApiError } from './api';
 import { notifyDone } from './done-toast';
 import { a } from '../messages/admin';
@@ -132,7 +133,15 @@ export type PublishCheckKey = 'basic' | 'heroImage' | 'schedule' | 'sessions' | 
 export interface PublishCheck { key: PublishCheckKey; state: 'ok' | 'warn' | 'block' | 'confirm'; data: Record<string, any> }
 export interface QuotaTier { id: string; minTravelers: number; maxTravelers: number; price: number; remaining: number }
 export interface AdminCompany { id: string; name: string; eventCount: number; logoUrl: string | null }
-export interface AdminMe { agencyName: string; user: { name: string; role: string }; pinnedNavItems: EventNavKey[] }
+export interface TrialStatus {
+  endsOn: string;
+  expired: boolean;
+  daysLeft: number;
+  deletesOn: string;
+  mail: { total: number; today: number; totalLimit: number; dailyLimit: number };
+  limits: { events: number; maxTravelers: number };
+}
+export interface AdminMe { agencyName: string; user: { name: string; role: string }; pinnedNavItems: EventNavKey[]; trial: TrialStatus | null }
 export interface SessionValues {
   name: string;
   departsOn: string;
@@ -172,9 +181,10 @@ function announce(method: string, path: string) {
   notifyDone(method === 'DELETE' ? a.done.removed : method === 'POST' ? a.done.done : a.done.saved);
 }
 
-const clientFor = (prefix: string) => {
+const clientFor = (base: string | (() => string)) => {
+  const prefixOf = () => (typeof base === 'string' ? base : base());
   const call: Call = async <T,>(method: string, path: string, body?: unknown): Promise<T> => {
-  const res = await fetch(`${prefix}${path}`, {
+  const res = await fetch(`${prefixOf()}${path}`, {
     method,
     headers: body ? { 'content-type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
@@ -187,7 +197,7 @@ const clientFor = (prefix: string) => {
   };
   /** 檔案以原始內容送出，不走 JSON。 */
   const upload: Upload = async <T,>(path: string, file: File, contentType: string, method = 'PUT'): Promise<T> => {
-  const res = await fetch(`${prefix}${path}`, { method, headers: { 'content-type': contentType }, body: file });
+  const res = await fetch(`${prefixOf()}${path}`, { method, headers: { 'content-type': contentType }, body: file });
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new ApiError(res.status, data?.code ?? 'fallback', data?.detail);
   if (!QUIET.some((r) => r.test(path.split('?')[0]!))) notifyDone(method === 'PUT' ? a.done.uploaded : a.done.done);
@@ -195,7 +205,7 @@ const clientFor = (prefix: string) => {
   };
   return { call, upload };
 };
-const { call, upload } = clientFor('/api/v1/agency');
+const { call, upload } = clientFor(() => agencyApi(currentAgency(), '/agency'));
 
 export type ImageKind = 'login' | 'login-mobile' | 'home';
 
@@ -333,7 +343,7 @@ export const adminApi = {
 
 // ===== 企業窗口 =====
 
-export interface ContactMe { agencyName: string; companyName: string; user: { name: string; email: string } }
+export interface ContactMe { agencyName: string; companyName: string; user: { name: string; email: string }; trialExpired: boolean }
 export interface ContactEvent {
   id: string; name: string; state: 'draft' | 'not_open' | 'open' | 'closed'; registrationOpensAt: string | null; registrationClosesAt: string | null;
   roster: number; registered: number; sessionCount: number; firstDay: string | null; lastDay: string | null;
@@ -350,7 +360,7 @@ export interface ContactRegistration {
   travelers: { id: string; name: string; typeName: string; roomTypeName: string | null; options: string[]; fee: number }[];
 }
 
-const contact = clientFor('/api/v1/company');
+const contact = clientFor(() => agencyApi(currentAgency(), '/company'));
 export const contactApi = {
   me: () => contact.call<ContactMe>('GET', '/me'),
   logout: () => contact.call<void>('DELETE', '/session'),
@@ -365,15 +375,15 @@ export const contactApi = {
   setPassword: (token: string, password: string) => contact.call<void>('POST', `/password-links/${encodeURIComponent(token)}`, { password }),
   ...rosterMethods(contact.call, contact.upload),
 };
-export const feeReportUrl = (id: string) => `/api/v1/company/events/${id}/fee-report`;
+export const feeReportUrl = (agency: string, id: string) => agencyApi(agency, `/company/events/${id}/fee-report`);
 
 // ===== 平台後台 =====
 
 export interface PlatformTier { id: string; minTravelers: number; maxTravelers: number; price: number }
 export type AgencyState = 'active' | 'expiring' | 'expired' | 'admin_pending' | 'suspended';
-export interface PlatformAgencyRow { id: string; name: string; code: string; contractStartsOn: string | null; contractEndsOn: string | null; state: AgencyState; opened: number; used: number; remaining: number; lineConfigured: boolean }
+export interface PlatformAgencyRow { id: string; name: string; code: string; isTrial: boolean; contractStartsOn: string | null; contractEndsOn: string | null; state: AgencyState; opened: number; used: number; remaining: number; lineConfigured: boolean }
 export interface PlatformAgency {
-  id: string; name: string; code: string; state: AgencyState; suspended: boolean; planNote: string | null; contractStartsOn: string | null; contractEndsOn: string | null;
+  id: string; name: string; code: string; state: AgencyState; suspended: boolean; isTrial: boolean; taxId: string | null; planNote: string | null; contractStartsOn: string | null; contractEndsOn: string | null;
   admin: { id: string; name: string; email: string; activated: boolean } | null;
   quota: (PlatformTier & { opened: number; used: number; remaining: number })[];
   ledger: { id: string; at: string; by: string | null; change: number; note: string | null; minTravelers: number; maxTravelers: number }[];
@@ -398,4 +408,29 @@ export const platformApi = {
   setStatus: (id: string, status: 'active' | 'suspended') => plat.call<void>('PATCH', `/agencies/${id}/status`, { status }),
   sendAdminLink: (id: string) => plat.call<void>('POST', `/agencies/${id}/admin-link`, {}),
   usage: () => plat.call<PlatformUsage>('GET', '/usage'),
+  trialApplications: (status: string) => plat.call<TrialApplication[]>('GET', `/trial-applications${status ? `?status=${status}` : ''}`),
+  setTrialStatus: (id: string, status: 'pending' | 'rejected') => plat.call<void>('PATCH', `/trial-applications/${id}`, { status }),
+  approveTrial: (id: string) => plat.call<{ agencyId: string; mailFailed: boolean }>('POST', `/trial-applications/${id}/approve`, {}),
+  convertTrial: (id: string) => plat.call<void>('POST', `/agencies/${id}/convert-trial`, {}),
+  settings: () => plat.call<{ trialAutoApprove: boolean }>('GET', '/settings'),
+  saveSettings: (v: { trialAutoApprove: boolean }) => plat.call<void>('PUT', '/settings', v),
 };
+
+export interface TrialApplication {
+  id: string;
+  agencyName: string;
+  code: string;
+  taxId: string | null;
+  contactName: string;
+  phone: string;
+  email: string;
+  expectedSize: string;
+  note: string | null;
+  status: 'unverified' | 'pending' | 'approved' | 'rejected' | 'expired';
+  createdAt: string;
+  verifiedAt: string | null;
+  agencyId: string | null;
+  handledAt: string | null;
+  handledByName: string | null;
+  codeTaken: boolean;
+}

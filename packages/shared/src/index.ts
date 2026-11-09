@@ -101,6 +101,7 @@ export const ERROR_CODES = [
   'DUPLICATE_EMPLOYEE_NO', 'EMPLOYEE_NO_LOCKED', 'EMPLOYEE_HAS_REGISTRATION', 'CSV_BAD_HEADER', 'CSV_TOO_MANY_ROWS',
   'PUBLISH_BLOCKED', 'PUBLISH_REQUIREMENT', 'INVALID_FILE', 'FILE_TOO_LARGE',
   'LINE_NOT_AVAILABLE', 'LINE_TOKEN_INVALID', 'LINE_NOT_BOUND', 'LINE_ACCOUNT_IN_USE', 'EMPLOYEE_LINE_BOUND',
+  'TOO_MANY_REQUESTS', 'CODE_UNAVAILABLE', 'DEMO_UNAVAILABLE', 'TAX_ID_USED', 'TRIAL_EXPIRED', 'TRIAL_MAIL_LIMIT',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
@@ -316,7 +317,7 @@ export const orderRequest = z.object({ ids: z.array(z.string().uuid()).min(1).ma
 
 // ===== 活動設定 =====
 
-const eventSlug = z.string().trim().toLowerCase().min(2).max(50).regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/).refine((v) => !['admin', 'company', 'platform', 'api', 'line'].includes(v));
+const eventSlug = z.string().trim().toLowerCase().min(2).max(50).regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/).refine((v) => !['admin', 'company', 'platform', 'api', 'line', 'try'].includes(v));
 const eventName = z.string().trim().min(1).max(100);
 const optionalText = (max: number) => z.string().trim().max(max).nullable().transform((v) => v || null);
 const isoDateTime = z.string().datetime({ offset: true }).nullable();
@@ -430,7 +431,75 @@ export const exportTemplateInput = z.object({
 export type ExportTemplateInput = z.infer<typeof exportTemplateInput>;
 
 /** 這些代碼會和系統網址衝突，不能當旅行社代號。 */
-export const RESERVED_AGENCY_CODES = ['www', 'admin', 'api', 'platform', 'app', 'mail', 'static', 'assets', 'help', 'support', 'status'];
+/**
+ * 旅行社代號是網址路徑第一段（平台網域/{代號}/...），不能和平台本身的頁面撞名。
+ * 新增平台頁面（例如 /pricing）前，先確認沒有旅行社用了那個代號，再加進這裡。
+ */
+export const RESERVED_AGENCY_CODES = [
+  'www', 'admin', 'api', 'platform', 'app', 'mail', 'static', 'assets', 'help', 'support', 'status', 'demo',
+  'try', 'site', 'login', 'logout', 'signup', 'register', 'account', 'company', 'pricing', 'about', 'contact',
+  'privacy', 'terms', 'blog', 'docs', 'news', 'robots', 'sitemap', 'favicon', 'icon', 'bigtour', 'bookdex', 'activate',
+];
+
+/** 公開試玩報名使用的旅行社代號，網址為 平台網域/demo/活動代號。 */
+export const DEMO_AGENCY_CODE = 'demo';
+export const AGENCY_CODE_PATTERN = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
+
+export type CodeCheck = { available: true } | { available: false; reason: 'format' | 'reserved' | 'taken' };
+export function agencyCodeFormat(code: string): CodeCheck {
+  if (!AGENCY_CODE_PATTERN.test(code)) return { available: false, reason: 'format' };
+  if (RESERVED_AGENCY_CODES.includes(code)) return { available: false, reason: 'reserved' };
+  return { available: true };
+}
+
+export const TRIAL_SIZES = ['100 人以下', '100～500 人', '500～1,000 人', '1,000 人以上'] as const;
+
+/** 自助試用的條件（PRD 15.3）。 */
+export const TRIAL_LIMITS = {
+  /** 開通當天算第 1 天 */
+  days: 30,
+  events: 1,
+  maxTravelers: 40,
+  mailTotal: 100,
+  mailPerDay: 40,
+  /** 驗證信連結有效時間 */
+  verifyHours: 24,
+  /** 到期後保留資料的天數，之後整間旅行社刪除 */
+  retainDays: 30,
+} as const;
+
+/**
+ * 營利事業統一編號檢查碼：各位數乘上 1,2,1,2,1,2,4,1，乘積的十位與個位相加後加總，可被 5 整除即正確；
+ * 第 7 位是 7 時，加總加 1 後可被 5 整除也正確。（財政部 2023 年起由「被 10 整除」放寬為「被 5 整除」）
+ */
+export function isValidTaxId(id: string): boolean {
+  if (!/^\d{8}$/.test(id)) return false;
+  const weights = [1, 2, 1, 2, 1, 2, 4, 1];
+  const sum = weights.reduce((acc, w, i) => {
+    const p = Number(id[i]) * w;
+    return acc + Math.floor(p / 10) + (p % 10);
+  }, 0);
+  return sum % 5 === 0 || (id[6] === '7' && (sum + 1) % 5 === 0);
+}
+
+/** 官網的試用申請。website 是給機器人的陷阱欄位，真人看不到也不會填。 */
+export const trialApplicationInput = z.object({
+  agencyName: z.string().trim().min(1).max(100),
+  code: z.string().trim().toLowerCase().regex(AGENCY_CODE_PATTERN).refine((c) => !RESERVED_AGENCY_CODES.includes(c)),
+  contactName: z.string().trim().min(1).max(100),
+  phone: z.string().trim().min(6).max(30).regex(/^[0-9+\-()# ]+$/),
+  email: z.string().trim().toLowerCase().email().max(254),
+  taxId: z.string().trim().refine(isValidTaxId),
+  expectedSize: z.enum(TRIAL_SIZES),
+  note: z.string().trim().max(1000).optional().default(''),
+  consent: z.literal(true),
+  website: z.string().max(200).optional().default(''),
+});
+export type TrialApplicationInput = z.infer<typeof trialApplicationInput>;
+/** 平台人員處理申請：退回或重新開放；核准開通另有 API。 */
+export const trialStatusInput = z.object({ status: z.enum(['pending', 'rejected']) });
+export const trialActivateInput = z.object({ password: passwordRule });
+export const platformSettingsInput = z.object({ trialAutoApprove: z.boolean() });
 export const platformLoginRequest = z.object({ email: z.string().trim().min(1).max(200), password: z.string().min(1).max(128) });
 const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 export const contractInput = z.object({
@@ -441,7 +510,7 @@ export const contractInput = z.object({
 export type ContractInput = z.infer<typeof contractInput>;
 export const agencyCreateInput = z.object({
   name: z.string().trim().min(1).max(100),
-  code: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/).refine((c) => !RESERVED_AGENCY_CODES.includes(c)),
+  code: z.string().trim().regex(AGENCY_CODE_PATTERN).refine((c) => !RESERVED_AGENCY_CODES.includes(c)),
   adminName: z.string().trim().min(1).max(100),
   adminEmail: z.string().trim().toLowerCase().email().max(254),
   planNote: z.string().trim().min(1).max(200),

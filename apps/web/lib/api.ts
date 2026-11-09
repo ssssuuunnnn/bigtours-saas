@@ -1,3 +1,5 @@
+import { agencyApi } from './agency-path';
+
 export class ApiError extends Error {
   constructor(public status: number, public code: string, public detail: any) {
     super(code);
@@ -80,9 +82,9 @@ export interface PasswordLink {
   employee: { name: string };
 }
 
-export function createClient(slug: string) {
+export function createClient(agency: string, slug: string) {
   const call = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
-    const res = await fetch(`/api/v1/public/events/${encodeURIComponent(slug)}${path}`, {
+    const res = await fetch(agencyApi(agency, `/public/events/${encodeURIComponent(slug)}${path}`), {
       method,
       headers: body ? { 'content-type': 'application/json' } : {},
       body: body ? JSON.stringify(body) : undefined,
@@ -117,14 +119,14 @@ export function createClient(slug: string) {
 
 /** LINE 登入：旅行社層級，不屬於單一活動。 */
 export const lineApi = {
-  async config(): Promise<{ liffId: string; agencyName: string }> {
-    const res = await fetch('/api/v1/public/line/config');
+  async config(agency: string): Promise<{ liffId: string; agencyName: string }> {
+    const res = await fetch(agencyApi(agency, '/public/line/config'));
     const data = await res.json().catch(() => null);
     if (!res.ok) throw new ApiError(res.status, data?.code ?? 'fallback', data?.detail);
     return data;
   },
-  async events(idToken: string): Promise<{ slug: string; name: string; companyName: string }[]> {
-    const res = await fetch('/api/v1/public/line/events', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ idToken }) });
+  async events(agency: string, idToken: string): Promise<{ slug: string; name: string; companyName: string }[]> {
+    const res = await fetch(agencyApi(agency, '/public/line/events'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ idToken }) });
     const data = await res.json().catch(() => null);
     if (!res.ok) throw new ApiError(res.status, data?.code ?? 'fallback', data?.detail);
     return data;

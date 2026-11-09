@@ -875,6 +875,8 @@ export const a = {
   errors: {
     TIER_NOT_HIGHER: '只能升級到比目前更高的級距。',
     CONTRACT_EXPIRED: '合約已到期，不能建立新活動，請聯繫平台。',
+    TRIAL_EXPIRED: '免費試用已到期，後台只能查看與匯出。想繼續使用請聯絡我們。',
+    TRIAL_MAIL_LIMIT: '已達試用期間的寄信上限（總共 100 封、每天 40 封），請明天再寄，或聯絡我們轉為正式方案。',
     LAST_ADMIN: '旅行社至少要保留一位啟用中的管理員。',
     CANNOT_CHANGE_SELF: '不能變更自己的帳號，請請其他管理員協助。',
     EMAIL_TAKEN: '這個 Email 已被旅行社人員或其他窗口使用。',

@@ -1,0 +1,58 @@
+# 每個 PR 與 main 的 push：型別檢查、整合測試（真的 PostgreSQL）與前端建置。
+# main 的 CI 通過後，Deploy workflow 會自動部署。
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: bigtours
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bigtours"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      # 只供測試使用的值
+      DATABASE_ADMIN_URL: postgres://postgres:postgres@localhost:5432/bigtours
+      DATABASE_URL: postgres://bigtours_app:bigtours_app@localhost:5432/bigtours
+      PLATFORM_DOMAIN: localhost:3000
+      DATA_ENCRYPTION_KEY: ZGV2LW9ubHkta2V5LWRvLW5vdC11c2UtaW4tcHJvZCE=
+      TOKEN_HASH_KEY: ci-only-token-hash-key
+      WEB_BASE_URL: http://localhost:3000/{agency}
+      STORAGE_DIR: /tmp/bigtours-storage
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: 型別檢查
+        run: pnpm -r typecheck
+      - name: 建立資料表
+        run: pnpm exec tsx db/migrate.ts
+      - name: 測試
+        run: pnpm --filter @bigtours/shared --filter @bigtours/api test
+      - name: 前端建置
+        run: pnpm --filter @bigtours/web build
+        env:
+          NODE_ENV: production

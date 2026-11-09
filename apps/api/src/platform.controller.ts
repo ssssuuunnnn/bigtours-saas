@@ -1,22 +1,25 @@
-import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Query, Res } from '@nestjs/common';
-import { agencyCreateInput, agencyStatusRequest, contractInput, platformLoginRequest, quotaAdjustInput } from '@bigtours/shared';
+import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Put, Query, Res } from '@nestjs/common';
+import { agencyCreateInput, agencyStatusRequest, contractInput, platformLoginRequest, platformSettingsInput, quotaAdjustInput, trialStatusInput } from '@bigtours/shared';
 import type { Response } from 'express';
 import { DomainError } from './errors.ts';
-import { assertSameOrigin, cookieValue, requestHost, type RequestHeaders } from './http.ts';
+import { assertSameOrigin, cookieValue, type RequestHeaders } from './http.ts';
 import { parse } from './parse.ts';
 import { PlatformService } from './platform.service.ts';
+import { SiteService } from './site.service.ts';
 
 const COOKIE = 'bt_platform_session';
 const cookieOptions = () => ({ httpOnly: true, sameSite: 'lax' as const, secure: process.env.NODE_ENV === 'production', path: '/api/v1/platform' });
 
-/** 平台後台：只接受 platform.平台網域，帳號與 Cookie 都和旅行社分開。 */
+/** 平台後台（/platform）：帳號與 Cookie 都和旅行社分開。 */
 @Controller('api/v1/platform')
 export class PlatformController {
-  constructor(@Inject(PlatformService) private readonly platform: PlatformService) {}
+  constructor(
+    @Inject(PlatformService) private readonly platform: PlatformService,
+    @Inject(SiteService) private readonly site: SiteService,
+  ) {}
 
   private guard(h: RequestHeaders) {
     assertSameOrigin(h);
-    this.platform.assertHost(requestHost(h));
   }
 
   private ctx(h: RequestHeaders) {
@@ -93,6 +96,44 @@ export class PlatformController {
   async adminLink(@Headers() h: RequestHeaders, @Param('id') id: string) {
     await this.ctx(h);
     await this.platform.sendAdminLink(id);
+  }
+
+  @Get('trial-applications')
+  async trialApplications(@Headers() h: RequestHeaders, @Query('status') status?: string) {
+    await this.ctx(h);
+    return this.site.listApplications(status);
+  }
+
+  @Patch('trial-applications/:id')
+  @HttpCode(204)
+  async trialStatus(@Headers() h: RequestHeaders, @Param('id') id: string, @Body() body: unknown) {
+    const ctx = await this.ctx(h);
+    await this.site.setStatus(ctx.user.id, id, parse(trialStatusInput, body).status);
+  }
+
+  @Post('trial-applications/:id/approve')
+  async approveTrial(@Headers() h: RequestHeaders, @Param('id') id: string) {
+    const ctx = await this.ctx(h);
+    return this.site.approve(ctx.user.id, id);
+  }
+
+  @Post('agencies/:id/convert-trial')
+  @HttpCode(204)
+  async convertTrial(@Headers() h: RequestHeaders, @Param('id') id: string) {
+    await this.platform.convertTrial(await this.ctx(h), id);
+  }
+
+  @Get('settings')
+  async settings(@Headers() h: RequestHeaders) {
+    await this.ctx(h);
+    return { trialAutoApprove: await this.site.autoApprove() };
+  }
+
+  @Put('settings')
+  @HttpCode(204)
+  async saveSettings(@Headers() h: RequestHeaders, @Body() body: unknown) {
+    const ctx = await this.ctx(h);
+    await this.site.setAutoApprove(ctx.user.id, parse(platformSettingsInput, body).trialAutoApprove);
   }
 
   @Get('usage')

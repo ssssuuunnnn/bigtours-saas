@@ -191,6 +191,9 @@ a.primary-link { display: flex; align-items: center; justify-content: center; mi
   .admin-nav { flex: none; overflow-y: visible; }
 }
 .admin-login { min-height: 100dvh; display: grid; place-items: center; padding: 16px; }
+.activate-summary { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0; }
+.activate-summary dt { color: var(--muted, #6b6b6b); }
+.activate-summary dd { margin: 0; overflow-wrap: anywhere; }
 .admin-login form { width: min(100%, 400px); }
 .admin-login h1 { font-size: 22px; }
 .admin-main { width: 100%; max-width: 1080px; margin: 0 auto; padding: 24px; display: grid; gap: 16px; align-content: start; }
@@ -343,6 +346,8 @@ fieldset.admin-card { margin: 0; border: 0; min-width: 0; }
 .admin-quota strong { font-size: 20px; }
 .admin-tiers { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; align-items: start; }
 .admin-table a { color: var(--brand); }
+.admin-table a.primary-link { color: var(--on-brand); }
+.admin-filter { display: flex; flex-wrap: wrap; gap: 8px; }
 .admin-days { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto; gap: 8px; align-items: center; }
 .admin-days input { width: 100%; }
 .admin-color { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
@@ -479,3 +484,11 @@ fieldset.admin-card { margin: 0; border: 0; min-width: 0; }
 /* 自選行程的舉辦日期與共用名額標示 */
 .group legend small.group-date { display: block; margin: 2px 0 0; color: var(--brand-text); font-weight: 700; }
 .choice-side .shared-quota { font-size: 12px; }
+
+/* 試用提示（旅行社後台與企業窗口） */
+.admin-content { min-width: 0; display: flex; flex-direction: column; }
+.trial-banner { margin: 0; padding: 10px 24px; font-size: 14px; background: var(--paper); color: var(--ink); border-bottom: 1px solid var(--line); border-left: 4px solid var(--brand); }
+.trial-banner.expired { border-left-color: var(--flap); background: #fff8e6; }
+.admin-check { display: flex; gap: 10px; align-items: flex-start; }
+.admin-check input { margin-top: 6px; }
+.admin-badge { display: inline-block; margin-left: 6px; padding: 0 8px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--flap); color: var(--ink); vertical-align: middle; }

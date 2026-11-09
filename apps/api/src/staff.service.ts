@@ -1,3 +1,4 @@
+import { agencyApiPrefix } from './agency-path.ts';
 import { randomBytes } from 'node:crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { lineUrl, type LineSettingsInput } from '@bigtours/shared';
@@ -8,11 +9,12 @@ import { DatabaseService, type Tx } from './database.service.ts';
 import { EncryptionService } from './encryption.service.ts';
 import { DomainError } from './errors.ts';
 import { MailService } from './mail.service.ts';
+import { TrialLimitsService } from './trial-limits.service.ts';
 import { imageContentType, imageExtension, StorageService } from './storage.service.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LINK_DAYS = 14;
-const siteBase = (code: string) => (process.env.WEB_BASE_URL ?? 'http://{agency}.lvh.me:3000').replace('{agency}', code);
+const siteBase = (code: string) => (process.env.WEB_BASE_URL ?? 'http://localhost:3000/{agency}').replace('{agency}', code);
 const ROLE_NAME: Record<string, string> = { admin: '管理員', event_operator: '活動操作員', operations: '營運人員' };
 
 /** 平台開第一位管理員時也走這裡，actorId 是 null。 */
@@ -28,6 +30,7 @@ export class StaffService {
     @Inject(AccessService) private readonly access: AccessService,
     @Inject(MailService) private readonly mail: MailService,
     @Inject(StorageService) private readonly storage: StorageService,
+    @Inject(TrialLimitsService) private readonly trials: TrialLimitsService,
   ) {}
 
   list(ctx: AgencyUserContext) {
@@ -59,6 +62,8 @@ export class StaffService {
   /** 邀請或重設連結，舊連結立即失效。寄信失敗要讓操作者知道，所以等寄完才回應。 */
   async sendLink({ agencyId, userId, actorId }: StaffInvite) {
     if (!UUID.test(userId)) throw new DomainError('NOT_FOUND');
+    // 平台寄的開通信不算在試用的寄信數量裡
+    if (actorId) await this.trials.consumeMail(agencyId);
     const token = generateToken();
     const u = await this.db.withTenant(agencyId, async (tx) => {
       const { rows } = await tx.query(
@@ -144,8 +149,8 @@ export class StaffService {
 
   // ===== 設定密碼 =====
 
-  async lookupLink(host: string | undefined, token: string) {
-    const agency = await this.access.findAgency(host);
+  async lookupLink(agencyCode: string | undefined, token: string) {
+    const agency = await this.access.findAgency(agencyCode);
     const row = await this.db.withTenant(agency.id, async (tx) => (await tx.query(
       `SELECT u.name FROM agency_user_links l JOIN agency_users u ON u.id = l.agency_user_id
         WHERE l.token_hash = $1 AND l.used_at IS NULL AND l.revoked_at IS NULL AND l.expires_at > now() AND u.status = 'active'`,
@@ -155,8 +160,8 @@ export class StaffService {
     return { name: row.name as string, agencyName: agency.name };
   }
 
-  async setPassword(host: string | undefined, token: string, password: string) {
-    const agency = await this.access.findAgency(host);
+  async setPassword(agencyCode: string | undefined, token: string, password: string) {
+    const agency = await this.access.findAgency(agencyCode);
     const passwordHash = await hashPassword(password);
     await this.db.withTenant(agency.id, async (tx) => {
       const used = await tx.query(
@@ -175,10 +180,10 @@ export class StaffService {
 
   // ===== 旅行社設定 =====
 
-  async settings(host: string | undefined) {
-    const agency = await this.access.findAgency(host);
+  async settings(agencyCode: string | undefined) {
+    const agency = await this.access.findAgency(agencyCode);
     return {
-      name: agency.name, code: agency.code, logoUrl: agency.logoObjectKey ? `/api/v1/agency/branding/logo?v=${agency.logoObjectKey.split('/').pop()}` : null,
+      name: agency.name, code: agency.code, logoUrl: agency.logoObjectKey ? `${agencyApiPrefix(agency.code)}/agency/branding/logo?v=${agency.logoObjectKey.split('/').pop()}` : null,
       line: {
         channelId: agency.line?.channelId ?? null,
         liffId: agency.line?.liffId ?? null,
@@ -227,13 +232,13 @@ export class StaffService {
   }
 
   /** 登入頁在登入前就要顯示。 */
-  async branding(host: string | undefined) {
-    const agency = await this.access.findAgency(host);
-    return { name: agency.name, logoUrl: agency.logoObjectKey ? `/api/v1/agency/branding/logo?v=${agency.logoObjectKey.split('/').pop()}` : null };
+  async branding(agencyCode: string | undefined) {
+    const agency = await this.access.findAgency(agencyCode);
+    return { name: agency.name, logoUrl: agency.logoObjectKey ? `${agencyApiPrefix(agency.code)}/agency/branding/logo?v=${agency.logoObjectKey.split('/').pop()}` : null };
   }
 
-  async readLogo(host: string | undefined) {
-    const agency = await this.access.findAgency(host);
+  async readLogo(agencyCode: string | undefined) {
+    const agency = await this.access.findAgency(agencyCode);
     if (!agency.logoObjectKey) throw new DomainError('NOT_FOUND');
     return { contentType: imageContentType(agency.logoObjectKey), content: await this.storage.get(agency.logoObjectKey) };
   }

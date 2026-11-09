@@ -20,7 +20,7 @@ export function modifiedFees(reg: ModifiableRegistration, next: { key: string; t
   return { total, subsidyApplied: Math.min(total, reg.subsidyAmount), selfPay: Math.max(total - reg.subsidyAmount, 0), diff: total - reg.totalAmount };
 }
 
-/** crypto.randomUUID 只能在 HTTPS 使用；本機以 http://*.lvh.me 開發時改用 getRandomValues。 */
+/** crypto.randomUUID 只能在 HTTPS 使用；以 http:// 存取（非 localhost）時改用 getRandomValues。 */
 export function uuid(): string {
   const b = crypto.getRandomValues(new Uint8Array(16));
   b[6] = (b[6]! & 0x0f) | 0x40;

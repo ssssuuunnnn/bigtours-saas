@@ -33,12 +33,6 @@ export class PlatformService {
     @Inject(StaffService) private readonly staff: StaffService,
   ) {}
 
-  /** 只有 platform.平台網域 能使用，其他網址一律視為不存在。 */
-  assertHost(host: string | undefined) {
-    const hostname = (host ?? '').split(',')[0]!.trim().split(':')[0]!.toLowerCase();
-    if (hostname !== `platform.${process.env.PLATFORM_DOMAIN}`) throw new DomainError('NOT_FOUND');
-  }
-
   async login(email: string, password: string) {
     const { rows } = await this.db.pool.query(`SELECT id, password_hash, locked_until > now() AS locked FROM platform_users WHERE email = $1 AND status = 'active'`, [email]);
     const user = rows[0] as { id: string; password_hash: string; locked: boolean | null } | undefined;
@@ -120,7 +114,7 @@ export class PlatformService {
       const quota = await this.quotaRows(tx);
       const owner = await this.adminRow(tx);
       return {
-        id: a.id, name: a.name, code: a.code,
+        id: a.id, name: a.name, code: a.code, isTrial: a.is_trial,
         contractStartsOn: dayValue(a.contract_starts_on), contractEndsOn: dayValue(a.contract_ends_on),
         state: this.contractState(a, !owner?.activated),
         opened: quota.reduce((n, q) => n + q.opened, 0),
@@ -153,6 +147,7 @@ export class PlatformService {
     const nameOf = new Map(names.rows.map((u) => [u.id, u.name]));
     return {
       id: a.id, name: a.name, code: a.code, state: this.contractState(a, !inner.owner?.activated), suspended: a.status === 'suspended',
+      isTrial: a.is_trial, taxId: a.tax_id,
       planNote: a.plan_note, contractStartsOn: dayValue(a.contract_starts_on), contractEndsOn: dayValue(a.contract_ends_on),
       admin: inner.owner ? { id: inner.owner.id, name: inner.owner.name, email: inner.owner.email, activated: inner.owner.activated } : null,
       quota: inner.quota,
@@ -202,7 +197,12 @@ export class PlatformService {
   async updateContract(ctx: PlatformContext, agencyId: string, input: ContractInput) {
     await this.assertAgency(agencyId);
     await this.db.withTenant(agencyId, async (tx) => {
-      await tx.query(`UPDATE agencies SET plan_note = $2, contract_starts_on = $3, contract_ends_on = $4, updated_at = now() WHERE id = $1`, [agencyId, input.planNote, input.contractStartsOn, input.contractEndsOn]);
+      // 試用延長時重新寄到期提醒
+      await tx.query(
+        `UPDATE agencies SET plan_note = $2, contract_starts_on = $3, contract_ends_on = $4,
+                trial_notice_level = CASE WHEN $4::date > contract_ends_on THEN 0 ELSE trial_notice_level END, updated_at = now() WHERE id = $1`,
+        [agencyId, input.planNote, input.contractStartsOn, input.contractEndsOn],
+      );
       await this.audit(tx, agencyId, ctx, 'platform.contract_updated', input);
     });
   }
@@ -220,6 +220,15 @@ export class PlatformService {
         `INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason, note, created_by) VALUES ($1, $2, $3, 'adjustment', $4, $5)`,
         [agencyId, input.tierId, input.change, input.note, ctx.user.id],
       );
+    });
+  }
+
+  /** 試用轉正式：不再受試用限制（寄信數量、到期唯讀與刪除）。方案、合約日期與額度另外調整。 */
+  async convertTrial(ctx: PlatformContext, agencyId: string) {
+    await this.assertAgency(agencyId);
+    await this.db.withTenant(agencyId, async (tx) => {
+      const { rowCount } = await tx.query(`UPDATE agencies SET is_trial = false, updated_at = now() WHERE id = $1 AND is_trial`, [agencyId]);
+      if (rowCount) await this.audit(tx, agencyId, ctx, 'platform.trial_converted', {});
     });
   }
 

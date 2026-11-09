@@ -2,12 +2,8 @@ import type { NextConfig } from 'next';
 
 const config: NextConfig = {
   transpilePackages: ['@bigtours/shared'],
-  allowedDevOrigins: ['*.lvh.me'],
   agentRules: false,
   devIndicators: false,
-  async redirects() {
-    return [{ source: '/', has: [{ type: 'host', value: 'platform\\..*' }], destination: '/platform', permanent: false }];
-  },
   async rewrites() {
     return [{ source: '/api/:path*', destination: `${process.env.API_URL ?? 'http://localhost:4000'}/api/:path*` }];
   },
@@ -15,7 +11,17 @@ const config: NextConfig = {
     return [
       {
         // 設定密碼連結放在網址中，Referer 只送網域，不含路徑；也不可被搜尋引擎收錄
-        source: '/:slug/set-password/:token',
+        // /{代號}/{活動}/set-password/…、/{代號}/admin/set-password/…、/{代號}/company/set-password/…
+        source: '/:agency/:section/set-password/:token',
+        headers: [
+          { key: 'Referrer-Policy', value: 'strict-origin' },
+          { key: 'X-Robots-Tag', value: 'noindex, nofollow' },
+          { key: 'Cache-Control', value: 'no-store' },
+        ],
+      },
+      {
+        // 試用開通連結，同上
+        source: '/activate/:token',
         headers: [
           { key: 'Referrer-Policy', value: 'strict-origin' },
           { key: 'X-Robots-Tag', value: 'noindex, nofollow' },

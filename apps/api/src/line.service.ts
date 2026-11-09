@@ -54,15 +54,15 @@ export class LineService {
     return this.encryption.hashToken(`line:${agency.line.channelId}:${sub}`);
   }
 
-  private async lineAgency(host: string | undefined) {
-    const agency = await this.access.findAgency(host);
+  private async lineAgency(agencyCode: string | undefined) {
+    const agency = await this.access.findAgency(agencyCode);
     if (!agency.line) throw new DomainError('LINE_NOT_AVAILABLE');
     return agency as AgencyInfo & { line: NonNullable<AgencyInfo['line']> };
   }
 
   /** 活動要開啟 LINE 入口；活動頁關閉時與一般登入一樣不能進入。 */
-  private async lineEvent(host: string | undefined, slug: string) {
-    const agency = await this.lineAgency(host);
+  private async lineEvent(agencyCode: string | undefined, slug: string) {
+    const agency = await this.lineAgency(agencyCode);
     const event = await this.access.findEvent(agency.id, slug);
     if (!event.lineEnabled) throw new DomainError('LINE_NOT_AVAILABLE');
     if (event.pageState !== 'open') throw new DomainError('PAGE_CLOSED', { pageState: event.pageState });
@@ -70,14 +70,14 @@ export class LineService {
   }
 
   /** LIFF 頁面初始化用，不需登入。 */
-  async config(host: string | undefined) {
-    const agency = await this.lineAgency(host);
+  async config(agencyCode: string | undefined) {
+    const agency = await this.lineAgency(agencyCode);
     return { liffId: agency.line.liffId, agencyName: agency.name };
   }
 
   /** 旅行社共用連結：列出這個 LINE 帳號已綁定、且活動頁開啟中的活動。 */
-  async boundEvents(host: string | undefined, idToken: string) {
-    const agency = await this.lineAgency(host);
+  async boundEvents(agencyCode: string | undefined, idToken: string) {
+    const agency = await this.lineAgency(agencyCode);
     const sub = await this.verifier.verify(agency.line.channelId, idToken);
     const rows = await this.db.withTenant(agency.id, async (tx) => (await tx.query(
       `SELECT e.slug, e.name, e.page_mode, e.page_is_open, e.page_opens_at, e.page_closes_at, c.name AS company_name
@@ -92,8 +92,8 @@ export class LineService {
   }
 
   /** 已綁定時直接登入；沒綁定時回傳 LINE_NOT_BOUND，由前台改顯示綁定表單。 */
-  async login(host: string | undefined, slug: string, idToken: string) {
-    const { agency, event } = await this.lineEvent(host, slug);
+  async login(agencyCode: string | undefined, slug: string, idToken: string) {
+    const { agency, event } = await this.lineEvent(agencyCode, slug);
     const sub = await this.verifier.verify(agency.line.channelId, idToken);
     const employeeId = await this.db.withTenant(agency.id, async (tx) => (await tx.query(
       `SELECT id FROM event_employees WHERE event_id = $1 AND line_user_hash = $2 AND status = 'active'`,
@@ -107,8 +107,8 @@ export class LineService {
    * 以員工編號＋密碼綁定並登入。先驗證密碼，密碼正確才說明綁定衝突，避免透露其他員工的綁定狀態。
    * 一對一：同一活動中一個 LINE 帳號只綁一位員工，一位員工只綁一個 LINE 帳號。
    */
-  async bind(host: string | undefined, slug: string, idToken: string, employeeNo: string, password: string) {
-    const { agency, event } = await this.lineEvent(host, slug);
+  async bind(agencyCode: string | undefined, slug: string, idToken: string, employeeNo: string, password: string) {
+    const { agency, event } = await this.lineEvent(agencyCode, slug);
     const sub = await this.verifier.verify(agency.line.channelId, idToken);
     const employeeId = await this.accounts.authenticate(agency.id, event.id, employeeNo, password);
     const hash = this.hash(agency, sub);

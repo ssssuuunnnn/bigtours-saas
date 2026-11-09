@@ -16,7 +16,7 @@ export const inLineApp = () => typeof navigator !== 'undefined' && /\bLine\//i.t
 
 /**
  * LINE 連結在 LINE 以外開啟時，liff.line.me 會轉到 Endpoint 並把原本的路徑放在 liff.state，
- * 例如 /line?liff.state=%2Facme-2027。取出第一段當活動代碼。
+ * 例如 /{旅行社代號}/line?liff.state=%2Facme-2027。取出第一段當活動代碼。
  */
 export function slugFromLiffState(search: string): string | null {
   const state = new URLSearchParams(search).get('liff.state');

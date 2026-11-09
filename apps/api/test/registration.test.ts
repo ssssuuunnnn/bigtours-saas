@@ -5,6 +5,7 @@ import { generateToken, hashToken } from '@bigtours/shared/crypto';
 import pg from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { configureApp } from '../src/agency-path.ts';
 import { AppModule } from '../src/app.module.ts';
 import { MailService } from '../src/mail.service.ts';
 import { RegistrationService } from '../src/registration.service.ts';
@@ -18,7 +19,6 @@ interface Fixture {
   agencyId: string;
   code: string;
   slug: string;
-  host: string;
   sessionId: string;
   sessionFull: string;
   selfType: string;
@@ -50,7 +50,7 @@ async function makeFixture(opts: { capacity?: number; optionCapacity?: number; a
   const freeOption = (await q1(`INSERT INTO options (agency_id, group_id, name, price) VALUES ($1, $2, '不限', 0) RETURNING id`, [agencyId, group])).id;
   const quotaId = (await q1(`WITH q AS (INSERT INTO option_quotas (agency_id, option_id, capacity) VALUES ($1, $2, $4) RETURNING id, agency_id, option_id) INSERT INTO option_quota_sessions (agency_id, quota_id, option_id, session_id) SELECT agency_id, id, option_id, $3 FROM q RETURNING quota_id AS id`, [agencyId, limitedOption, sessionId, opts.optionCapacity ?? 5])).id;
   await admin.query(`INSERT INTO event_fields (agency_id, event_id, field_key, label, field_type, is_required, is_sensitive) VALUES ($1, $2, 'nid', '身分證', 'national_id', true, true)`, [agencyId, event]);
-  return { agencyId, code, slug, host: `${code}.lvh.me`, sessionId, sessionFull, selfType, depType, limitedOption, freeOption, quotaId };
+  return { agencyId, code, slug, sessionId, sessionFull, selfType, depType, limitedOption, freeOption, quotaId };
 }
 
 async function makeEmployee(f: Fixture, o: { subsidy?: number | null; limit?: number | null } = {}) {
@@ -69,8 +69,8 @@ async function makeEmployee(f: Fixture, o: { subsidy?: number | null; limit?: nu
 }
 
 const call = (f: Fixture, token: string) => {
-  const base = `/api/v1/public/events/${f.slug}`;
-  const h = (r: request.Test) => r.set('x-forwarded-host', f.host).set('cookie', `bt_session=${token}`);
+  const base = `/api/v1/a/${f.code}/public/events/${f.slug}`;
+  const h = (r: request.Test) => r.set('cookie', `bt_session=${token}`);
   const http = request(app.getHttpServer());
   return {
     state: () => h(http.get(base)),
@@ -105,7 +105,7 @@ beforeAll(async () => {
   await admin.connect();
   tierId = (await q1(`INSERT INTO pricing_tiers (min_travelers, max_travelers, price_amount) VALUES (1, 5000, 500)
                       ON CONFLICT (min_travelers, max_travelers) DO UPDATE SET price_amount = EXCLUDED.price_amount RETURNING id`)).id;
-  app = await NestFactory.create(AppModule, { logger: false });
+  app = configureApp(await NestFactory.create(AppModule, { logger: false }));
   await app.init();
   await app.listen(0);
   service = app.get(RegistrationService);
@@ -178,8 +178,8 @@ describe('存取控制', () => {
     expect((await call(a, token).state()).status).toBe(200);
     expect((await call({ ...a, slug: 'other' }, token).state()).status).toBe(404);
     expect((await call(b, token).state()).status).toBe(401);
-    expect((await call({ ...a, host: 'unknown.lvh.me' }, token).state()).status).toBe(404);
-    expect((await call({ ...a, host: 'evil.example.com' }, token).state()).status).toBe(404);
+    expect((await call({ ...a, code: 'unknown' }, token).state()).status).toBe(404);
+    expect((await call({ ...a, code: 'BAD%2F..' }, token).state()).status).toBe(404);
   });
 
   it('登入狀態過期或被撤銷後需要重新登入', async () => {

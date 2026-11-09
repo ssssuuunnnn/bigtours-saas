@@ -1,3 +1,4 @@
+import { agencyApiPrefix } from './agency-path.ts';
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -36,12 +37,12 @@ export function companyLogoExtension(c: Buffer): string | null {
 const version = (key: string) => key.split('/').pop()!.split('.')[0]!;
 
 /** 員工前台用的圖片網址；首頁圖片沒上傳時沿用登入頁背景。 */
-export function publicCompanyLogo(slug: string, key: string | null) {
-  return key ? `/api/v1/public/events/${slug}/company-logo?v=${version(key)}` : null;
+export function publicCompanyLogo(agencyCode: string, slug: string, key: string | null) {
+  return key ? `${agencyApiPrefix(agencyCode)}/public/events/${slug}/company-logo?v=${version(key)}` : null;
 }
 
-export function publicImages(slug: string, images: EventImages) {
-  const url = (kind: ImageKind, key: string | null) => (key ? `/api/v1/public/events/${slug}/images/${kind}?v=${version(key)}` : null);
+export function publicImages(agencyCode: string, slug: string, images: EventImages) {
+  const url = (kind: ImageKind, key: string | null) => (key ? `${agencyApiPrefix(agencyCode)}/public/events/${slug}/images/${kind}?v=${version(key)}` : null);
   return {
     login: url('login', images.login),
     loginMobile: url('login-mobile', images['login-mobile']),
@@ -50,8 +51,8 @@ export function publicImages(slug: string, images: EventImages) {
 }
 
 /** 後台用的圖片網址，草稿活動也看得到。 */
-export function agencyImages(eventId: string, images: EventImages) {
-  const url = (kind: ImageKind, key: string | null) => (key ? `/api/v1/agency/events/${eventId}/images/${kind}?v=${version(key)}` : null);
+export function agencyImages(agencyCode: string, eventId: string, images: EventImages) {
+  const url = (kind: ImageKind, key: string | null) => (key ? `${agencyApiPrefix(agencyCode)}/agency/events/${eventId}/images/${kind}?v=${version(key)}` : null);
   return { login: url('login', images.login), loginMobile: url('login-mobile', images['login-mobile']), home: url('home', images.home) };
 }
 
@@ -83,5 +84,12 @@ export class StorageService {
 
   delete(key: string) {
     return rm(join(this.dir, key), { force: true });
+  }
+
+  /** 刪除整間旅行社上傳與匯出的檔案（檔名都以旅行社 ID 開頭）。 */
+  async removeAgency(agencyId: string) {
+    if (!/^[0-9a-f-]{36}$/i.test(agencyId)) throw new Error('旅行社 ID 格式錯誤');
+    await rm(join(this.dir, agencyId), { recursive: true, force: true });
+    await rm(join(this.dir, 'exports', agencyId), { recursive: true, force: true });
   }
 }
