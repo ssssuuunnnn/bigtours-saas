@@ -85,4 +85,11 @@ export class StorageService {
   delete(key: string) {
     return rm(join(this.dir, key), { force: true });
   }
+
+  /** 刪除整間旅行社上傳與匯出的檔案（檔名都以旅行社 ID 開頭）。 */
+  async removeAgency(agencyId: string) {
+    if (!/^[0-9a-f-]{36}$/i.test(agencyId)) throw new Error('旅行社 ID 格式錯誤');
+    await rm(join(this.dir, agencyId), { recursive: true, force: true });
+    await rm(join(this.dir, 'exports', agencyId), { recursive: true, force: true });
+  }
 }

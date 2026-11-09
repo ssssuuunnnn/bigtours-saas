@@ -1,14 +1,15 @@
 'use client';
 
-import { TRIAL_SIZES } from '@bigtours/shared';
+import { isValidTaxId, TRIAL_LIMITS, TRIAL_SIZES } from '@bigtours/shared';
 import { useEffect, useRef, useState } from 'react';
 
-type Values = { agencyName: string; code: string; contactName: string; phone: string; email: string; expectedSize: string; note: string; consent: boolean; website: string };
+type Values = { agencyName: string; code: string; taxId: string; contactName: string; phone: string; email: string; expectedSize: string; note: string; consent: boolean; website: string };
 type CodeHint = { tone: 'neutral' | 'ok' | 'bad'; text: string };
 
 const LABELS: Record<string, string> = {
   agencyName: '請填寫旅行社名稱',
   code: '網址只能用小寫英文、數字與連字號，3 到 30 個字',
+  taxId: '請填寫正確的 8 碼統一編號',
   contactName: '請填寫聯絡人姓名',
   phone: '請填寫正確的手機號碼',
   email: '請填寫正確的 Email',
@@ -23,7 +24,7 @@ const CODE_REASONS: Record<string, string> = {
 const DEFAULT_HINT: CodeHint = { tone: 'neutral', text: '小寫英文、數字與連字號；開通後不能更改' };
 
 export function TrialForm({ domain }: { domain: string }) {
-  const [v, setV] = useState<Values>({ agencyName: '', code: '', contactName: '', phone: '', email: '', expectedSize: TRIAL_SIZES[0], note: '', consent: false, website: '' });
+  const [v, setV] = useState<Values>({ agencyName: '', code: '', taxId: '', contactName: '', phone: '', email: '', expectedSize: TRIAL_SIZES[0], note: '', consent: false, website: '' });
   const [invalid, setInvalid] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -54,6 +55,7 @@ export function TrialForm({ domain }: { domain: string }) {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (v.taxId && !isValidTaxId(v.taxId)) { setInvalid(new Set(['taxId'])); setError('請修正標示的欄位後再送出。'); return; }
     setBusy(true); setError(null);
     try {
       const res = await fetch('/api/v1/site/trial-applications', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(v) });
@@ -65,6 +67,9 @@ export function TrialForm({ domain }: { domain: string }) {
       } else if (data?.code === 'CODE_UNAVAILABLE') {
         setInvalid(new Set(['code']));
         setError('這個網址已經有人使用或申請，請換一個。');
+      } else if (data?.code === 'TAX_ID_USED') {
+        setInvalid(new Set(['taxId']));
+        setError('這個統一編號已經申請過試用。每個統編只能試用一次，想繼續使用請直接聯絡我們。');
       } else if (data?.code === 'TOO_MANY_REQUESTS') {
         setError('送出次數太多，請一小時後再試，或直接用 LINE 聯絡我們。');
       } else {
@@ -81,8 +86,9 @@ export function TrialForm({ domain }: { domain: string }) {
     return (
       <div className="form">
         <div className="done" role="status">
-          <h3>已收到你的試用申請</h3>
-          <p style={{ color: '#6b6b6b' }}>確認信已寄到 {v.email}。我們確認資料後會開通 {domain}/{v.code}，並用 Email 通知你登入方式。</p>
+          <h3>請到信箱完成開通</h3>
+          <p style={{ color: '#6b6b6b' }}>我們已把開通連結寄到 {v.email}，請在 {TRIAL_LIMITS.verifyHours} 小時內點信中的連結設定密碼，就能開始使用 {domain}/{v.code}。</p>
+          <p style={{ color: '#6b6b6b' }}>沒收到信？請看看垃圾郵件匣；{TRIAL_LIMITS.verifyHours} 小時後連結失效，可以重新申請。</p>
         </div>
       </div>
     );
@@ -106,6 +112,12 @@ export function TrialForm({ domain }: { domain: string }) {
         </span>
         <span className={`hint ${hint.tone === 'neutral' ? '' : hint.tone}`} aria-live="polite">{hint.text}</span>
         {err('code')}
+      </label>
+      <label className="full">統一編號 <span className="req">*</span>
+        <input type="text" name="taxId" maxLength={8} required inputMode="numeric" autoComplete="off" value={v.taxId}
+          onChange={(e) => set('taxId', e.target.value.replace(/\D/g, '').slice(0, 8))} {...aria('taxId')} />
+        <span className="hint">每個統編可以免費試用一次</span>
+        {err('taxId')}
       </label>
       <label>聯絡人姓名 <span className="req">*</span>
         <input type="text" name="contactName" maxLength={100} required autoComplete="name" value={v.contactName} onChange={(e) => set('contactName', e.target.value)} {...aria('contactName')} />
@@ -133,7 +145,7 @@ export function TrialForm({ domain }: { domain: string }) {
         <span>我同意 Bookdex 使用以上資料聯絡我，並處理試用開通事宜。</span>
       </label>
       {err('consent')}
-      <button className="btn btn-dark btn-lg full" type="submit" disabled={busy}>{busy ? '送出中' : '送出試用申請'}</button>
+      <button className="btn btn-dark btn-lg full" type="submit" disabled={busy}>{busy ? '送出中' : '免費開通試用'}</button>
     </form>
   );
 }

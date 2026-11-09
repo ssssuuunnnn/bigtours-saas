@@ -45,6 +45,16 @@ SSL/TLS 加密模式沿用預約簿的 Full (strict)。
 
 5. **預約簿保留 `bigtour`**：在 gym_system 的 `RESERVED_SUBDOMAINS` 加上 `bigtour`，避免有店家申請到這個子網域（Origin Rule 會先把流量轉走，店家會開不了自己的網址）。
 
+### 1-1. 寄信：Amazon SES（ap-southeast-2）
+
+1. SES → Identities → Create identity → Domain：`bigtour.bookdex.cc`，Easy DKIM、RSA 2048。把產生的 3 筆 CNAME 加到 Cloudflare，**設為「僅 DNS」（灰色雲）**。
+2. Cloudflare 新增 TXT：名稱 `_dmarc.bigtour`，內容 `v=DMARC1; p=none; rua=mailto:<你的信箱>`。
+3. Account dashboard → Request production access（用途 Transactional：報名確認、密碼設定連結等系統通知）。核准前只能寄給已驗證的信箱。
+4. SMTP settings → Create SMTP credentials，記下使用者與密碼（只顯示一次）。
+5. 填進主機 `.env`：`SMTP_URL=smtps://<使用者>:<密碼>@email-smtp.ap-southeast-2.amazonaws.com:465`（密碼中的 `/`、`+`、`=` 寫成 `%2F`、`%2B`、`%3D`）、`MAIL_FROM=no-reply@bigtour.bookdex.cc`。
+
+試用旅行社的寄信數量有上限（總共 100 封、每天 40 封），避免自助試用被拿來大量寄信、影響 SES 的寄信信譽。
+
 ### 2. Lightsail 防火牆：開放 8443 給 Cloudflare
 
 在 Lightsail 主控台 → 主機 → 網路 → IPv4 防火牆，新增規則「自訂 TCP 8443」，來源限定為 [Cloudflare IP](https://www.cloudflare.com/ips-v4)（與預約簿 443 規則的來源相同）。

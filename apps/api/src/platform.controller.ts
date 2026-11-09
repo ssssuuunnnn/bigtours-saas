@@ -1,5 +1,5 @@
-import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Query, Res } from '@nestjs/common';
-import { agencyCreateInput, agencyStatusRequest, contractInput, platformLoginRequest, quotaAdjustInput, trialStatusInput } from '@bigtours/shared';
+import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Put, Query, Res } from '@nestjs/common';
+import { agencyCreateInput, agencyStatusRequest, contractInput, platformLoginRequest, platformSettingsInput, quotaAdjustInput, trialStatusInput } from '@bigtours/shared';
 import type { Response } from 'express';
 import { DomainError } from './errors.ts';
 import { assertSameOrigin, cookieValue, type RequestHeaders } from './http.ts';
@@ -109,6 +109,31 @@ export class PlatformController {
   async trialStatus(@Headers() h: RequestHeaders, @Param('id') id: string, @Body() body: unknown) {
     const ctx = await this.ctx(h);
     await this.site.setStatus(ctx.user.id, id, parse(trialStatusInput, body).status);
+  }
+
+  @Post('trial-applications/:id/approve')
+  async approveTrial(@Headers() h: RequestHeaders, @Param('id') id: string) {
+    const ctx = await this.ctx(h);
+    return this.site.approve(ctx.user.id, id);
+  }
+
+  @Post('agencies/:id/convert-trial')
+  @HttpCode(204)
+  async convertTrial(@Headers() h: RequestHeaders, @Param('id') id: string) {
+    await this.platform.convertTrial(await this.ctx(h), id);
+  }
+
+  @Get('settings')
+  async settings(@Headers() h: RequestHeaders) {
+    await this.ctx(h);
+    return { trialAutoApprove: await this.site.autoApprove() };
+  }
+
+  @Put('settings')
+  @HttpCode(204)
+  async saveSettings(@Headers() h: RequestHeaders, @Body() body: unknown) {
+    const ctx = await this.ctx(h);
+    await this.site.setAutoApprove(ctx.user.id, parse(platformSettingsInput, body).trialAutoApprove);
   }
 
   @Get('usage')

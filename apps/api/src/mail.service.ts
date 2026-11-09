@@ -19,7 +19,9 @@ export class MailService {
     const url = process.env.SMTP_URL;
     if (!url && process.env.NODE_ENV === 'production') throw new Error('缺少 SMTP_URL');
     this.transport = url ? nodemailer.createTransport(url) : null;
-    this.from = process.env.MAIL_FROM ?? 'no-reply@bigtours.example';
+    // 寄件者名稱由每封信決定；MAIL_FROM 寫成「名稱 <地址>」時只取地址
+    const from = process.env.MAIL_FROM ?? 'no-reply@bigtours.example';
+    this.from = /<([^>]+)>/.exec(from)?.[1]?.trim() ?? from.trim();
   }
 
   async send(mail: OutgoingMail) {

@@ -69,7 +69,8 @@ export class AccessService {
                 default_subsidy_amount, default_dependent_limit, allow_dependents_only, terms_version, terms_object_key, payment_instructions, hero_object_key, login_mobile_object_key, home_image_object_key,
                 page_mode, page_is_open, page_opens_at, page_closes_at, theme_color,
                 (SELECT c.name FROM companies c WHERE c.id = company_id) AS company_name,
-                (SELECT c.logo_object_key FROM companies c WHERE c.id = company_id) AS company_logo_key
+                (SELECT c.logo_object_key FROM companies c WHERE c.id = company_id) AS company_logo_key,
+                (SELECT a.is_trial AND a.contract_ends_on < (now() AT TIME ZONE 'Asia/Taipei')::date FROM agencies a WHERE a.id = agency_id) AS trial_expired
            FROM events WHERE slug = $1 AND status IN ('published', 'closed')`,
         [slug],
       );
@@ -94,7 +95,8 @@ export class AccessService {
       companyName: r.company_name,
       companyLogoKey: r.company_logo_key,
       images: { login: r.hero_object_key, 'login-mobile': r.login_mobile_object_key, home: r.home_image_object_key },
-      pageState: pageState({ mode: r.page_mode, isOpen: r.page_is_open, opensAt: r.page_opens_at, closesAt: r.page_closes_at }),
+      // 試用到期後員工報名頁一律關閉
+      pageState: r.trial_expired ? 'closed' : pageState({ mode: r.page_mode, isOpen: r.page_is_open, opensAt: r.page_opens_at, closesAt: r.page_closes_at }),
       pageOpensAt: r.page_mode === 'scheduled' ? r.page_opens_at : null,
     };
   }

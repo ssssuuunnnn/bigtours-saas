@@ -7,6 +7,7 @@ import { EncryptionService } from './encryption.service.ts';
 import { DomainError } from './errors.ts';
 import { ExportService } from './export.service.ts';
 import { MailService } from './mail.service.ts';
+import { TrialLimitsService } from './trial-limits.service.ts';
 import { RegistrationAdminService } from './registration-admin.service.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -37,6 +38,7 @@ export class ContactService {
     @Inject(EncryptionService) private readonly encryption: EncryptionService,
     @Inject(AccessService) private readonly access: AccessService,
     @Inject(MailService) private readonly mail: MailService,
+    @Inject(TrialLimitsService) private readonly trials: TrialLimitsService,
     @Inject(RegistrationAdminService) private readonly regs: RegistrationAdminService,
     @Inject(ExportService) private readonly exports: ExportService,
   ) {}
@@ -138,6 +140,7 @@ export class ContactService {
 
   /** 寄邀請或重設連結；舊連結立即失效。寄信失敗要讓操作者知道，所以等寄完才回應。 */
   async sendLink(ctx: AgencyUserContext, companyId: string, contactId: string) {
+    await this.trials.consumeMail(ctx.agencyId);
     const token = generateToken();
     const c = await this.db.withTenant(ctx.agencyId, async (tx) => {
       if (!UUID.test(contactId)) throw new DomainError('NOT_FOUND');

@@ -1,8 +1,10 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { DatabaseService, type Tx } from './database.service.ts';
+import type { DomainError } from './errors.ts';
 import { fill, templateDefinition } from './email-templates.ts';
 import { MailService } from './mail.service.ts';
+import { TrialLimitsService } from './trial-limits.service.ts';
 
 export type MailTemplate =
   | { key: 'account'; token: string }
@@ -79,6 +81,7 @@ export class NotificationService {
   constructor(
     @Inject(DatabaseService) private readonly db: DatabaseService,
     @Inject(MailService) private readonly mail: MailService,
+    @Inject(TrialLimitsService) private readonly trials: TrialLimitsService,
   ) {}
 
   async mailEvent(tx: Tx, eventId: string): Promise<MailEvent> {
@@ -108,6 +111,13 @@ export class NotificationService {
       );
       return { override: rows[0] ?? null, messageId: inserted.rows[0].id as string };
     });
+    try {
+      await this.trials.consumeMail(agencyId);
+    } catch (err) {
+      if ((err as DomainError).code !== 'TRIAL_MAIL_LIMIT') throw err;
+      await this.mark(agencyId, messageId, 'failed', '已達試用期間的寄信上限');
+      return;
+    }
     try {
       await this.mail.send(composeMail(event, employee, template, override));
       await this.mark(agencyId, messageId, 'sent', null);

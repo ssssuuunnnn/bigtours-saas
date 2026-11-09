@@ -10,7 +10,7 @@ export const AGENCY_TABLES = [
   'room_publications', 'agency_user_sessions', 'employee_sessions', 'employee_password_links', 'room_assignments', 'rooms', 'room_preferences',
   'registration_revisions', 'traveler_option_preferences', 'traveler_options', 'travelers', 'seat_hold_room_items', 'seat_hold_items', 'seat_holds', 'registration_drafts', 'registrations',
   'event_employees', 'event_fields', 'option_session_quotas', 'options', 'option_groups', 'session_room_types', 'event_service_contacts',
-  'traveler_types', 'event_sessions', 'agency_quota_ledger', 'events', 'company_contacts', 'companies', 'agency_users',
+  'traveler_types', 'event_sessions', 'agency_quota_ledger', 'agency_mail_usage', 'events', 'company_contacts', 'companies', 'agency_users',
 ] as const;
 
 export interface DemoEventOptions {

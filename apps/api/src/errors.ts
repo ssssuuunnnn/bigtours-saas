@@ -63,6 +63,9 @@ const STATUS: Record<ErrorCode, number> = {
   TOO_MANY_REQUESTS: 429,
   CODE_UNAVAILABLE: 409,
   DEMO_UNAVAILABLE: 503,
+  TAX_ID_USED: 409,
+  TRIAL_EXPIRED: 403,
+  TRIAL_MAIL_LIMIT: 429,
 };
 
 /** 回傳錯誤代碼，文字由前端依語系顯示。 */

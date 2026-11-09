@@ -22,6 +22,8 @@ x-app: &app
     # 官網試用申請的通知信收件人，以及是否啟用公開試玩（平台網址/try）
     TRIAL_NOTIFY_EMAIL: platform@bigtours.example
     DEMO_ENABLED: "true"
+    # 試用到期提醒與到期後刪除（每小時檢查）
+    TRIAL_JOBS_ENABLED: "true"
     # 官網的 LINE 官方帳號網址，留空時不顯示 LINE 按鈕
     SITE_LINE_URL: ""
 

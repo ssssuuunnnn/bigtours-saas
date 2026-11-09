@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Headers, HttpCode, Inject, Post, Query, Res } from '@nestjs/common';
-import { DEMO_AGENCY_CODE, trialApplicationInput } from '@bigtours/shared';
+import { Body, Controller, Get, Headers, HttpCode, Inject, Param, Post, Query, Res } from '@nestjs/common';
+import { DEMO_AGENCY_CODE, trialActivateInput, trialApplicationInput } from '@bigtours/shared';
 import type { Response } from 'express';
 import { SESSION_COOKIE } from './access.service.ts';
 import { DemoService } from './demo.service.ts';
@@ -25,6 +25,26 @@ export class SiteController {
     const parsed = trialApplicationInput.safeParse(body);
     if (!parsed.success) throw new DomainError('INVALID_INPUT', { fields: [...new Set(parsed.error.issues.map((i) => String(i.path[0])))] });
     await this.site.apply(parsed.data, clientIp(h));
+  }
+
+  /** Email 驗證連結的內容（只查詢，不會開通）。 */
+  @Get('activation/:token')
+  async activation(@Headers() h: RequestHeaders, @Param('token') token: string) {
+    return this.site.activation(token, clientIp(h));
+  }
+
+  /** 開通：自動開通時帶密碼；關閉自動開通時不用帶，只確認 Email。 */
+  @Post('activation/:token')
+  async activate(@Headers() h: RequestHeaders, @Param('token') token: string, @Body() body: unknown) {
+    assertSameOrigin(h);
+    const b = (body ?? {}) as { password?: unknown };
+    let password: string | undefined;
+    if (b.password !== undefined) {
+      const parsed = trialActivateInput.safeParse(body);
+      if (!parsed.success) throw new DomainError('INVALID_PASSWORD');
+      password = parsed.data.password;
+    }
+    return this.site.activate(token, password, clientIp(h));
   }
 }
 

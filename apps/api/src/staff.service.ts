@@ -8,6 +8,7 @@ import { DatabaseService, type Tx } from './database.service.ts';
 import { EncryptionService } from './encryption.service.ts';
 import { DomainError } from './errors.ts';
 import { MailService } from './mail.service.ts';
+import { TrialLimitsService } from './trial-limits.service.ts';
 import { imageContentType, imageExtension, StorageService } from './storage.service.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -28,6 +29,7 @@ export class StaffService {
     @Inject(AccessService) private readonly access: AccessService,
     @Inject(MailService) private readonly mail: MailService,
     @Inject(StorageService) private readonly storage: StorageService,
+    @Inject(TrialLimitsService) private readonly trials: TrialLimitsService,
   ) {}
 
   list(ctx: AgencyUserContext) {
@@ -59,6 +61,8 @@ export class StaffService {
   /** 邀請或重設連結，舊連結立即失效。寄信失敗要讓操作者知道，所以等寄完才回應。 */
   async sendLink({ agencyId, userId, actorId }: StaffInvite) {
     if (!UUID.test(userId)) throw new DomainError('NOT_FOUND');
+    // 平台寄的開通信不算在試用的寄信數量裡
+    if (actorId) await this.trials.consumeMail(agencyId);
     const token = generateToken();
     const u = await this.db.withTenant(agencyId, async (tx) => {
       const { rows } = await tx.query(

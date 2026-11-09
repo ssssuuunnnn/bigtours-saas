@@ -125,7 +125,15 @@ export type PublishCheckKey = 'basic' | 'heroImage' | 'schedule' | 'sessions' | 
 export interface PublishCheck { key: PublishCheckKey; state: 'ok' | 'warn' | 'block' | 'confirm'; data: Record<string, any> }
 export interface QuotaTier { id: string; minTravelers: number; maxTravelers: number; price: number; remaining: number }
 export interface AdminCompany { id: string; name: string; eventCount: number; logoUrl: string | null }
-export interface AdminMe { agencyName: string; user: { name: string; role: string }; pinnedNavItems: EventNavKey[] }
+export interface TrialStatus {
+  endsOn: string;
+  expired: boolean;
+  daysLeft: number;
+  deletesOn: string;
+  mail: { total: number; today: number; totalLimit: number; dailyLimit: number };
+  limits: { events: number; maxTravelers: number };
+}
+export interface AdminMe { agencyName: string; user: { name: string; role: string }; pinnedNavItems: EventNavKey[]; trial: TrialStatus | null }
 export interface SessionValues {
   name: string;
   departsOn: string;
@@ -305,7 +313,7 @@ export const adminApi = {
 
 // ===== 企業窗口 =====
 
-export interface ContactMe { agencyName: string; companyName: string; user: { name: string; email: string } }
+export interface ContactMe { agencyName: string; companyName: string; user: { name: string; email: string }; trialExpired: boolean }
 export interface ContactEvent {
   id: string; name: string; state: 'draft' | 'not_open' | 'open' | 'closed'; registrationOpensAt: string | null; registrationClosesAt: string | null;
   roster: number; registered: number; sessionCount: number; firstDay: string | null; lastDay: string | null;
@@ -343,9 +351,9 @@ export const feeReportUrl = (agency: string, id: string) => agencyApi(agency, `/
 
 export interface PlatformTier { id: string; minTravelers: number; maxTravelers: number; price: number }
 export type AgencyState = 'active' | 'expiring' | 'expired' | 'admin_pending' | 'suspended';
-export interface PlatformAgencyRow { id: string; name: string; code: string; contractStartsOn: string | null; contractEndsOn: string | null; state: AgencyState; opened: number; used: number; remaining: number }
+export interface PlatformAgencyRow { id: string; name: string; code: string; isTrial: boolean; contractStartsOn: string | null; contractEndsOn: string | null; state: AgencyState; opened: number; used: number; remaining: number }
 export interface PlatformAgency {
-  id: string; name: string; code: string; state: AgencyState; suspended: boolean; planNote: string | null; contractStartsOn: string | null; contractEndsOn: string | null;
+  id: string; name: string; code: string; state: AgencyState; suspended: boolean; isTrial: boolean; taxId: string | null; planNote: string | null; contractStartsOn: string | null; contractEndsOn: string | null;
   admin: { id: string; name: string; email: string; activated: boolean } | null;
   quota: (PlatformTier & { opened: number; used: number; remaining: number })[];
   ledger: { id: string; at: string; by: string | null; change: number; note: string | null; minTravelers: number; maxTravelers: number }[];
@@ -370,20 +378,27 @@ export const platformApi = {
   sendAdminLink: (id: string) => plat.call<void>('POST', `/agencies/${id}/admin-link`, {}),
   usage: () => plat.call<PlatformUsage>('GET', '/usage'),
   trialApplications: (status: string) => plat.call<TrialApplication[]>('GET', `/trial-applications${status ? `?status=${status}` : ''}`),
-  setTrialStatus: (id: string, status: TrialApplication['status']) => plat.call<void>('PATCH', `/trial-applications/${id}`, { status }),
+  setTrialStatus: (id: string, status: 'pending' | 'rejected') => plat.call<void>('PATCH', `/trial-applications/${id}`, { status }),
+  approveTrial: (id: string) => plat.call<{ agencyId: string; mailFailed: boolean }>('POST', `/trial-applications/${id}/approve`, {}),
+  convertTrial: (id: string) => plat.call<void>('POST', `/agencies/${id}/convert-trial`, {}),
+  settings: () => plat.call<{ trialAutoApprove: boolean }>('GET', '/settings'),
+  saveSettings: (v: { trialAutoApprove: boolean }) => plat.call<void>('PUT', '/settings', v),
 };
 
 export interface TrialApplication {
   id: string;
   agencyName: string;
   code: string;
+  taxId: string | null;
   contactName: string;
   phone: string;
   email: string;
   expectedSize: string;
   note: string | null;
-  status: 'pending' | 'approved' | 'rejected';
+  status: 'unverified' | 'pending' | 'approved' | 'rejected' | 'expired';
   createdAt: string;
+  verifiedAt: string | null;
+  agencyId: string | null;
   handledAt: string | null;
   handledByName: string | null;
   codeTaken: boolean;

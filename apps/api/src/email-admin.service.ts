@@ -5,6 +5,7 @@ import { DatabaseService, type Tx } from './database.service.ts';
 import { checkTemplate, EMAIL_TEMPLATES, templateDefinition } from './email-templates.ts';
 import { DomainError } from './errors.ts';
 import { MailService } from './mail.service.ts';
+import { TrialLimitsService } from './trial-limits.service.ts';
 import { composeMail, NotificationService, type MailEvent, type MailTemplate } from './notification.service.ts';
 import { RosterService } from './roster.service.ts';
 
@@ -44,6 +45,7 @@ export class EmailAdminService {
     @Inject(DatabaseService) private readonly db: DatabaseService,
     @Inject(NotificationService) private readonly notifications: NotificationService,
     @Inject(MailService) private readonly mail: MailService,
+    @Inject(TrialLimitsService) private readonly trials: TrialLimitsService,
     @Inject(RosterService) private readonly roster: RosterService,
   ) {}
 
@@ -147,6 +149,7 @@ export class EmailAdminService {
   /** 用畫面上還沒儲存的內容寄給自己，不留寄送紀錄，也不會寄到員工那裡。 */
   async sendTest(ctx: AgencyUserContext, eventId: string, key: string, input: EmailTemplateInput) {
     this.assertValid(key, input);
+    await this.trials.consumeMail(ctx.agencyId);
     const { event, email } = await this.db.withTenant(ctx.agencyId, async (tx) => {
       await this.assertEvent(tx, eventId);
       const { rows } = await tx.query(`SELECT email FROM agency_users WHERE id = $1`, [ctx.user.id]);

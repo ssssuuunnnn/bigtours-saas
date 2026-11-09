@@ -6,6 +6,7 @@ import { DomainError } from './errors.ts';
 import { assertSameOrigin, CONTACT_COOKIE, contactCookieOptions, cookieValue, requestAgency, sendXlsx, type RequestHeaders } from './http.ts';
 import { parse } from './parse.ts';
 import { RosterService } from './roster.service.ts';
+import { TrialLimitsService } from './trial-limits.service.ts';
 
 /** 企業窗口後台：員工名單和旅行社相同，其他唯讀，範圍只限自家企業。 */
 @Controller('api/v1/company')
@@ -13,6 +14,7 @@ export class ContactController {
   constructor(
     @Inject(ContactService) private readonly contacts: ContactService,
     @Inject(RosterService) private readonly roster: RosterService,
+    @Inject(TrialLimitsService) private readonly trials: TrialLimitsService,
   ) {}
 
   private ctx(h: RequestHeaders): Promise<ContactContext> {
@@ -50,7 +52,8 @@ export class ContactController {
   @Get('me')
   async me(@Headers() h: RequestHeaders) {
     const c = await this.ctx(h);
-    return { agencyName: c.agencyName, companyName: c.companyName, user: { name: c.user.name, email: c.user.email } };
+    const trial = await this.trials.status(c.agencyId);
+    return { agencyName: c.agencyName, companyName: c.companyName, user: { name: c.user.name, email: c.user.email }, trialExpired: !!trial?.expired };
   }
 
   @Get('events')
