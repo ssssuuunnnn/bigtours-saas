@@ -32,11 +32,11 @@ jobs:
       # 只供測試使用的值
       DATABASE_ADMIN_URL: postgres://postgres:postgres@localhost:5432/bigtours
       DATABASE_URL: postgres://bigtours_app:bigtours_app@localhost:5432/bigtours
-      PLATFORM_DOMAIN: lvh.me
+      PLATFORM_DOMAIN: localhost:3000
       DATA_ENCRYPTION_KEY: ZGV2LW9ubHkta2V5LWRvLW5vdC11c2UtaW4tcHJvZCE=
       TOKEN_HASH_KEY: ci-only-token-hash-key
-      WEB_BASE_URL: http://{agency}.lvh.me:3000
-      STORAGE_DIR: ${{ runner.temp }}/storage
+      WEB_BASE_URL: http://localhost:3000/{agency}
+      STORAGE_DIR: /tmp/bigtours-storage
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
       - uses: actions/checkout@v4

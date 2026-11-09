@@ -1,3 +1,4 @@
+import { agencyApiPrefix } from './agency-path.ts';
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -36,12 +37,12 @@ export function companyLogoExtension(c: Buffer): string | null {
 const version = (key: string) => key.split('/').pop()!.split('.')[0]!;
 
 /** 員工前台用的圖片網址；首頁圖片沒上傳時沿用登入頁背景。 */
-export function publicCompanyLogo(slug: string, key: string | null) {
-  return key ? `/api/v1/public/events/${slug}/company-logo?v=${version(key)}` : null;
+export function publicCompanyLogo(agencyCode: string, slug: string, key: string | null) {
+  return key ? `${agencyApiPrefix(agencyCode)}/public/events/${slug}/company-logo?v=${version(key)}` : null;
 }
 
-export function publicImages(slug: string, images: EventImages) {
-  const url = (kind: ImageKind, key: string | null) => (key ? `/api/v1/public/events/${slug}/images/${kind}?v=${version(key)}` : null);
+export function publicImages(agencyCode: string, slug: string, images: EventImages) {
+  const url = (kind: ImageKind, key: string | null) => (key ? `${agencyApiPrefix(agencyCode)}/public/events/${slug}/images/${kind}?v=${version(key)}` : null);
   return {
     login: url('login', images.login),
     loginMobile: url('login-mobile', images['login-mobile']),
@@ -50,8 +51,8 @@ export function publicImages(slug: string, images: EventImages) {
 }
 
 /** 後台用的圖片網址，草稿活動也看得到。 */
-export function agencyImages(eventId: string, images: EventImages) {
-  const url = (kind: ImageKind, key: string | null) => (key ? `/api/v1/agency/events/${eventId}/images/${kind}?v=${version(key)}` : null);
+export function agencyImages(agencyCode: string, eventId: string, images: EventImages) {
+  const url = (kind: ImageKind, key: string | null) => (key ? `${agencyApiPrefix(agencyCode)}/agency/events/${eventId}/images/${kind}?v=${version(key)}` : null);
   return { login: url('login', images.login), loginMobile: url('login-mobile', images['login-mobile']), home: url('home', images.home) };
 }
 

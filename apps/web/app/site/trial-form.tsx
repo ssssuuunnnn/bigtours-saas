@@ -46,7 +46,7 @@ export function TrialForm({ domain }: { domain: string }) {
         .then((r) => (r.ok ? r.json() : null))
         .then((d: { available: boolean; reason?: string } | null) => {
           if (!d) return;
-          setHint(d.available ? { tone: 'ok', text: `可以使用：${code}.${domain}` } : { tone: 'bad', text: CODE_REASONS[d.reason ?? 'format'] ?? CODE_REASONS.format! });
+          setHint(d.available ? { tone: 'ok', text: `可以使用：${domain}/${code}` } : { tone: 'bad', text: CODE_REASONS[d.reason ?? 'format'] ?? CODE_REASONS.format! });
         })
         .catch(() => undefined);
     }, 350);
@@ -82,7 +82,7 @@ export function TrialForm({ domain }: { domain: string }) {
       <div className="form">
         <div className="done" role="status">
           <h3>已收到你的試用申請</h3>
-          <p style={{ color: '#6b6b6b' }}>確認信已寄到 {v.email}。我們確認資料後會開通 {v.code}.{domain}，並用 Email 通知你登入方式。</p>
+          <p style={{ color: '#6b6b6b' }}>確認信已寄到 {v.email}。我們確認資料後會開通 {domain}/{v.code}，並用 Email 通知你登入方式。</p>
         </div>
       </div>
     );
@@ -100,9 +100,9 @@ export function TrialForm({ domain }: { domain: string }) {
       </label>
       <label className="full">想要的網址 <span className="req">*</span>
         <span className="domain">
+          <span>{domain}/</span>
           <input type="text" name="code" maxLength={30} required placeholder="例如 abc-travel" autoCapitalize="off" spellCheck={false} value={v.code}
             onChange={(e) => set('code', e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} {...aria('code')} />
-          <span>.{domain}</span>
         </span>
         <span className={`hint ${hint.tone === 'neutral' ? '' : hint.tone}`} aria-live="polite">{hint.text}</span>
         {err('code')}

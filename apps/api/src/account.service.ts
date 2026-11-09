@@ -26,8 +26,8 @@ export class AccountService {
   ) {}
 
   /** 登入頁使用，不需登入。 */
-  async landing(host: string | undefined, slug: string) {
-    const agency = await this.access.findAgency(host);
+  async landing(agencyCode: string | undefined, slug: string) {
+    const agency = await this.access.findAgency(agencyCode);
     const event = await this.access.findEvent(agency.id, slug);
     return {
       agency: { name: agency.name },
@@ -39,29 +39,29 @@ export class AccountService {
         registrationClosesAt: event.registrationClosesAt,
         pageState: event.pageState,
         pageOpensAt: event.pageOpensAt,
-        images: publicImages(event.slug, event.images),
+        images: publicImages(agency.code, event.slug, event.images),
       },
     };
   }
 
-  async readImage(host: string | undefined, slug: string, kind: string) {
-    const agency = await this.access.findAgency(host);
+  async readImage(agencyCode: string | undefined, slug: string, kind: string) {
+    const agency = await this.access.findAgency(agencyCode);
     const event = await this.access.findEvent(agency.id, slug);
     const key = isImageKind(kind) ? event.images[kind] : null;
     if (!key) throw new DomainError('NOT_FOUND');
     return { contentType: imageContentType(key), content: await this.storage.get(key) };
   }
 
-  async readCompanyLogo(host: string | undefined, slug: string) {
-    const agency = await this.access.findAgency(host);
+  async readCompanyLogo(agencyCode: string | undefined, slug: string) {
+    const agency = await this.access.findAgency(agencyCode);
     const event = await this.access.findEvent(agency.id, slug);
     if (!event.companyLogoKey) throw new DomainError('NOT_FOUND');
     return { contentType: imageContentType(event.companyLogoKey), content: await this.storage.get(event.companyLogoKey) };
   }
 
   /** 帳號不存在、密碼錯誤與鎖定中都回傳相同錯誤。 */
-  async login(host: string | undefined, slug: string, employeeNo: string, password: string) {
-    const agency = await this.access.findAgency(host);
+  async login(agencyCode: string | undefined, slug: string, employeeNo: string, password: string) {
+    const agency = await this.access.findAgency(agencyCode);
     const event = await this.access.findEvent(agency.id, slug);
     if (event.pageState !== 'open') throw new DomainError('PAGE_CLOSED', { pageState: event.pageState });
 
@@ -102,9 +102,9 @@ export class AccountService {
     return { token, maxAgeMs: SESSION_HOURS * 3_600_000 };
   }
 
-  async logout(host: string | undefined, token: string | undefined) {
+  async logout(agencyCode: string | undefined, token: string | undefined) {
     if (!token) return;
-    const agency = await this.access.findAgency(host);
+    const agency = await this.access.findAgency(agencyCode);
     await this.db.withTenant(agency.id, (tx) =>
       tx.query(`UPDATE employee_sessions SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL`, [
         this.encryption.hashToken(token),
@@ -113,8 +113,8 @@ export class AccountService {
   }
 
   /** 開啟設定密碼頁時確認連結可用。活動頁關閉時連結仍可使用。 */
-  async lookupPasswordLink(host: string | undefined, slug: string, token: string) {
-    const agency = await this.access.findAgency(host);
+  async lookupPasswordLink(agencyCode: string | undefined, slug: string, token: string) {
+    const agency = await this.access.findAgency(agencyCode);
     const event = await this.access.findEvent(agency.id, slug);
     const employee = await this.findLinkEmployee(agency.id, event.id, token);
     return {
@@ -124,8 +124,8 @@ export class AccountService {
     };
   }
 
-  async setPassword(host: string | undefined, slug: string, token: string, password: string) {
-    const agency = await this.access.findAgency(host);
+  async setPassword(agencyCode: string | undefined, slug: string, token: string, password: string) {
+    const agency = await this.access.findAgency(agencyCode);
     const event = await this.access.findEvent(agency.id, slug);
     await this.findLinkEmployee(agency.id, event.id, token);
     const passwordHash = await hashPassword(password);

@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch,
 import { agencyCreateInput, agencyStatusRequest, contractInput, platformLoginRequest, quotaAdjustInput, trialStatusInput } from '@bigtours/shared';
 import type { Response } from 'express';
 import { DomainError } from './errors.ts';
-import { assertSameOrigin, cookieValue, requestHost, type RequestHeaders } from './http.ts';
+import { assertSameOrigin, cookieValue, type RequestHeaders } from './http.ts';
 import { parse } from './parse.ts';
 import { PlatformService } from './platform.service.ts';
 import { SiteService } from './site.service.ts';
@@ -10,7 +10,7 @@ import { SiteService } from './site.service.ts';
 const COOKIE = 'bt_platform_session';
 const cookieOptions = () => ({ httpOnly: true, sameSite: 'lax' as const, secure: process.env.NODE_ENV === 'production', path: '/api/v1/platform' });
 
-/** 平台後台：只接受 platform.平台網域，帳號與 Cookie 都和旅行社分開。 */
+/** 平台後台（/platform）：帳號與 Cookie 都和旅行社分開。 */
 @Controller('api/v1/platform')
 export class PlatformController {
   constructor(
@@ -20,7 +20,6 @@ export class PlatformController {
 
   private guard(h: RequestHeaders) {
     assertSameOrigin(h);
-    this.platform.assertHost(requestHost(h));
   }
 
   private ctx(h: RequestHeaders) {

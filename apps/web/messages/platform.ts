@@ -38,7 +38,7 @@ export const p = {
   sectionAgency: '旅行社',
   name: '旅行社名稱',
   code: '旅行社代號',
-  codeHint: (code: string, domain: string) => `報名網址：${code || 'code'}.${domain}。3 到 30 個小寫英文、數字或連字號。開通後旅行社不能自行修改。`,
+  codeHint: (code: string, domain: string) => `報名網址：${domain}/${code || 'code'}。3 到 30 個小寫英文、數字或連字號。開通後旅行社不能自行修改。`,
   sectionAdmin: '第一位管理員',
   adminName: '姓名',
   adminEmail: 'Email',
