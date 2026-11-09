@@ -20,6 +20,8 @@ import { PublicController } from './public.controller.ts';
 import { DomainError } from './errors.ts';
 import { RegistrationService } from './registration.service.ts';
 import { MailService } from './mail.service.ts';
+import { SesFeedbackController } from './ses-feedback.controller.ts';
+import { SesFeedbackService } from './ses-feedback.service.ts';
 import { LineController } from './line.controller.ts';
 import { LineService, LineVerifier } from './line.service.ts';
 import { NotificationService } from './notification.service.ts';
@@ -44,8 +46,8 @@ const parseFile = (parser: typeof pdfBody) => (req: Request, res: Response, next
 };
 
 @Module({
-  controllers: [HealthController, SiteController, DemoController, PlatformController, ContactController, AccountController, LineController, AgencyController, PublicController],
-  providers: [TrialLimitsService, { provide: APP_GUARD, useClass: TrialReadOnlyGuard }, SiteService, DemoService, PlatformService, StaffService, ContactService, DataLogService, ExportService, RoomService, EmailAdminService, DatabaseService, EncryptionService, AccessService, AccountService, AgencyAdminService, RegistrationService, StorageService, MailService, RosterService, NotificationService, RegistrationAdminService, LineService, LineVerifier],
+  controllers: [HealthController, SesFeedbackController, SiteController, DemoController, PlatformController, ContactController, AccountController, LineController, AgencyController, PublicController],
+  providers: [SesFeedbackService, TrialLimitsService, { provide: APP_GUARD, useClass: TrialReadOnlyGuard }, SiteService, DemoService, PlatformService, StaffService, ContactService, DataLogService, ExportService, RoomService, EmailAdminService, DatabaseService, EncryptionService, AccessService, AccountService, AgencyAdminService, RegistrationService, StorageService, MailService, RosterService, NotificationService, RegistrationAdminService, LineService, LineVerifier],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {

@@ -129,8 +129,8 @@ export class NotificationService {
       return;
     }
     try {
-      await this.mail.send(composeMail(event, employee, template, override));
-      await this.mark(agencyId, messageId, 'sent', null);
+      const { providerId } = await this.mail.send(composeMail(event, employee, template, override));
+      await this.mark(agencyId, messageId, 'sent', null, providerId);
     } catch (err) {
       this.logger.error(`寄信失敗：${(err as Error).message}`);
       await this.mark(agencyId, messageId, 'failed', (err as Error).message.slice(0, 500));
@@ -177,10 +177,10 @@ export class NotificationService {
     }
   }
 
-  private mark(agencyId: string, id: string, status: 'sent' | 'failed', error: string | null) {
+  private mark(agencyId: string, id: string, status: 'sent' | 'failed', error: string | null, providerId: string | null = null) {
     return this.db.withTenant(agencyId, (tx) => tx.query(
-      `UPDATE email_messages SET status = $2, error = $3, sent_at = CASE WHEN $2 = 'sent' THEN now() END WHERE id = $1`,
-      [id, status, error],
+      `UPDATE email_messages SET status = $2, error = $3, provider_message_id = $4, sent_at = CASE WHEN $2 = 'sent' THEN now() END WHERE id = $1`,
+      [id, status, error, providerId],
     ));
   }
 
