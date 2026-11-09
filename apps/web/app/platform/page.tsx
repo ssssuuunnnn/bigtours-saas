@@ -29,7 +29,7 @@ export default function PlatformAgencies() {
               <tbody>
                 {rows.map((a) => (
                   <tr key={a.id}>
-                    <td><Link href={`/platform/agencies/${a.id}`}><strong>{a.name}</strong></Link><br /><small className="muted">{a.code}</small></td>
+                    <td><Link href={`/platform/agencies/${a.id}`}><strong>{a.name}</strong></Link>{a.isTrial && <span className="admin-badge">{p.trial.badge}</span>}<br /><small className="muted">{a.code}</small></td>
                     <td className="admin-nowrap">{a.contractStartsOn ?? '—'}～{a.contractEndsOn ?? '—'}</td>
                     <td>{p.states[a.state]}</td>
                     <td>{p.count(a.opened)}</td>

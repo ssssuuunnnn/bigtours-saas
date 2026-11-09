@@ -4,6 +4,7 @@ import type { Request, Response } from 'express';
 import type { ZodType } from 'zod';
 import { AgencyAdminService } from './agency-admin.service.ts';
 import { DomainError } from './errors.ts';
+import { TrialLimitsService } from './trial-limits.service.ts';
 import { parse } from './parse.ts';
 import { EmailAdminService } from './email-admin.service.ts';
 import { RegistrationAdminService } from './registration-admin.service.ts';
@@ -30,6 +31,7 @@ export class AgencyController {
     @Inject(StaffService) private readonly staff: StaffService,
     @Inject(ContactService) private readonly contactAccounts: ContactService,
     @Inject(DataLogService) private readonly dataLog: DataLogService,
+    @Inject(TrialLimitsService) private readonly trials: TrialLimitsService,
     @Inject(ExportService) private readonly exports: ExportService,
   ) {}
 
@@ -82,7 +84,7 @@ export class AgencyController {
   @Get('me')
   async me(@Headers() h: RequestHeaders) {
     const ctx = await this.ctx(h);
-    return { agencyName: ctx.agencyName, user: { name: ctx.user.name, role: ctx.user.role }, pinnedNavItems: ctx.user.pinnedNavItems };
+    return { agencyName: ctx.agencyName, user: { name: ctx.user.name, role: ctx.user.role }, pinnedNavItems: ctx.user.pinnedNavItems, trial: await this.trials.status(ctx.agencyId) };
   }
 
   @Put('me/pinned-nav')

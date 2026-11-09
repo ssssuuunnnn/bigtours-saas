@@ -19,6 +19,15 @@ const config: NextConfig = {
           { key: 'Cache-Control', value: 'no-store' },
         ],
       },
+      {
+        // 試用開通連結，同上
+        source: '/activate/:token',
+        headers: [
+          { key: 'Referrer-Policy', value: 'strict-origin' },
+          { key: 'X-Robots-Tag', value: 'noindex, nofollow' },
+          { key: 'Cache-Control', value: 'no-store' },
+        ],
+      },
     ];
   },
 };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AGENCY_ROLES, calculateFees, can, createEventRequest, eventScheduleRequest, isValidPassword, maskValue, pageState, pinnedNavRequest, readableOn, seatStatus } from './index.ts';
+import { AGENCY_ROLES, calculateFees, can, createEventRequest, eventScheduleRequest, isValidPassword, isValidTaxId, maskValue, pageState, pinnedNavRequest, readableOn, seatStatus } from './index.ts';
 import { decrypt, encrypt, hashPassword, loadKey, verifyPassword } from './crypto.ts';
 
 describe('calculateFees', () => {
@@ -126,5 +126,16 @@ describe('活動設定', () => {
   it('主色上的文字顏色會依深淺調整', () => {
     expect(readableOn('#0E6B72')).toBe('#FFFFFF');
     expect(readableOn('#F2B705')).toBe('#15202B');
+  });
+});
+
+describe('isValidTaxId', () => {
+  it('依檢查碼判斷統一編號', () => {
+    expect(isValidTaxId('22099131')).toBe(true);
+    expect(isValidTaxId('04595257')).toBe(true);
+    expect(isValidTaxId('10458575')).toBe(true); // 第 7 位是 7
+    expect(isValidTaxId('22099132')).toBe(false);
+    expect(isValidTaxId('2209913')).toBe(false);
+    expect(isValidTaxId('2209913a')).toBe(false);
   });
 });

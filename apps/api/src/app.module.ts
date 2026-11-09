@@ -28,6 +28,8 @@ import { DemoService } from './demo.service.ts';
 import { DemoController, SiteController } from './site.controller.ts';
 import { SiteService } from './site.service.ts';
 import { HealthController } from './health.controller.ts';
+import { TrialLimitsService, TrialReadOnlyGuard } from './trial-limits.service.ts';
+import { APP_GUARD } from '@nestjs/core';
 
 const pdfBody = raw({ type: 'application/pdf', limit: '10mb' });
 const csvBody = raw({ type: 'text/csv', limit: '5mb' });
@@ -41,7 +43,7 @@ const parseFile = (parser: typeof pdfBody) => (req: Request, res: Response, next
 
 @Module({
   controllers: [HealthController, SiteController, DemoController, PlatformController, ContactController, AccountController, AgencyController, PublicController],
-  providers: [SiteService, DemoService, PlatformService, StaffService, ContactService, DataLogService, ExportService, RoomService, EmailAdminService, DatabaseService, EncryptionService, AccessService, AccountService, AgencyAdminService, RegistrationService, StorageService, MailService, RosterService, NotificationService, RegistrationAdminService],
+  providers: [TrialLimitsService, { provide: APP_GUARD, useClass: TrialReadOnlyGuard }, SiteService, DemoService, PlatformService, StaffService, ContactService, DataLogService, ExportService, RoomService, EmailAdminService, DatabaseService, EncryptionService, AccessService, AccountService, AgencyAdminService, RegistrationService, StorageService, MailService, RosterService, NotificationService, RegistrationAdminService],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {

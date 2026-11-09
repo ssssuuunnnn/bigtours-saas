@@ -3,7 +3,7 @@
 import { agencyLocation, useAgencyPathname } from '../../../lib/agency';
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { ApiError } from '../../../lib/api';
-import { adminApi, contactApi, type AdminMe } from '../../../lib/admin-api';
+import { adminApi, contactApi, type AdminMe, type TrialStatus } from '../../../lib/admin-api';
 import { a } from '../../../messages/admin';
 import { Sidebar } from './sidebar';
 
@@ -49,9 +49,28 @@ function Shell({ children }: { children: React.ReactNode }) {
           onPinned={(pinnedNavItems) => setMe({ ...me, pinnedNavItems })}
           onLogout={() => adminApi.logout().finally(() => { setMe(null); setView('login'); })}
         />
-        {children}
+        <div className="admin-content">
+          {me.trial && <TrialBanner trial={me.trial} />}
+          {children}
+        </div>
       </div>
     </MeContext.Provider>
+  );
+}
+
+/** 試用中顯示剩餘天數與寄信數量；到期後提醒只能查看。 */
+function TrialBanner({ trial }: { trial: TrialStatus }) {
+  if (trial.expired) {
+    return (
+      <p className="trial-banner expired" role="status">
+        免費試用已在 {trial.endsOn} 到期，後台只能查看與匯出，員工報名頁已關閉。資料保留到 {trial.deletesOn}，想繼續使用請聯絡我們。
+      </p>
+    );
+  }
+  return (
+    <p className="trial-banner" role="status">
+      免費試用剩 {trial.daysLeft} 天（到 {trial.endsOn}）・{trial.limits.events} 場活動、最多 {trial.limits.maxTravelers} 位旅客・通知信已寄 {trial.mail.total}／{trial.mail.totalLimit} 封（今天 {trial.mail.today}／{trial.mail.dailyLimit}）
+    </p>
   );
 }
 

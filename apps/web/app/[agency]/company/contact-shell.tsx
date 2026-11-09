@@ -51,7 +51,10 @@ export function ContactShell({ children }: { children: React.ReactNode }) {
             <button type="button" className="link" onClick={() => { void contactApi.logout().finally(() => window.location.replace(agencyLocation('/admin'))); }}>{a.logout}</button>
           </div>
         </aside>
-        {children}
+        <div className="admin-content">
+          {me.trialExpired && <p className="trial-banner expired" role="status">{me.agencyName} 的試用已到期，名單與報名資料只能查看與匯出。</p>}
+          {children}
+        </div>
       </div>
     </MeContext.Provider>
   );

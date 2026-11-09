@@ -12,7 +12,7 @@ const FAQS: [string, string][] = [
   ['很多人同時搶報，會不會超賣？', '不會。員工開始填寫時就保留名額 15 分鐘，名額判斷在資料庫裡一次完成，就算同時很多人送出也不會超過名額。'],
   ['可以用我們旅行社自己的品牌嗎？', '可以。每家旅行社有自己的網址，例如 bigtour.bookdex.cc/你的代號，報名頁也能顯示企業的 Logo。'],
   ['企業窗口可以自己管理名單嗎？', '可以。旅行社建立活動後，企業窗口可以匯入員工名單、設定補助、查看報名進度，但看不到員工的身分證等個資。'],
-  ['試用要怎麼開通？', '填寫下方的申請表，我們確認資料後會開通試用，並用 Email 通知你登入方式。'],
+  ['試用要怎麼開通？', '填寫下方的申請表，到信箱點開通連結、設定密碼，馬上就能使用。每個統一編號可以試用一次。'],
 ];
 
 export function Landing({ domain, demoUrl, lineUrl, siblingUrl }: { domain: string; demoUrl: string; lineUrl: string | null; siblingUrl: string }) {
@@ -233,7 +233,7 @@ export function Landing({ domain, demoUrl, lineUrl, siblingUrl }: { domain: stri
                 <h3>免費試用</h3>
                 <strong className="big">30 天</strong>
                 <p style={{ color: '#6b6b6b' }}>適合先跑一場小型活動</p>
-                <ul><li>一場活動，最多 100 位旅客</li><li>所有功能都能用</li><li>專屬網址 {domain}/你的代號</li></ul>
+                <ul><li>一場活動，最多 40 位旅客</li><li>所有功能都能用，通知信最多 100 封</li><li>專屬網址 {domain}/你的代號</li></ul>
                 <a className="btn btn-dark" href="#signup">申請免費試用</a>
               </div>
               <div>
@@ -261,7 +261,7 @@ export function Landing({ domain, demoUrl, lineUrl, siblingUrl }: { domain: stri
             <div>
               <span className="pill"><b>免費</b>試用 30 天</span>
               <h2>申請免費試用</h2>
-              <p style={{ color: '#6b6b6b' }}>送出後我們會確認資料並開通，開通後用 Email 通知你。試用期間可以建立一場活動，最多 100 位旅客。</p>
+              <p style={{ color: '#6b6b6b' }}>送出後到信箱點開通連結、設定密碼，馬上就能使用。試用 30 天，可以建立一場活動，最多 40 位旅客。</p>
               {lineUrl && <p style={{ color: '#6b6b6b' }}>還在考慮？<a href={lineUrl} target="_blank" rel="noopener">用 LINE 問我們</a></p>}
             </div>
             <div className="glow">

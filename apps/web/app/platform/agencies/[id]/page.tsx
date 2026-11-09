@@ -51,7 +51,7 @@ function Detail() {
   return (
     <main className="admin-main">
       {back}
-      <h1>{d.name}</h1>
+      <h1>{d.name}{d.isTrial && <span className="admin-badge">{p.trial.badge}</span>}</h1>
       <section className="admin-panel">
         <div className="admin-panel-head">
           <div>
@@ -67,6 +67,12 @@ function Detail() {
         {error && <p className="error" role="alert">{error}</p>}
         {note && <p className="admin-note" role="status">{note}</p>}
         {d.suspended && <p className="admin-note" role="status">{p.suspendedNote}</p>}
+        {d.isTrial && (
+          <div className="admin-email-actions">
+            <span className="muted">{p.trial.detailTrial(d.taxId)}</span>
+            <button type="button" className="ghost" disabled={busy} onClick={() => { if (window.confirm(p.trial.convertConfirm)) void run(() => platformApi.convertTrial(d.id), p.trial.converted); }}>{p.trial.convert}</button>
+          </div>
+        )}
 
         <div className="admin-card">
           {editing ? (
