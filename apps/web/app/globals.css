@@ -338,6 +338,8 @@ fieldset.admin-card { margin: 0; border: 0; min-width: 0; }
 .admin-quota strong { font-size: 20px; }
 .admin-tiers { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; align-items: start; }
 .admin-table a { color: var(--brand); }
+.admin-table a.primary-link { color: var(--on-brand); }
+.admin-filter { display: flex; flex-wrap: wrap; gap: 8px; }
 .admin-days { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto; gap: 8px; align-items: center; }
 .admin-days input { width: 100%; }
 .admin-color { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }

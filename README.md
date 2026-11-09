@@ -20,6 +20,8 @@ docker compose up --build
 
 `E004` 張雅婷尚未設定密碼，用[設定密碼連結](http://demo-travel.lvh.me:3000/acme-2027/set-password/demo-e004-local-development-only)走一次開通流程。連結只能使用一次，重設示範資料後可再次使用。
 
+官網在 <http://lvh.me:3000>（正式環境為 `tours.bookdex.cc`），可以送出試用申請、開始試玩報名。試玩活動在 `demo.lvh.me`，每位訪客按「開始試玩」會得到新的員工身分，不用登入；整個試玩活動每天台灣時間清晨 4 點重建。試用申請在平台後台 <http://platform.lvh.me:3000/platform/applications> 處理（`platform@bigtours.example`／`demo1234`），通知信可在 Mailpit 查看。
+
 從舊版更新時，請重設示範資料。
 
 第二梯次只有 3 個名額，方便測試額滿與保留狀態。`*.lvh.me` 會指回本機，需要網路才能解析。

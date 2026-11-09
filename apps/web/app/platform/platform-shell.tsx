@@ -32,13 +32,15 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
   if (view === 'denied') return <main className="center-note"><p role="alert">{p.errors.NOT_FOUND}</p></main>;
   if (view === 'login' || !me) return <PlatformLogin onDone={load} />;
   const usage = pathname.startsWith('/platform/usage');
+  const applications = pathname.startsWith('/platform/applications');
   return (
     <MeContext.Provider value={me}>
       <div className="admin">
         <aside className="admin-side">
           <Link href="/platform" className="admin-brand">{p.brand}</Link>
           <nav aria-label={p.brand} className="admin-nav">
-            <Link href="/platform" className="admin-nav-link" aria-current={!usage ? 'page' : undefined}>{p.nav.agencies}</Link>
+            <Link href="/platform" className="admin-nav-link" aria-current={!usage && !applications ? 'page' : undefined}>{p.nav.agencies}</Link>
+            <Link href="/platform/applications" className="admin-nav-link" aria-current={applications ? 'page' : undefined}>{p.nav.applications}</Link>
             <Link href="/platform/usage" className="admin-nav-link" aria-current={usage ? 'page' : undefined}>{p.nav.usage}</Link>
           </nav>
           <div className="admin-side-foot">

@@ -60,6 +60,9 @@ const STATUS: Record<ErrorCode, number> = {
   PUBLISH_REQUIREMENT: 409,
   INVALID_FILE: 422,
   FILE_TOO_LARGE: 413,
+  TOO_MANY_REQUESTS: 429,
+  CODE_UNAVAILABLE: 409,
+  DEMO_UNAVAILABLE: 503,
 };
 
 /** 回傳錯誤代碼，文字由前端依語系顯示。 */
