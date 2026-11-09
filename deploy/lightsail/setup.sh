@@ -10,9 +10,10 @@
 #   host           上傳 Origin 憑證，在主機產生並填好 /opt/bigtours/.env，備份到本機
 #   github         部署用 SSH 金鑰與 IAM 使用者，設定 GitHub production 環境的 Secrets
 #   deploy         執行 GitHub Actions 的 Deploy 並等到完成，確認網站有回應
+#   ses-feedback   SES 退信與客訴通知：建立 SNS Topic、更新主機 .env、訂閱通知端點（要先部署含此功能的版本）
 #   platform-user  建立第一個平台人員帳號（需要 PLATFORM_ADMIN_EMAIL）
 #   status         顯示目前各項的狀態
-#   all            依序執行 check ses smtp cloudflare firewall host github deploy（有設 PLATFORM_ADMIN_EMAIL 時再加 platform-user）
+#   all            依序執行 check ses smtp cloudflare firewall host github deploy ses-feedback（有設 PLATFORM_ADMIN_EMAIL 時再加 platform-user）
 #
 # 每一步都會先查現況，已完成就跳過，可以重複執行。
 # 密碼、金鑰只寫進本機檔案（權限 600），不會印在畫面上：
@@ -43,6 +44,7 @@ DEPLOY_KEY=${BIGTOURS_GITHUB_DEPLOY_KEY:-$HOME/.ssh/bigtours-github-deploy}
 SECRETS=${BIGTOURS_SECRETS_DIR:-$HOME/.bigtours-deploy}
 SMTP_IAM_USER=${SMTP_IAM_USER:-bigtours-ses-smtp}
 DEPLOY_IAM_USER=${DEPLOY_IAM_USER:-bigtours-github-deploy}
+SES_TOPIC_NAME=${SES_TOPIC_NAME:-bigtours-ses-feedback}
 PLATFORM_ADMIN_EMAIL=${PLATFORM_ADMIN_EMAIL:-}
 PLATFORM_ADMIN_NAME=${PLATFORM_ADMIN_NAME:-平台管理員}
 HOST_DIR=/opt/bigtours
@@ -445,6 +447,52 @@ step_deploy() {
   health_check
 }
 
+step_ses_feedback() {
+  say "SES 退信與客訴通知：SNS Topic ${SES_TOPIC_NAME}"
+  local topic identity_arn policy endpoint status updates i sub
+  topic=$(aws sns create-topic --name "$SES_TOPIC_NAME" --tags Key=app,Value=bigtours --query TopicArn --output text)
+  identity_arn="arn:aws:ses:${REGION}:$(account_id):identity/${MAIL_DOMAIN}"
+  # 只允許這個 SES 網域發布到這個 Topic
+  policy=$(jq -nc --arg t "$topic" --arg a "$(account_id)" --arg s "$identity_arn" '{Version:"2012-10-17",Statement:[{Sid:"AllowSesPublish",Effect:"Allow",Principal:{Service:"ses.amazonaws.com"},Action:"sns:Publish",Resource:$t,Condition:{StringEquals:{"AWS:SourceAccount":$a,"AWS:SourceArn":$s}}}]}')
+  aws sns set-topic-attributes --topic-arn "$topic" --attribute-name Policy --attribute-value "$policy"
+  ok "Topic 與存取政策已設定"
+
+  say "主機 .env：SES_SNS_TOPIC_ARN"
+  secret_dir
+  ensure_ssh
+  updates="$TMPDIR_SETUP/env-updates"
+  printf 'SES_SNS_TOPIC_ARN=%s\n' "$topic" > "$updates"
+  # 只改這個鍵，其他原樣保留
+  hssh "umask 077; f=$HOST_DIR/.env; u=\$(mktemp); cat > \$u; awk -F= 'NR==FNR { v[\$1] = \$0; next } (\$1 in v) { print v[\$1]; done[\$1] = 1; next } { print } END { for (k in v) if (!(k in done)) print v[k] }' \$u \$f > \$f.new && mv \$f.new \$f; rm -f \$u" < "$updates"
+  # 容器重建後 IP 會變，nginx 要重新啟動才連得到
+  hssh "cd $HOST_DIR && docker compose -f docker-compose.prod.yml --env-file .env up -d --wait && docker compose -f docker-compose.prod.yml --env-file .env restart nginx" >/dev/null
+  (umask 077; hssh "cat $HOST_DIR/.env" > "$SECRETS/host.env")
+  ok "主機已更新，並重新備份 .env"
+
+  endpoint="https://${DOMAIN}/api/v1/webhooks/ses"
+  for i in $(seq 1 10); do
+    status=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: text/plain' -d '{}' "$endpoint" || true)
+    [ "$status" = 403 ] && break
+    sleep 6
+  done
+  [ "$status" = 403 ] || die "通知端點回應 HTTP ${status}（應為 403）。回 404 表示主機上的版本還沒有這個功能，請先合併並部署；5xx 請看 docker compose logs api"
+
+  say "訂閱通知端點"
+  aws sns subscribe --topic-arn "$topic" --protocol https --notification-endpoint "$endpoint" >/dev/null
+  for i in $(seq 1 20); do
+    sub=$(aws sns list-subscriptions-by-topic --topic-arn "$topic" --query "Subscriptions[?Endpoint=='${endpoint}'].SubscriptionArn | [0]" --output text)
+    case "$sub" in arn:*) break ;; esac
+    sleep 3
+  done
+  case "$sub" in arn:*) ok "訂閱已確認" ;; *) die "訂閱還沒確認（${sub}），請看 docker compose logs api，或檢查 Cloudflare 是否擋下 SNS 的請求" ;; esac
+
+  say "SES 網域 ${MAIL_DOMAIN}：把退信與客訴送到 Topic"
+  aws ses set-identity-notification-topic --identity "$MAIL_DOMAIN" --notification-type Bounce --sns-topic "$topic" \
+    && aws ses set-identity-notification-topic --identity "$MAIL_DOMAIN" --notification-type Complaint --sns-topic "$topic" \
+    || die "無法設定 SES 通知；網域要先驗證通過（DKIM SUCCESS），之後重跑這一步"
+  ok "已設定。可以用 SES 信箱模擬器 bounce@simulator.amazonses.com 測試"
+}
+
 step_platform_user() {
   say "平台人員帳號"
   [ -n "$PLATFORM_ADMIN_EMAIL" ] || die "請設定 PLATFORM_ADMIN_EMAIL（以及選填的 PLATFORM_ADMIN_NAME）"
@@ -468,6 +516,7 @@ step_status() {
   fi
   acct=$(aws sesv2 get-account)
   info "SES production access：$(jq -r 'if .ProductionAccessEnabled then "已開通" else "sandbox（審核：\(.Details.ReviewDetails.Status // "未申請")）" end' <<<"$acct")"
+  info "SES 退信通知：$(aws ses get-identity-notification-attributes --identities "$MAIL_DOMAIN" --query "NotificationAttributes.\"${MAIL_DOMAIN}\".BounceTopic" --output text 2>/dev/null || echo 未知)"
   [ -s "$SECRETS/ses-smtp-url" ] && info "SMTP_URL：已存在本機" || info "SMTP_URL：尚未建立"
   [ -s "$CERTS/origin.pem" ] && info "Origin 憑證：本機已有" || info "Origin 憑證：尚未產生"
   aws lightsail get-instance-port-states --instance-name "$INSTANCE" \
@@ -487,10 +536,11 @@ for s in "$@"; do
     host) step_host ;;
     github) step_github ;;
     deploy) step_deploy ;;
+    ses-feedback) step_ses_feedback ;;
     platform-user) step_platform_user ;;
     status) step_status ;;
     all)
-      step_check; step_ses; step_smtp; step_cloudflare; step_firewall; step_host; step_github; step_deploy
+      step_check; step_ses; step_smtp; step_cloudflare; step_firewall; step_host; step_github; step_deploy; step_ses_feedback
       if [ -n "$PLATFORM_ADMIN_EMAIL" ]; then step_platform_user; fi
       step_status ;;
     *) die "未知的步驟：$s" ;;

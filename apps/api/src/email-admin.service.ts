@@ -29,7 +29,12 @@ const SAMPLE: Record<string, MailTemplate> = {
 };
 
 /** 只把收件人的原因講給旅行社聽，技術細節留在紀錄。 */
-const failureReason = (error: string | null) => (error && /\b55\d\b|user unknown|no such user|does not exist/i.test(error) ? 'mailbox' : 'server');
+const failureReason = (error: string | null) => {
+  if (error?.startsWith('complaint:')) return 'complaint';
+  if (error?.startsWith('bounce:Transient')) return 'temporary';
+  if (error?.startsWith('bounce:')) return 'mailbox';
+  return error && /\b55\d\b|user unknown|no such user|does not exist/i.test(error) ? 'mailbox' : 'server';
+};
 
 const formatClose = (d: Date) => {
   const t = new Date(d.getTime() + 8 * 3600 * 1000);

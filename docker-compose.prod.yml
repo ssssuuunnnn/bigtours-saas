@@ -25,6 +25,8 @@ x-app: &app
     TRIAL_JOBS_ENABLED: ${TRIAL_JOBS_ENABLED:-true}
     SITE_LINE_URL: ${SITE_LINE_URL:-}
     SITE_SIBLING_URL: ${SITE_SIBLING_URL:-https://bookdex.cc}
+    # SES 退信與客訴通知的 SNS Topic；留空時通知端點不開放
+    SES_SNS_TOPIC_ARN: ${SES_SNS_TOPIC_ARN:-}
     DB_POOL_SIZE: ${DB_POOL_SIZE:-20}
   logging: &logging
     driver: json-file

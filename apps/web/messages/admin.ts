@@ -725,7 +725,7 @@ export const a = {
   failuresTitle: '寄送失敗',
   failuresStats: (total: number, failed: number) => `近 7 天寄出 ${total} 封，失敗 ${failed} 封`,
   failuresNone: '目前沒有寄送失敗的信。',
-  failureReasons: { mailbox: '信箱不存在或拒收', server: '收件伺服器暫時無回應' } as Record<string, string>,
+  failureReasons: { mailbox: '信箱不存在或拒收', server: '收件伺服器暫時無回應', temporary: '信箱已滿或暫時無法收信', complaint: '收件人回報為垃圾信' } as Record<string, string>,
   failureAgencyRecipient: '旅行社通知信箱',
   failureFix: '修正信箱後重寄',
   failureNewEmail: (name: string) => `${name}的新信箱`,

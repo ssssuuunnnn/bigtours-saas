@@ -44,6 +44,7 @@ deploy/lightsail/setup.sh firewall     # Lightsail 8443 只開放給 Cloudflare
 deploy/lightsail/setup.sh host         # 上傳 Origin 憑證、在主機產生並填好 .env、備份到本機
 deploy/lightsail/setup.sh github       # 部署用 SSH 金鑰與 IAM 使用者、GitHub production Secrets
 deploy/lightsail/setup.sh deploy       # 執行 Actions 的 Deploy 並等到完成
+deploy/lightsail/setup.sh ses-feedback # SES 退信與客訴通知：SNS Topic、主機 .env、訂閱端點（網域驗證通過後才能完成）
 PLATFORM_ADMIN_EMAIL=<email> deploy/lightsail/setup.sh platform-user
 deploy/lightsail/setup.sh status
 ```

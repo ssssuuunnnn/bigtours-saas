@@ -39,8 +39,9 @@ description: 大團報名第一次上線到 Lightsail（SES、Cloudflare、防�
 4. **主機**：`setup.sh host`（會暫時開放本機 IP 的 SSH，結束自動移除）。
 5. **GitHub**：`setup.sh github`。
 6. **部署**：`setup.sh deploy`（建置映像檔約 5～10 分鐘，用背景執行並等它完成）。
-7. **平台帳號**：問使用者要用哪個 Email，執行 `PLATFORM_ADMIN_EMAIL=<email> PLATFORM_ADMIN_NAME=<姓名> deploy/lightsail/setup.sh platform-user`。帳密存在 `~/.bigtours-deploy/platform-user.txt`，請使用者自己開啟，不要讀出來。
-8. **收尾**：`setup.sh status`，然後提醒使用者還沒做的：
+7. **退信與客訴通知**：`setup.sh ses-feedback`（SES 網域要先驗證通過；主機服務會短暫重啟）。
+8. **平台帳號**：問使用者要用哪個 Email，執行 `PLATFORM_ADMIN_EMAIL=<email> PLATFORM_ADMIN_NAME=<姓名> deploy/lightsail/setup.sh platform-user`。帳密存在 `~/.bigtours-deploy/platform-user.txt`，請使用者自己開啟，不要讀出來。
+9. **收尾**：`setup.sh status`，然後提醒使用者還沒做的：
    - SES production access 核准前，只能寄給 SES 已驗證的信箱；核准前不要對外開放試用申請。
    - 把 `~/.bigtours-deploy/host.env` 存到密碼管理器。
    - 預約簿（gym_system repo）的 `RESERVED_SUBDOMAINS` 加上 `bigtour`。

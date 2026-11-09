@@ -1,5 +1,5 @@
 import type { INestApplication } from '@nestjs/common';
-import type { NextFunction, Request, Response } from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 
 /**
  * 所有旅行社共用一個網址，旅行社代號放在路徑第一段：
@@ -12,6 +12,9 @@ import type { NextFunction, Request, Response } from 'express';
  */
 export const AGENCY_HEADER = 'x-bt-agency';
 const PREFIXED = /^\/api\/v1\/a\/([^/?#]+)\/(agency|company|public)(?=[/?#]|$)/;
+
+/** SNS 用 text/plain 送出 JSON；這個路徑保留原始文字，由 SesFeedbackService 驗證簽章後才解析。 */
+export const SES_WEBHOOK_PATH = '/api/v1/webhooks/ses';
 
 export const agencyApiPrefix = (code: string) => `/api/v1/a/${code}`;
 
@@ -37,5 +40,6 @@ export function agencyPathMiddleware(req: Request, _res: Response, next: NextFun
 /** main.ts 與測試共用；要在 listen／init 之前呼叫，才會排在路由與其他中介層前面。 */
 export function configureApp(app: INestApplication) {
   app.use(agencyPathMiddleware);
+  app.use(SES_WEBHOOK_PATH, express.text({ type: () => true, limit: '300kb' }));
   return app;
 }
