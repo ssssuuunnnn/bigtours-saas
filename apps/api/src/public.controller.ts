@@ -4,7 +4,7 @@ import type { Response } from 'express';
 import type { ZodType } from 'zod';
 import { AccessService } from './access.service.ts';
 import { DomainError } from './errors.ts';
-import { assertSameOrigin, requestHost, sendPdf, sessionTokenFrom } from './http.ts';
+import { assertSameOrigin, requestAgency, sendPdf, sessionTokenFrom } from './http.ts';
 import { RegistrationService } from './registration.service.ts';
 
 function parse<T>(schema: ZodType<T, any, any>, body: unknown, code: 'INVALID_SELECTION' | 'INVALID_DETAILS'): T {
@@ -13,7 +13,7 @@ function parse<T>(schema: ZodType<T, any, any>, body: unknown, code: 'INVALID_SE
   return result.data;
 }
 
-/** 員工前台：以登入 Cookie 識別。旅行社由網址判定，反向代理會帶入 x-forwarded-host。 */
+/** 員工前台：以登入 Cookie 識別。旅行社由網址路徑判定（見 agency-path.ts）。 */
 @Controller('api/v1/public/events/:slug')
 export class PublicController {
   constructor(
@@ -23,7 +23,7 @@ export class PublicController {
 
   private ctx(headers: Record<string, string | undefined>, slug: string) {
     assertSameOrigin(headers);
-    return this.access.resolve(requestHost(headers), slug, sessionTokenFrom(headers));
+    return this.access.resolve(requestAgency(headers), slug, sessionTokenFrom(headers));
   }
 
   @Get()

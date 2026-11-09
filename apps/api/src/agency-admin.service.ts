@@ -1,3 +1,4 @@
+import { agencyApiPrefix } from './agency-path.ts';
 import { Inject, Injectable } from '@nestjs/common';
 import { can, pageState, type AgencyPermission, type ContactsInput, type EventBasicInput, type EventNavKey, type EventScheduleInput, type FieldInput, type OptionGroupInput, type OptionInput, type PaymentTermsInput, type PricingInput, type SessionInput } from '@bigtours/shared';
 import { generateToken, hashPassword, verifyPassword } from '@bigtours/shared/crypto';
@@ -16,6 +17,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface AgencyUserContext {
   agencyId: string;
+  agencyCode: string;
   agencyName: string;
   user: { id: string; name: string; role: string; pinnedNavItems: string[] };
 }
@@ -77,8 +79,8 @@ export class AgencyAdminService {
 
   // ===== 登入 =====
 
-  async login(host: string | undefined, email: string, password: string) {
-    const agency = await this.access.findAgency(host);
+  async login(agencyCode: string | undefined, email: string, password: string) {
+    const agency = await this.access.findAgency(agencyCode);
     const user = await this.db.withTenant(agency.id, async (tx) => {
       const { rows } = await tx.query(
         `SELECT id, password_hash, locked_until > now() AS locked FROM agency_users WHERE email = $1 AND status = 'active'`,
@@ -113,9 +115,9 @@ export class AgencyAdminService {
     return { token, maxAgeMs: SESSION_HOURS * 3_600_000 };
   }
 
-  async logout(host: string | undefined, token: string | undefined) {
+  async logout(agencyCode: string | undefined, token: string | undefined) {
     if (!token) return;
-    const agency = await this.access.findAgency(host);
+    const agency = await this.access.findAgency(agencyCode);
     await this.db.withTenant(agency.id, (tx) =>
       tx.query(`UPDATE agency_user_sessions SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL`, [
         this.encryption.hashToken(token),
@@ -123,8 +125,8 @@ export class AgencyAdminService {
     );
   }
 
-  async resolve(host: string | undefined, token: string | undefined): Promise<AgencyUserContext> {
-    const agency = await this.access.findAgency(host);
+  async resolve(agencyCode: string | undefined, token: string | undefined): Promise<AgencyUserContext> {
+    const agency = await this.access.findAgency(agencyCode);
     if (!token) throw new DomainError('UNAUTHENTICATED');
     const user = await this.db.withTenant(agency.id, async (tx) => {
       const { rows } = await tx.query(
@@ -135,7 +137,7 @@ export class AgencyAdminService {
       return rows[0];
     });
     if (!user) throw new DomainError('UNAUTHENTICATED');
-    return { agencyId: agency.id, agencyName: agency.name, user: { id: user.id, name: user.name, role: user.role, pinnedNavItems: user.pinned_nav_items } };
+    return { agencyId: agency.id, agencyCode: agency.code, agencyName: agency.name, user: { id: user.id, name: user.name, role: user.role, pinnedNavItems: user.pinned_nav_items } };
   }
 
   assertCan(ctx: AgencyUserContext, permission: AgencyPermission) {
@@ -189,7 +191,7 @@ export class AgencyAdminService {
         pageState: this.currentPageState(r), activeHolds: r.active_holds, heldTravelers: r.held_travelers,
         paymentInstructions: r.payment_instructions, retentionDays: r.retention_days,
         termsFileName: r.terms_file_name, termsVersion: r.terms_version,
-        images: agencyImages(eventId, { login: r.hero_object_key, 'login-mobile': r.login_mobile_object_key, home: r.home_image_object_key }),
+        images: agencyImages(ctx.agencyCode, eventId, { login: r.hero_object_key, 'login-mobile': r.login_mobile_object_key, home: r.home_image_object_key }),
       };
     });
   }
@@ -218,7 +220,7 @@ export class AgencyAdminService {
         `SELECT c.id, c.name, c.logo_object_key, (SELECT count(*)::int FROM events e WHERE e.company_id = c.id AND e.status <> 'archived') AS event_count
            FROM companies c WHERE c.status = 'active' ORDER BY c.created_at`,
       );
-      return rows.map((r) => ({ id: r.id, name: r.name, eventCount: r.event_count, logoUrl: this.companyLogoUrl(r.id, r.logo_object_key) }));
+      return rows.map((r) => ({ id: r.id, name: r.name, eventCount: r.event_count, logoUrl: this.companyLogoUrl(ctx.agencyCode, r.id, r.logo_object_key) }));
     });
   }
 
@@ -229,8 +231,8 @@ export class AgencyAdminService {
     });
   }
 
-  private companyLogoUrl(id: string, key: string | null) {
-    return key ? `/api/v1/agency/companies/${id}/logo?v=${key.split('/').pop()!.split('.')[0]}` : null;
+  private companyLogoUrl(agencyCode: string, id: string, key: string | null) {
+    return key ? `${agencyApiPrefix(agencyCode)}/agency/companies/${id}/logo?v=${key.split('/').pop()!.split('.')[0]}` : null;
   }
 
   /** 名稱與 Logo 改了，這間企業所有活動的前台頁首都會跟著變。 */

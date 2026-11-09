@@ -1,10 +1,14 @@
 import type { Response } from 'express';
 import { DomainError } from './errors.ts';
 import { SESSION_COOKIE } from './access.service.ts';
+import { AGENCY_HEADER, agencyApiPrefix } from './agency-path.ts';
 
 export type RequestHeaders = Record<string, string | undefined>;
 
 export const requestHost = (h: RequestHeaders) => h['x-forwarded-host'] ?? h['host'];
+
+/** 網址路徑中的旅行社代號（見 agency-path.ts）。 */
+export const requestAgency = (h: RequestHeaders) => h[AGENCY_HEADER];
 
 export function cookieValue(h: RequestHeaders, cookie: string): string | undefined {
   for (const part of (h['cookie'] ?? '').split(';')) {
@@ -16,21 +20,24 @@ export function cookieValue(h: RequestHeaders, cookie: string): string | undefin
 
 export const CONTACT_COOKIE = 'bt_contact_session';
 
-/** 後台（旅行社與企業窗口）的登入 Cookie。 */
-export const cookieOptions = () => ({
+const baseCookie = (path: string) => ({
   httpOnly: true,
   sameSite: 'lax' as const,
   secure: process.env.NODE_ENV === 'production',
-  path: '/api/v1/agency',
+  path,
 });
 
-export const contactCookieOptions = () => ({ ...cookieOptions(), path: '/api/v1/company' });
+/** 後台登入 Cookie 只送往該旅行社的 API 路徑，各旅行社的登入狀態互不相送。 */
+export const cookieOptions = (agencyCode: string) => baseCookie(`${agencyApiPrefix(agencyCode)}/agency`);
+export const contactCookieOptions = (agencyCode: string) => baseCookie(`${agencyApiPrefix(agencyCode)}/company`);
+/** 員工登入 Cookie 限定此活動：帳號不跨活動共用，同一個瀏覽器也能分別登入不同活動。 */
+export const employeeCookieOptions = (agencyCode: string, slug: string) => baseCookie(`${agencyApiPrefix(agencyCode)}/public/events/${slug}`);
 
 export const sessionTokenFrom = (h: RequestHeaders) => cookieValue(h, SESSION_COOKIE);
 
 /**
- * 登入狀態放在 Cookie。各旅行社子網域屬於同一個網站，SameSite 擋不住彼此的請求，
- * 因此瀏覽器帶 Origin 時必須與目前網址相同。
+ * 登入狀態放在 Cookie。瀏覽器帶 Origin 時必須與目前網址相同，
+ * 擋下其他網站（包括同一個上層網域的其他子網域）送來的請求。
  */
 export function assertSameOrigin(h: RequestHeaders) {
   const origin = h['origin'];

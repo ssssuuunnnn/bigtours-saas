@@ -25,7 +25,7 @@ export interface TemplateOverride { subject: string; body: string; sender_name: 
 
 const escapeHtml = (v: string) => v.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-const siteBase = (event: MailEvent) => (process.env.WEB_BASE_URL ?? 'http://{agency}.lvh.me:3000').replace('{agency}', event.agency_code);
+const siteBase = (event: MailEvent) => (process.env.WEB_BASE_URL ?? 'http://localhost:3000/{agency}').replace('{agency}', event.agency_code);
 const eventUrl = (event: MailEvent) => `${siteBase(event)}/${event.slug}`;
 
 const money = (n: number) => `$${n.toLocaleString('en-US')}`;

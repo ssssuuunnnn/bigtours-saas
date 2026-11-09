@@ -38,13 +38,6 @@ export class SiteService {
     @Inject(MailService) private readonly mail: MailService,
   ) {}
 
-  /** 只接受 平台網域 與 www.平台網域。 */
-  assertHost(host: string | undefined) {
-    const hostname = (host ?? '').split(',')[0]!.trim().split(':')[0]!.toLowerCase();
-    const domain = process.env.PLATFORM_DOMAIN;
-    if (hostname !== domain && hostname !== `www.${domain}`) throw new DomainError('NOT_FOUND');
-  }
-
   async checkCode(code: string, ip: string | null): Promise<CodeCheck> {
     this.checkLimiter.hit(ip ?? 'unknown');
     const format = agencyCodeFormat(code);
@@ -82,8 +75,7 @@ export class SiteService {
   }
 
   private async notify(input: TrialApplicationInput) {
-    const domain = process.env.PLATFORM_DOMAIN;
-    const url = `${input.code}.${domain}`;
+    const url = `${process.env.PLATFORM_DOMAIN}/${input.code}`;
     const lines = [
       `旅行社名稱：${input.agencyName}`,
       `想要的網址：${url}`,

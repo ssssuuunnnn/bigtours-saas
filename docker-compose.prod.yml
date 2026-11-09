@@ -16,7 +16,7 @@ x-app: &app
     API_URL: http://api:4000
     DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?請在 .env 設定 DATA_ENCRYPTION_KEY}
     TOKEN_HASH_KEY: ${TOKEN_HASH_KEY:?請在 .env 設定 TOKEN_HASH_KEY}
-    WEB_BASE_URL: https://{agency}.${PLATFORM_DOMAIN}
+    WEB_BASE_URL: https://${PLATFORM_DOMAIN}/{agency}
     STORAGE_DIR: /data/storage
     SMTP_URL: ${SMTP_URL:?請在 .env 設定 SMTP_URL}
     MAIL_FROM: ${MAIL_FROM:?請在 .env 設定 MAIL_FROM}

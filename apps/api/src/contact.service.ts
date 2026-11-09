@@ -18,6 +18,7 @@ const DUMMY_HASH = hashPassword('not-a-real-password-0');
 
 export interface ContactContext {
   agencyId: string;
+  agencyCode: string;
   agencyName: string;
   companyId: string;
   companyName: string;
@@ -25,7 +26,7 @@ export interface ContactContext {
   user: { id: string; name: string; email: string };
 }
 
-const siteBase = (agencyCode: string) => (process.env.WEB_BASE_URL ?? 'http://{agency}.lvh.me:3000').replace('{agency}', agencyCode);
+const siteBase = (agencyCode: string) => (process.env.WEB_BASE_URL ?? 'http://localhost:3000/{agency}').replace('{agency}', agencyCode);
 
 @Injectable()
 export class ContactService {
@@ -43,13 +44,13 @@ export class ContactService {
   // ===== 登入 =====
 
   /** 共用登入頁用這個判斷該走哪種帳號。 */
-  async isContactEmail(host: string | undefined, email: string) {
-    const agency = await this.access.findAgency(host);
+  async isContactEmail(agencyCode: string | undefined, email: string) {
+    const agency = await this.access.findAgency(agencyCode);
     return this.db.withTenant(agency.id, async (tx) => (await tx.query(`SELECT 1 FROM company_contacts WHERE email = $1`, [email])).rowCount === 1);
   }
 
-  async login(host: string | undefined, email: string, password: string) {
-    const agency = await this.access.findAgency(host);
+  async login(agencyCode: string | undefined, email: string, password: string) {
+    const agency = await this.access.findAgency(agencyCode);
     const contact = await this.db.withTenant(agency.id, async (tx) => {
       const { rows } = await tx.query(`SELECT id, password_hash, locked_until > now() AS locked FROM company_contacts WHERE email = $1 AND status = 'active'`, [email]);
       return rows[0] as { id: string; password_hash: string | null; locked: boolean | null } | undefined;
@@ -78,14 +79,14 @@ export class ContactService {
     return { token, maxAgeMs: SESSION_HOURS * 3_600_000 };
   }
 
-  async logout(host: string | undefined, token: string | undefined) {
+  async logout(agencyCode: string | undefined, token: string | undefined) {
     if (!token) return;
-    const agency = await this.access.findAgency(host);
+    const agency = await this.access.findAgency(agencyCode);
     await this.db.withTenant(agency.id, (tx) => tx.query(`UPDATE company_contact_sessions SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL`, [this.encryption.hashToken(token)]));
   }
 
-  async resolve(host: string | undefined, token: string | undefined): Promise<ContactContext> {
-    const agency = await this.access.findAgency(host);
+  async resolve(agencyCode: string | undefined, token: string | undefined): Promise<ContactContext> {
+    const agency = await this.access.findAgency(agencyCode);
     if (!token) throw new DomainError('UNAUTHENTICATED');
     const c = await this.db.withTenant(agency.id, async (tx) => {
       const { rows } = await tx.query(
@@ -97,7 +98,7 @@ export class ContactService {
       return rows[0];
     });
     if (!c) throw new DomainError('UNAUTHENTICATED');
-    return { agencyId: agency.id, agencyName: agency.name, companyId: c.company_id, companyName: c.company_name, actorType: 'company_contact', user: { id: c.id, name: c.name, email: c.email } };
+    return { agencyId: agency.id, agencyCode: agency.code, agencyName: agency.name, companyId: c.company_id, companyName: c.company_name, actorType: 'company_contact', user: { id: c.id, name: c.name, email: c.email } };
   }
 
   // ===== 旅行社管理窗口帳號 =====
@@ -197,8 +198,8 @@ export class ContactService {
 
   // ===== 設定密碼 =====
 
-  async lookupLink(host: string | undefined, token: string) {
-    const agency = await this.access.findAgency(host);
+  async lookupLink(agencyCode: string | undefined, token: string) {
+    const agency = await this.access.findAgency(agencyCode);
     const row = await this.db.withTenant(agency.id, async (tx) => (await tx.query(
       `SELECT k.name, co.name AS company_name FROM company_contact_links l JOIN company_contacts k ON k.id = l.contact_id JOIN companies co ON co.id = k.company_id
         WHERE l.token_hash = $1 AND l.used_at IS NULL AND l.revoked_at IS NULL AND l.expires_at > now() AND k.status = 'active'`,
@@ -208,8 +209,8 @@ export class ContactService {
     return { name: row.name as string, companyName: row.company_name as string, agencyName: agency.name };
   }
 
-  async setPassword(host: string | undefined, token: string, password: string) {
-    const agency = await this.access.findAgency(host);
+  async setPassword(agencyCode: string | undefined, token: string, password: string) {
+    const agency = await this.access.findAgency(agencyCode);
     const passwordHash = await hashPassword(password);
     await this.db.withTenant(agency.id, async (tx) => {
       const used = await tx.query(
@@ -282,7 +283,7 @@ export class ContactService {
   }
 
   private agencyLike(ctx: ContactContext) {
-    return { agencyId: ctx.agencyId, agencyName: ctx.agencyName, user: { id: ctx.user.id, name: ctx.user.name, role: 'company_contact', pinnedNavItems: [] } } as unknown as AgencyUserContext;
+    return { agencyId: ctx.agencyId, agencyCode: ctx.agencyCode, agencyName: ctx.agencyName, user: { id: ctx.user.id, name: ctx.user.name, role: 'company_contact', pinnedNavItems: [] } } as unknown as AgencyUserContext;
   }
 
   /** 已取消的報名也列出，和設計一致；補助合計不計入。 */

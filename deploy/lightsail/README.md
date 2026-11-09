@@ -4,8 +4,8 @@
 
 ```
 使用者 ─HTTPS─► Cloudflare Proxy
-                  │  tours.bookdex.cc、*.tours.bookdex.cc ── Origin Rule：改連 8443
-                  │  其他 *.bookdex.cc（預約簿）           ── 443
+                  │  bigtour.bookdex.cc         ── Origin Rule：改連 8443
+                  │  其他 *.bookdex.cc（預約簿） ── 443
                   ▼
         Lightsail gym-system
         ├─ /opt/gym-system  預約簿：nginx :443
@@ -14,7 +14,7 @@
 
 | 項目 | 設定 |
 |---|---|
-| 網址 | 官網 `tours.bookdex.cc`、旅行社 `<代號>.tours.bookdex.cc`、試玩 `demo.tours.bookdex.cc`、平台後台 `platform.tours.bookdex.cc` |
+| 網址 | 全部在 `bigtour.bookdex.cc`：官網 `/`、試玩 `/try`、平台後台 `/platform`、旅行社 `/<代號>/admin`、員工報名 `/<代號>/<活動>` |
 | 主機目錄 | `/opt/bigtours`：只有 `docker-compose.prod.yml`、`deploy/lightsail/`、`.env`；程式在映像檔裡 |
 | 映像檔 | GitHub Actions 建置後推到 GHCR（`ghcr.io/ssssuuunnnn/bigtours-saas:<commit>`），主機只下載，不在主機上編譯 |
 | 對外連接埠 | 8443，只開放 Cloudflare 的 IP |
@@ -34,14 +34,16 @@
 
 ### 1. Cloudflare
 
-1. **DNS**：新增 `A` 紀錄，名稱 `*.tours`，內容＝主機固定 IP，已代理（橘色雲）。`tours.bookdex.cc` 本身已由現有的 `*` 紀錄接住。
-2. **邊緣憑證**：Cloudflare 免費的 Universal SSL 只涵蓋 `bookdex.cc` 與 `*.bookdex.cc`，**不涵蓋 `*.tours.bookdex.cc`**。要另外處理，見文末「待決定」。
+1. **DNS**：不用新增。`bigtour.bookdex.cc` 已由預約簿現有的 `*` 紀錄（已代理）接住。若想在 DNS 頁面一目了然，也可以另外新增 `A` 紀錄 `bigtour` 指向同一個固定 IP、已代理。
+2. **邊緣憑證**：不用處理。`bigtour.bookdex.cc` 是第一層子網域，Cloudflare 免費的 Universal SSL（`*.bookdex.cc`）已涵蓋。
 3. **Origin Rule**：Rules → Origin Rules → 建立規則
-   - 條件：自訂運算式 `(http.host eq "tours.bookdex.cc") or ends_with(http.host, ".tours.bookdex.cc")`
+   - 條件：自訂運算式 `(http.host eq "bigtour.bookdex.cc")`
    - 目的地連接埠：改寫為 `8443`
-4. **Origin 憑證**：SSL/TLS → 原始伺服器 → 建立憑證，主機名稱填 `tours.bookdex.cc` 與 `*.tours.bookdex.cc`，有效期 15 年。存成本機的 `deploy/lightsail/certs/origin.pem`（原始憑證）與 `origin.key`（私密金鑰）；此目錄不進 git，`deploy.sh` 會上傳。
+4. **Origin 憑證**：SSL/TLS → 原始伺服器 → 建立憑證，主機名稱填 `bigtour.bookdex.cc`，有效期 15 年。（預約簿現有的 `*.bookdex.cc` Origin 憑證其實也涵蓋，但另建一張，兩個產品要撤銷時互不影響。）存成本機的 `deploy/lightsail/certs/origin.pem`（原始憑證）與 `origin.key`（私密金鑰）；此目錄不進 git，`deploy.sh` 會上傳。
 
 SSL/TLS 加密模式沿用預約簿的 Full (strict)。
+
+5. **預約簿保留 `bigtour`**：在 gym_system 的 `RESERVED_SUBDOMAINS` 加上 `bigtour`，避免有店家申請到這個子網域（Origin Rule 會先把流量轉走，店家會開不了自己的網址）。
 
 ### 2. Lightsail 防火牆：開放 8443 給 Cloudflare
 
@@ -75,7 +77,7 @@ docker compose -f docker-compose.prod.yml --env-file .env run --rm migrate node_
 
 ### 4. 自動部署（GitHub Actions）
 
-main 的 CI 通過後，`deploy.yml` 會建置映像檔推到 GHCR、暫時把 runner 的 IP 加到 22 埠、執行 `deploy.sh`、移除那個 IP，最後確認 `https://tours.bookdex.cc/api/v1/health` 有回應。主機用該次工作的 `GITHUB_TOKEN` 下載私有映像檔，部署完立即登出，不在主機上留下長期權杖。
+main 的 CI 通過後，`deploy.yml` 會建置映像檔推到 GHCR、暫時把 runner 的 IP 加到 22 埠、執行 `deploy.sh`、移除那個 IP，最後確認 `https://bigtour.bookdex.cc/api/v1/health` 有回應。主機用該次工作的 `GITHUB_TOKEN` 下載私有映像檔，部署完立即登出，不在主機上留下長期權杖。
 
 **部署專用的 SSH 金鑰**（和預約簿分開，要停用時刪這把就好）：
 
@@ -96,7 +98,7 @@ ssh-keyscan -t ed25519 <固定 IP>   # 給 DEPLOY_KNOWN_HOSTS
 | Secret | `DEPLOY_KNOWN_HOSTS` | `ssh-keyscan` 印出的那一行 |
 | Secret | `AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY` | IAM 使用者的金鑰 |
 
-選用的 Variable：`PLATFORM_DOMAIN`（預設 `tours.bookdex.cc`）、`LIGHTSAIL_INSTANCE`（預設 `gym-system`）、`AWS_REGION`（預設 `ap-southeast-2`）、`HEALTHCHECK_URL`。想要部署前先人工核准，在 `production` 環境勾 Required reviewers。
+選用的 Variable：`PLATFORM_DOMAIN`（預設 `bigtour.bookdex.cc`，只用於部署後的健康檢查網址；正式環境的網域以主機 `.env` 為準）、`LIGHTSAIL_INSTANCE`（預設 `gym-system`）、`AWS_REGION`（預設 `ap-southeast-2`）、`HEALTHCHECK_URL`。想要部署前先人工核准，在 `production` 環境勾 Required reviewers。
 
 ## 維運
 
@@ -116,10 +118,3 @@ $C exec -T postgres pg_dump -U postgres -Fc bigtours > backup-$(date +%F).dump  
 - **記憶體**：主機只有 2 GB，現在跑兩組服務。映像檔在 GitHub 建置，主機不用編譯；若開放報名尖峰時記憶體不足，建議升級到 4 GB 方案。
 - 單機、單一可用區，主機故障時從每日快照還原，最多遺失約一天的資料。
 - 兩個產品的部署可能同時修改 22 埠的防火牆；`firewall.sh` 只增減自己的 IP，但讀取與寫入之間仍有幾秒的空窗，極少數情況可能需要重新執行部署。
-
-## 待決定：`*.tours.bookdex.cc` 的邊緣憑證
-
-Cloudflare 免費憑證不涵蓋第二層子網域，旅行社網址、`demo.`、`platform.` 在瀏覽器會出現憑證錯誤（`tours.bookdex.cc` 本身沒問題）。可選：
-
-1. **Advanced Certificate Manager**：在 Cloudflare 購買後開啟 Total TLS，所有代理中的子網域自動有憑證，最省事（月費以 Cloudflare 頁面為準）。
-2. **改用獨立網域**：例如另買一個網域給大團報名，旅行社網址變成 `<代號>.新網域`，免費憑證即可涵蓋；程式只要改 `PLATFORM_DOMAIN`。
