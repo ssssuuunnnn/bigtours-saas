@@ -27,6 +27,7 @@ import { StorageService } from './storage.service.ts';
 import { DemoService } from './demo.service.ts';
 import { DemoController, SiteController } from './site.controller.ts';
 import { SiteService } from './site.service.ts';
+import { HealthController } from './health.controller.ts';
 
 const pdfBody = raw({ type: 'application/pdf', limit: '10mb' });
 const csvBody = raw({ type: 'text/csv', limit: '5mb' });
@@ -39,7 +40,7 @@ const parseFile = (parser: typeof pdfBody) => (req: Request, res: Response, next
 };
 
 @Module({
-  controllers: [SiteController, DemoController, PlatformController, ContactController, AccountController, AgencyController, PublicController],
+  controllers: [HealthController, SiteController, DemoController, PlatformController, ContactController, AccountController, AgencyController, PublicController],
   providers: [SiteService, DemoService, PlatformService, StaffService, ContactService, DataLogService, ExportService, RoomService, EmailAdminService, DatabaseService, EncryptionService, AccessService, AccountService, AgencyAdminService, RegistrationService, StorageService, MailService, RosterService, NotificationService, RegistrationAdminService],
 })
 export class AppModule implements NestModule {

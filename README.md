@@ -52,6 +52,10 @@ docker compose up --build
 
 如果 3000、4000、5432 等連接埠已被占用，請先停止占用的程式，或修改 `docker-compose.yml` 的 `ports`。
 
+## 部署
+
+正式環境部署在 AWS Lightsail（與 Bookdex 預約簿同一台主機），main 的 CI 通過後由 GitHub Actions 自動部署，設定步驟見 [deploy/lightsail/README.md](deploy/lightsail/README.md)。
+
 ## 專案結構
 
 | 路徑 | 內容 |
