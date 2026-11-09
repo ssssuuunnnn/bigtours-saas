@@ -10,7 +10,6 @@ const EMPTY: ContactValues = { id: null, name: '', phone: '', scope: '' };
 export function ContactsPanel({ event }: { event: AdminEvent }) {
   const [contacts, setContacts] = useState<ContactValues[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => { adminApi.contacts(event.id).then((c) => setContacts(c.length ? c : [EMPTY])).catch((e) => setError(adminError(e))); }, [event.id]);
@@ -20,10 +19,9 @@ export function ContactsPanel({ event }: { event: AdminEvent }) {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null); setSaved(false); setBusy(true);
+    setError(null); setBusy(true);
     try {
       setContacts(await adminApi.saveContacts(event.id, contacts));
-      setSaved(true);
     } catch (err) {
       setError(adminError(err));
     } finally {
@@ -38,7 +36,6 @@ export function ContactsPanel({ event }: { event: AdminEvent }) {
         <button type="button" className="link" onClick={() => setContacts([...contacts, EMPTY])}>{a.addContact}</button>
       </div>
       {error && <p className="error span-3" role="alert">{error}</p>}
-      {saved && <p className="admin-note span-3" role="status">{a.saved}</p>}
       {contacts.length === 0 ? <p className="admin-warn span-3">{a.noContacts}</p> : (
         <div className="admin-table-wrap span-3">
           <table className="admin-table admin-edit-table">

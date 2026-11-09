@@ -35,6 +35,7 @@ export default function PlatformAgencies() {
                     <td>{p.count(a.opened)}</td>
                     <td>{p.count(a.used)}</td>
                     <td>{p.count(a.remaining)}</td>
+                    <td>{a.lineConfigured ? p.lineOn : <span className="muted">{p.lineOff}</span>}</td>
                   </tr>
                 ))}
               </tbody>

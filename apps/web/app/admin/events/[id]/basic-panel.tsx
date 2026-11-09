@@ -7,6 +7,7 @@ import { adminApi, type AdminEvent } from '../../../../lib/admin-api';
 import { a } from '../../../../messages/admin';
 import { adminError } from '../../admin-shell';
 import { ImagesField } from './images-field';
+import { DaysEditor } from './days-editor';
 
 const HEX = /^#[0-9A-Fa-f]{6}$/;
 
@@ -19,21 +20,16 @@ export function BasicPanel({ event, onSaved }: { event: AdminEvent; onSaved: () 
   const [supportPhone, setSupportPhone] = useState(event.supportPhone ?? '');
   const [supportHours, setSupportHours] = useState(event.supportHours ?? '');
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const isDraft = event.status === 'draft';
   const colorOk = HEX.test(themeColor);
 
-  const setDay = (i: number, patch: Partial<{ title: string; description: string }>) => setDays(days.map((d, j) => (j === i ? { ...d, ...patch } : d)));
-
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    setSaved(false);
     setBusy(true);
     try {
       await adminApi.updateBasic(event.id, { name, slug, days, themeColor, supportPhone: supportPhone || null, supportHours: supportHours || null });
-      setSaved(true);
       onSaved();
     } catch (err) {
       setError(adminError(err));
@@ -56,23 +52,14 @@ export function BasicPanel({ event, onSaved }: { event: AdminEvent; onSaved: () 
   return (
     <form className="admin-form" onSubmit={submit}>
       {error && <p className="error span-3" role="alert">{error}</p>}
-      {saved && <p className="admin-note span-3" role="status">{a.saved}</p>}
       <label className="field"><span>{a.eventName}</span><input type="text" required maxLength={100} value={name} onChange={(e) => setName(e.target.value)} /></label>
       <label className="field"><span>{a.slug}</span><input type="text" required minLength={2} maxLength={50} disabled={!isDraft} value={slug} onChange={(e) => setSlug(e.target.value)} />{!isDraft && <small className="muted">{a.slugLocked}</small>}</label>
       <label className="field"><span>{a.company}</span><input type="text" disabled value={event.companyName} /></label>
 
       <fieldset className="span-3">
         <legend>{a.itineraryDays}</legend>
-        <div className="admin-days">
-          {days.map((d, i) => (
-            <div key={i} style={{ display: 'contents' }}>
-              <input aria-label={a.dayTitleLabel(i + 1)} type="text" required maxLength={50} value={d.title} onChange={(e) => setDay(i, { title: e.target.value })} />
-              <input aria-label={a.dayContentLabel(i + 1)} type="text" maxLength={500} value={d.description} onChange={(e) => setDay(i, { description: e.target.value })} />
-              <button type="button" className="link" onClick={() => setDays(days.filter((_, j) => j !== i))}>{a.remove}</button>
-            </div>
-          ))}
-        </div>
-        <button type="button" className="link" onClick={() => setDays([...days, { title: a.dayTitle(days.length + 1), description: '' }])}>{a.addDay}</button>
+        <DaysEditor days={days} onChange={setDays} />
+        <small className="muted">{a.itineraryDefaultHint}</small>
       </fieldset>
 
       <ImagesField event={event} onChanged={onSaved} />

@@ -6,6 +6,7 @@ import { createContext, useContext, useEffect, useState } from 'react';
 import { ApiError } from '../../lib/api';
 import { contactApi, type ContactMe } from '../../lib/admin-api';
 import { a } from '../../messages/admin';
+import { DoneToast } from '../../lib/done-toast';
 
 const MeContext = createContext<ContactMe | null>(null);
 export function useContactMe() {
@@ -53,6 +54,7 @@ export function ContactShell({ children }: { children: React.ReactNode }) {
           </div>
         </aside>
         {children}
+        <DoneToast />
       </div>
     </MeContext.Provider>
   );

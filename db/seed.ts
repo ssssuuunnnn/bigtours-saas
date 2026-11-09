@@ -27,7 +27,7 @@ try {
     process.exit(0);
   }
   if (old) {
-    for (const t of ['audit_logs', 'company_contact_sessions', 'company_contact_links', 'export_jobs', 'export_templates', 'email_messages', 'email_templates', 'room_publications', 'agency_user_sessions', 'employee_sessions', 'employee_password_links', 'room_assignments', 'rooms', 'room_preferences', 'registration_revisions', 'traveler_options', 'travelers', 'seat_hold_items', 'seat_holds', 'registration_drafts', 'registrations', 'event_employees', 'event_fields', 'option_session_quotas', 'options', 'option_groups', 'traveler_types', 'event_sessions', 'agency_quota_ledger', 'events', 'company_contacts', 'companies', 'agency_users']) {
+    for (const t of ['audit_logs', 'company_contact_sessions', 'company_contact_links', 'export_jobs', 'export_templates', 'email_messages', 'email_templates', 'room_publications', 'agency_user_sessions', 'employee_sessions', 'employee_password_links', 'room_assignments', 'rooms', 'room_preferences', 'registration_revisions', 'traveler_options', 'travelers', 'seat_hold_items', 'seat_holds', 'registration_drafts', 'registrations', 'event_employees', 'event_fields', 'option_quota_sessions', 'option_quotas', 'options', 'option_groups', 'traveler_types', 'event_sessions', 'agency_quota_ledger', 'events', 'company_contacts', 'companies', 'agency_users']) {
       await client.query(`DELETE FROM ${t} WHERE agency_id = $1`, [old.id]);
     }
     await client.query('DELETE FROM agencies WHERE id = $1', [old.id]);
@@ -54,7 +54,7 @@ try {
      VALUES ($1, $2, 'acme-2027', '2027 艾克米員工旅遊・沖繩三日', 'published', $3, 10000, 2, '2027-03-20',
              now() - interval '1 day', now() + interval '60 days', $4) RETURNING id`,
     [agency, company, tier.id, JSON.stringify({
-      summary: '三天兩夜的沖繩員工旅遊，第二天可自選行程。',
+      summary: '三天兩夜的沖繩員工旅遊，3/2 可自選行程。',
       days: [
         { title: '第一天', description: '桃園出發，抵達那霸，國際通自由活動。' },
         { title: '第二天', description: '依自選行程分組活動。' },
@@ -64,7 +64,13 @@ try {
   )).id;
 
   const s1 = (await one(`INSERT INTO event_sessions (agency_id, event_id, name, departs_on, returns_on, outbound_flight_no, return_flight_no, departure_time, return_arrival_time, capacity, sort_order) VALUES ($1, $2, '第一梯 沖繩三日遊', '2027-03-01', '2027-03-03', 'CX001', 'CX002', '08:30', '19:40', 40, 1) RETURNING id`, [agency, event])).id;
-  const s2 = (await one(`INSERT INTO event_sessions (agency_id, event_id, name, departs_on, returns_on, departure_time, return_arrival_time, capacity, sort_order) VALUES ($1, $2, '第二梯 沖繩三日遊', '2027-03-08', '2027-03-10', '13:15', '21:05', 3, 2) RETURNING id`, [agency, event])).id;
+  // 第二梯晚一天出發，自選行程同樣在 3/2，是第二梯的第一天下午，所以另外設定每日行程。
+  const s2Days = [
+    { title: '第一天', description: '上午抵達那霸，下午依自選行程分組活動。' },
+    { title: '第二天', description: '國際通自由活動。' },
+    { title: '第三天', description: '首里城巡禮，傍晚搭機返台。' },
+  ];
+  const s2 = (await one(`INSERT INTO event_sessions (agency_id, event_id, name, departs_on, returns_on, departure_time, return_arrival_time, capacity, itinerary_days, sort_order) VALUES ($1, $2, '第二梯 沖繩三日遊', '2027-03-02', '2027-03-04', '07:15', '21:05', 3, $3, 2) RETURNING id`, [agency, event, JSON.stringify(s2Days)])).id;
 
   const types: [string, number, boolean][] = [['員工本人', 15000, true], ['成人眷屬', 12000, false], ['兒童眷屬', 8000, false], ['嬰兒眷屬', 1000, false]];
   for (const [i, [name, price, self]] of types.entries()) {
@@ -76,19 +82,24 @@ try {
 
   const group = async (name: string, required: boolean, min: number, max: number, sort: number) =>
     (await one(`INSERT INTO option_groups (agency_id, event_id, name, is_required, min_select, max_select, sort_order) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`, [agency, event, name, required, min, max, sort])).id;
-  const option = async (g: string, name: string, price: number, quotas: [string, number][], sort: number) => {
+  /** 每組名額列出適用的梯次；列多個梯次就是共用名額。 */
+  const option = async (g: string, name: string, price: number, quotas: [string[], number][], sort: number) => {
     const o = (await one(`INSERT INTO options (agency_id, group_id, name, price, sort_order) VALUES ($1, $2, $3, $4, $5) RETURNING id`, [agency, g, name, price, sort])).id;
-    for (const [session, capacity] of quotas) {
-      await client.query(`INSERT INTO option_session_quotas (agency_id, option_id, session_id, capacity) VALUES ($1, $2, $3, $4)`, [agency, o, session, capacity]);
+    for (const [sessions, capacity] of quotas) {
+      const q = (await one(`INSERT INTO option_quotas (agency_id, option_id, capacity) VALUES ($1, $2, $3) RETURNING id`, [agency, o, capacity])).id;
+      for (const session of sessions) {
+        await client.query(`INSERT INTO option_quota_sessions (agency_id, quota_id, option_id, session_id) VALUES ($1, $2, $3, $4)`, [agency, q, o, session]);
+      }
     }
   };
-  const day2 = await group('第二天行程', true, 1, 1, 1);
-  await client.query(`UPDATE option_groups SET preference_count = 3 WHERE id = $1`, [day2]);
-  await option(day2, '美麗海水族館', 2000, [[s1, 25], [s2, 2]], 1);
+  const day2 = await group('自選行程', true, 1, 1, 1);
+  await client.query(`UPDATE option_groups SET preference_count = 3, activity_date = '2027-03-02' WHERE id = $1`, [day2]);
+  // 兩個梯次在同一天參加，共用 4 個名額，方便測試跨梯次額滿。
+  await option(day2, '美麗海水族館', 2000, [[[s1, s2], 4]], 1);
   await option(day2, '市區觀光', 0, [], 2);
   const addOn = await group('加購活動', false, 0, 2, 2);
   await option(addOn, '溫泉', 500, [], 1);
-  await option(addOn, '晚宴升級', 800, [[s1, 10]], 2);
+  await option(addOn, '晚宴升級', 800, [[[s1], 10]], 2);
   const rooms: [string, string, number, number, number][] = [
     [s1, '二人房', 2, 0, 60], [s1, '單人房', 1, 3000, 10], [s2, '三人房', 3, 0, 30], [s2, '二人房', 2, 1000, 20],
   ];

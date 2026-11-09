@@ -5,6 +5,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import { adminApi as agencyApi, type AccountState, type AdminEmployee, type RosterApi, type AdminEvent, type EmployeeValues, type ImportPreview, type PasswordLink, type RosterPage } from '../../../../lib/admin-api';
 import { a } from '../../../../messages/admin';
 import { adminError } from '../../admin-shell';
+import { EventLineLink } from '../../line-link';
 
 const STATE_TONE: Record<AccountState, string> = {
   activated: 'good', sent: 'wait', sending: 'wait', link_issued: 'wait', failed: 'bad', expired: 'bad', no_email: 'bad', none: 'idle',
@@ -37,14 +38,15 @@ function ListView({ event, note, onNote, onImport, onCopy }: { event: Pick<Admin
   const [query, setQuery] = useState('');
   const [account, setAccount] = useState('');
   const [registration, setRegistration] = useState(useSearchParams().get('registration') ?? '');
+  const [line, setLine] = useState('');
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<string[]>([]);
   const [editing, setEditing] = useState<AdminEmployee | 'new' | null>(null);
   const [link, setLink] = useState<{ name: string; link: PasswordLink } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(() => adminApi.employees(event.id, { search: query, account, registration, page })
-    .then(setData).catch((e) => setError(adminError(e))), [event.id, query, account, registration, page]);
+  const load = useCallback(() => adminApi.employees(event.id, { search: query, account, registration, line, page })
+    .then(setData).catch((e) => setError(adminError(e))), [event.id, query, account, registration, line, page]);
   useEffect(() => { void load(); }, [load]);
 
   // 寄送在背景進行，有寄送中的員工時持續更新狀態。
@@ -58,6 +60,8 @@ function ListView({ event, note, onNote, onImport, onCopy }: { event: Pick<Admin
   if (!data) return error ? <p className="error" role="alert">{error}</p> : <p aria-busy="true">{a.loading}</p>;
 
   const pending = data.summary.none + data.summary.failed + data.summary.expired;
+  // 活動關閉 LINE 入口後仍顯示既有的綁定，方便解除。
+  const showLine = data.line.available || data.line.boundCount > 0;
   const pages = Math.max(1, Math.ceil(data.total / data.pageSize));
   const pageIds = data.rows.map((r) => r.id);
   const allOnPage = pageIds.length > 0 && pageIds.every((id) => selected.includes(id));
@@ -80,6 +84,17 @@ function ListView({ event, note, onNote, onImport, onCopy }: { event: Pick<Admin
     setError(null); onNote(null);
     try {
       setLink({ name: e.name, link: await adminApi.passwordLink(event.id, e.id) });
+      await load();
+    } catch (err) {
+      setError(adminError(err));
+    }
+  };
+  const unbindLine = async (e: AdminEmployee) => {
+    if (!window.confirm(a.line.unbindConfirm(e.name))) return;
+    setError(null); onNote(null);
+    try {
+      await adminApi.unbindLine(event.id, e.id);
+      onNote(a.line.unbindDone(e.name));
       await load();
     } catch (err) {
       setError(adminError(err));
@@ -108,6 +123,7 @@ function ListView({ event, note, onNote, onImport, onCopy }: { event: Pick<Admin
       </div>
       {note && <p className="admin-note" role="status">{note}</p>}
       {error && <p className="error" role="alert">{error}</p>}
+      {data.line.url && <EventLineLink url={data.line.url} boundCount={data.line.boundCount} />}
       {editing && editing !== 'new' && <EmployeeForm key={editing.id} event={event} employee={editing} defaults={data.defaults} onCancel={() => setEditing(null)} onSaved={() => { setEditing(null); void load(); }} />}
       {editing === 'new' && <EmployeeForm event={event} employee={null} defaults={data.defaults} onCancel={() => setEditing(null)} onSaved={() => { setEditing(null); void load(); }} />}
 
@@ -131,6 +147,16 @@ function ListView({ event, note, onNote, onImport, onCopy }: { event: Pick<Admin
               {Object.entries(a.registrationStates).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
             </select>
           </label>
+          {showLine && (
+            <label className="field">
+              <span>{a.line.filter}</span>
+              <select value={line} onChange={(e) => reset(() => setLine(e.target.value))}>
+                <option value="">{a.line.filterAll}</option>
+                <option value="bound">{a.line.bound}</option>
+                <option value="unbound">{a.line.unbound}</option>
+              </select>
+            </label>
+          )}
         </form>
       )}
 
@@ -153,7 +179,9 @@ function ListView({ event, note, onNote, onImport, onCopy }: { event: Pick<Admin
               <tr>
                 <th scope="col"><input className="admin-row-input" type="checkbox" aria-label={a.selectAllPage} checked={allOnPage} onChange={() => setSelected(allOnPage ? selected.filter((id) => !pageIds.includes(id)) : [...new Set([...selected, ...pageIds])])} /></th>
                 <th scope="col">{a.employeeCol}</th><th scope="col">{a.deptCol}</th><th scope="col">{a.subsidyCol}</th><th scope="col">{a.limitCol}</th>
-                <th scope="col">{a.accountCol}</th><th scope="col">{a.registrationCol}</th><th scope="col">{a.actions}</th>
+                <th scope="col">{a.accountCol}</th><th scope="col">{a.registrationCol}</th>
+                {showLine && <th scope="col">{a.line.col}</th>}
+                <th scope="col">{a.actions}</th>
               </tr>
             </thead>
             <tbody>
@@ -166,9 +194,11 @@ function ListView({ event, note, onNote, onImport, onCopy }: { event: Pick<Admin
                   <td>{e.dependentLimit === null ? <span className="muted">{a.useDefault}</span> : e.dependentLimit}</td>
                   <td><span className={`admin-account ${STATE_TONE[e.accountState]}`}>{a.accountStates[e.accountState]}</span></td>
                   <td>{a.registrationStates[e.registered ? 'registered' : 'unregistered']}</td>
+                  {showLine && <td>{e.lineBound ? a.line.bound : <span className="muted">—</span>}</td>}
                   <td className="admin-actions">
                     <button type="button" className="link" onClick={() => generate(e)}>{a.generateLink}</button>{' '}
                     <button type="button" className="link" onClick={() => setEditing(e)}>{a.edit}</button>{' '}
+                    {e.lineBound && <><button type="button" className="link" onClick={() => unbindLine(e)}>{a.line.unbind}</button>{' '}</>}
                     <button type="button" className="link" disabled={e.registered} onClick={() => remove(e)}>{a.removeEmployee}</button>
                   </td>
                 </tr>

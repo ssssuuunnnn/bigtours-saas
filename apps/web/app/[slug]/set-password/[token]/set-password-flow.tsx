@@ -17,6 +17,7 @@ export function SetPasswordFlow({ slug, token }: { slug: string; token: string }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [employeeNo, setEmployeeNo] = useState<string | null>(null);
+  const [lineUrl, setLineUrl] = useState<string | null>(null);
 
   useEffect(() => {
     api.lookupPasswordLink(token).then((l) => { setLink(l); setView('form'); }).catch((e) => {
@@ -38,7 +39,7 @@ export function SetPasswordFlow({ slug, token }: { slug: string; token: string }
   }
 
   const brand = brandStyle(link.event.themeColor);
-  if (employeeNo) return <div style={brand}><PasswordDone slug={slug} agency={link.agency.name} employeeNo={employeeNo} /></div>;
+  if (employeeNo) return <div style={brand}><PasswordDone slug={slug} agency={link.agency.name} employeeNo={employeeNo} lineUrl={lineUrl} /></div>;
 
   const ruleBroken = checked && !isValidPassword(password);
   const mismatch = checked && !ruleBroken && password !== confirm;
@@ -49,7 +50,9 @@ export function SetPasswordFlow({ slug, token }: { slug: string; token: string }
     if (!isValidPassword(password) || password !== confirm) return;
     setBusy(true);
     try {
-      setEmployeeNo((await api.setPassword(token, password)).employeeNo);
+      const done = await api.setPassword(token, password);
+      setLineUrl(done.lineUrl);
+      setEmployeeNo(done.employeeNo);
     } catch (err) {
       if (err instanceof ApiError && err.code === 'LINK_INVALID') setView('invalid');
       else setError(t.errors[err instanceof ApiError ? err.code : 'fallback'] ?? t.errors.fallback!);
@@ -86,7 +89,7 @@ export function SetPasswordFlow({ slug, token }: { slug: string; token: string }
   );
 }
 
-function PasswordDone({ slug, agency, employeeNo }: { slug: string; agency: string; employeeNo: string }) {
+function PasswordDone({ slug, agency, employeeNo, lineUrl }: { slug: string; agency: string; employeeNo: string; lineUrl: string | null }) {
   const [copied, setCopied] = useState(false);
   const path = `/${encodeURIComponent(slug)}`;
   const copy = () => navigator.clipboard?.writeText(employeeNo).then(() => setCopied(true)).catch(() => undefined);
@@ -110,6 +113,13 @@ function PasswordDone({ slug, agency, employeeNo }: { slug: string; agency: stri
           <a className="site-link" href={path}>{typeof window === 'undefined' ? path : `${window.location.host}${path}`}</a>
           <p className="muted">{t.siteHint}</p>
         </section>
+        {lineUrl && (
+          <section className="block">
+            <h2>{t.line.openWithLine}</h2>
+            <a className="primary-link" href={lineUrl}>{t.line.openWithLine}</a>
+            <p className="muted">{t.line.openWithLineHint}</p>
+          </section>
+        )}
       </main>
     </>
   );

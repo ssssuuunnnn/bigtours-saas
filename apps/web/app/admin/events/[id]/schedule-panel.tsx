@@ -20,7 +20,6 @@ export function SchedulePanel({ event, onSaved }: { event: AdminEvent; onSaved: 
   const [regOpensAt, setRegOpensAt] = useState(toLocal(event.registrationOpensAt));
   const [regClosesAt, setRegClosesAt] = useState(toLocal(event.registrationClosesAt));
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -30,7 +29,6 @@ export function SchedulePanel({ event, onSaved }: { event: AdminEvent; onSaved: 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    setSaved(false);
     if ((pageMode === 'scheduled' && orderBad(pageOpensAt, pageClosesAt)) || orderBad(regOpensAt, regClosesAt)) { setError(a.timeOrder); return; }
     setBusy(true);
     try {
@@ -41,7 +39,6 @@ export function SchedulePanel({ event, onSaved }: { event: AdminEvent; onSaved: 
         registrationOpensAt: toIso(regOpensAt),
         registrationClosesAt: toIso(regClosesAt),
       });
-      setSaved(true);
       onSaved();
     } catch (err) {
       fail(err);
@@ -52,7 +49,6 @@ export function SchedulePanel({ event, onSaved }: { event: AdminEvent; onSaved: 
 
   const setOpen = async (open: boolean) => {
     setError(null);
-    setSaved(false);
     setBusy(true);
     try {
       await adminApi.setPageOpen(event.id, open);
@@ -70,7 +66,6 @@ export function SchedulePanel({ event, onSaved }: { event: AdminEvent; onSaved: 
   return (
     <form className="admin-form" onSubmit={submit}>
       {error && <p className="error span-3" role="alert">{error}</p>}
-      {saved && <p className="admin-note span-3" role="status">{a.saved}</p>}
 
       <fieldset className="span-3">
         <legend>{a.pageSwitch}</legend>

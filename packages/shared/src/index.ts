@@ -100,6 +100,7 @@ export const ERROR_CODES = [
   'DUPLICATE_NAME', 'TRAVELER_TYPE_IN_USE', 'ROOM_TYPE_IN_USE', 'OPTION_IN_USE', 'QUOTA_IN_USE', 'TEMPLATE_INVALID', 'TIER_NOT_HIGHER', 'AGENCY_CODE_TAKEN', 'QUOTA_BELOW_USED', 'CONTRACT_EXPIRED', 'LAST_ADMIN', 'CANNOT_CHANGE_SELF', 'EMAIL_TAKEN', 'MAIL_FAILED', 'ROOM_LABEL_TAKEN', 'ROOMS_NOT_READY', 'NOT_MODIFIABLE', 'PAYMENT_NOT_REQUIRED', 'REGISTRATION_CANCELLED', 'ROOM_FULL',
   'DUPLICATE_EMPLOYEE_NO', 'EMPLOYEE_NO_LOCKED', 'EMPLOYEE_HAS_REGISTRATION', 'CSV_BAD_HEADER', 'CSV_TOO_MANY_ROWS',
   'PUBLISH_BLOCKED', 'PUBLISH_REQUIREMENT', 'INVALID_FILE', 'FILE_TOO_LARGE',
+  'LINE_NOT_AVAILABLE', 'LINE_TOKEN_INVALID', 'LINE_NOT_BOUND', 'LINE_ACCOUNT_IN_USE', 'EMPLOYEE_LINE_BOUND',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
@@ -112,6 +113,22 @@ export const loginRequest = z.object({
   password: z.string().min(1).max(128),
 });
 export const passwordLinkRequest = z.object({ token: z.string().min(1).max(200) });
+
+// ===== LINE 登入 =====
+
+/** LIFF 取得的 ID Token，由伺服器向 LINE 驗證後才採用。 */
+export const lineTokenRequest = z.object({ idToken: z.string().min(1).max(4096) });
+export const lineBindRequest = lineTokenRequest.merge(loginRequest);
+/** 兩個欄位一起設定或一起清空。 */
+export const lineSettingsRequest = z.object({
+  channelId: z.string().trim().regex(/^[0-9]{6,20}$/).nullable(),
+  liffId: z.string().trim().regex(/^[0-9]{6,20}-[A-Za-z0-9]{4,32}$/).nullable(),
+}).refine((v) => (v.channelId === null) === (v.liffId === null), { path: ['liffId'] });
+export type LineSettingsInput = z.infer<typeof lineSettingsRequest>;
+export const eventLineRequest = z.object({ enabled: z.boolean() });
+
+/** LINE 連結：LIFF 的 Endpoint 是 `旅行社代號.平台網域/line`，後面接活動代碼。 */
+export const lineUrl = (liffId: string, slug?: string) => `https://liff.line.me/${liffId}${slug ? `/${slug}` : ''}`;
 export const setPasswordRequest = passwordLinkRequest.extend({ password: passwordRule });
 
 export type PageState = 'open' | 'not_open' | 'closed';
@@ -133,7 +150,11 @@ export function pageState(page: PageSwitch, now: Date = new Date()): PageState {
 
 // ===== 旅行社後台 =====
 
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((v) => !Number.isNaN(Date.parse(`${v}T00:00:00Z`)));
+/** 要是真的存在的日期：2/30 這類日期 JavaScript 會自動進位，所以比對換算回來的結果。 */
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((v) => {
+  const d = new Date(`${v}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+});
 const clockTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 const flightNo = z.string().trim().toUpperCase().max(20).nullable().transform((v) => v || null);
 
@@ -150,6 +171,10 @@ export const roomTypeInput = z.object({
   bedQuota: z.number().int().min(0).max(5000),
 });
 
+/** 每日行程的一天；活動預設行程與梯次另外設定的行程共用。 */
+export const itineraryDay = z.object({ title: z.string().trim().min(1).max(50), description: z.string().trim().max(500) });
+export type ItineraryDay = z.infer<typeof itineraryDay>;
+
 /** 回程日期是抵達日期；航班選填。 */
 export const sessionInput = z.object({
   name: z.string().trim().min(1).max(100),
@@ -162,6 +187,8 @@ export const sessionInput = z.object({
   capacity: z.number().int().min(0).max(5000),
   /** 不帶表示不變更房型。 */
   roomTypes: z.array(roomTypeInput).max(20).optional(),
+  /** 梯次另外設定的每日行程；null 表示沿用活動預設，不帶表示不變更。 */
+  itineraryDays: z.array(itineraryDay).min(1).max(30).nullable().optional(),
 }).refine((s) => s.returnsOn >= s.departsOn, { path: ['returnsOn'] });
 export type SessionInput = z.infer<typeof sessionInput>;
 
@@ -206,17 +233,25 @@ export const optionGroupInput = z.object({
   isRequired: z.boolean(),
   maxSelect: z.number().int().min(1).max(20),
   preferenceCount: z.number().int().min(1).max(3),
+  /** 舉辦日期，同一群組的選項都在同一天；選填。 */
+  activityDate: isoDate.nullable().default(null),
 }).refine((g) => g.preferenceCount === 1 || g.maxSelect === 1, { path: ['preferenceCount'] });
 export type OptionGroupInput = z.infer<typeof optionGroupInput>;
 
-/** 名額依梯次設定；capacity 為 null 表示不限名額，沒有列出的梯次不變更。 */
+/**
+ * 名額組：每組勾選適用的梯次，勾多個梯次就是共用名額。整份覆蓋這個選項的名額設定；
+ * 沒有被任何一組勾選的梯次不限名額，每個梯次最多屬於一組。
+ */
 export const optionInput = z.object({
   name: z.string().trim().min(1).max(100),
   price: money,
   quotas: z.array(z.object({
-    sessionId: z.string().uuid(),
-    capacity: z.number().int().min(0).max(5000).nullable(),
-  })).max(100),
+    sessionIds: z.array(z.string().uuid()).min(1).max(100),
+    capacity: z.number().int().min(0).max(5000),
+  })).max(100).refine((q) => {
+    const ids = q.flatMap((x) => x.sessionIds);
+    return new Set(ids).size === ids.length;
+  }),
 });
 export type OptionInput = z.infer<typeof optionInput>;
 
@@ -281,7 +316,7 @@ export const orderRequest = z.object({ ids: z.array(z.string().uuid()).min(1).ma
 
 // ===== 活動設定 =====
 
-const eventSlug = z.string().trim().toLowerCase().min(2).max(50).regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/).refine((v) => !['admin', 'company', 'platform', 'api'].includes(v));
+const eventSlug = z.string().trim().toLowerCase().min(2).max(50).regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/).refine((v) => !['admin', 'company', 'platform', 'api', 'line'].includes(v));
 const eventName = z.string().trim().min(1).max(100);
 const optionalText = (max: number) => z.string().trim().max(max).nullable().transform((v) => v || null);
 const isoDateTime = z.string().datetime({ offset: true }).nullable();
@@ -298,7 +333,7 @@ export const createEventRequest = z.object({
 export const eventBasicRequest = z.object({
   name: eventName,
   slug: eventSlug,
-  days: z.array(z.object({ title: z.string().trim().min(1).max(50), description: z.string().trim().max(500) })).max(30),
+  days: z.array(itineraryDay).max(30),
   themeColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
   supportPhone: optionalText(30),
   supportHours: optionalText(100),

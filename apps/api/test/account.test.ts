@@ -93,7 +93,7 @@ describe('設定密碼連結', () => {
 
     const done = await setPassword(e, token, PASSWORD);
     expect(done.status).toBe(200);
-    expect(done.body).toEqual({ employeeNo: 'E001' });
+    expect(done.body).toEqual({ employeeNo: 'E001', lineUrl: null });
     expect((await login(e, 'E001', PASSWORD)).status).toBe(204);
   });
 

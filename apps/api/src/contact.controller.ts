@@ -85,7 +85,7 @@ export class ContactController {
   @Get('events/:eventId/employees')
   async employees(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Query() q: Record<string, unknown>) {
     const text = (v: unknown) => (typeof v === 'string' ? v : undefined);
-    return this.roster.list(await this.own(h, eventId), eventId, { search: text(q.search), account: text(q.account), registration: text(q.registration), page: Number(q.page) || 1 });
+    return this.roster.list(await this.own(h, eventId), eventId, { search: text(q.search), account: text(q.account), registration: text(q.registration), line: text(q.line), page: Number(q.page) || 1 });
   }
 
   @Post('events/:eventId/employees')
@@ -135,6 +135,12 @@ export class ContactController {
   @HttpCode(204)
   async removeEmployee(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('employeeId') employeeId: string) {
     await this.roster.remove(await this.own(h, eventId), eventId, employeeId);
+  }
+
+  @Delete('events/:eventId/employees/:employeeId/line-binding')
+  @HttpCode(204)
+  async unbindLine(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('employeeId') employeeId: string) {
+    await this.roster.unbindLine(await this.own(h, eventId), eventId, employeeId);
   }
 
   @Post('events/:eventId/employees/:employeeId/password-link')

@@ -126,6 +126,7 @@ export class PlatformService {
         opened: quota.reduce((n, q) => n + q.opened, 0),
         used: quota.reduce((n, q) => n + q.used, 0),
         remaining: quota.reduce((n, q) => n + q.remaining, 0),
+        lineConfigured: a.line_channel_id !== null,
       };
     })));
   }
@@ -140,7 +141,13 @@ export class PlatformService {
         `SELECT l.id, l.change, l.note, l.created_at, l.created_by, t.min_travelers, t.max_travelers FROM agency_quota_ledger l JOIN pricing_tiers t ON t.id = l.pricing_tier_id
           WHERE l.reason IN ('grant', 'adjustment') ORDER BY l.created_at DESC, l.id LIMIT 100`,
       );
-      return { quota: await this.quotaRows(tx), owner: await this.adminRow(tx), ledger: ledger.rows };
+      // LINE 為之後的加購功能，先記錄使用情況：各活動已綁定的員工人數。
+      const lineEvents = await tx.query(
+        `SELECT e.id, e.name, e.line_enabled,
+                (SELECT count(*)::int FROM event_employees m WHERE m.event_id = e.id AND m.status = 'active' AND m.line_bound_at IS NOT NULL) AS bound
+           FROM events e WHERE e.status IN ('published', 'closed') ORDER BY e.created_at DESC`,
+      );
+      return { quota: await this.quotaRows(tx), owner: await this.adminRow(tx), ledger: ledger.rows, lineEvents: lineEvents.rows };
     });
     const names = await this.db.pool.query(`SELECT id, name FROM platform_users WHERE id = ANY($1::uuid[])`, [inner.ledger.map((l) => l.created_by).filter(Boolean)]);
     const nameOf = new Map(names.rows.map((u) => [u.id, u.name]));
@@ -149,6 +156,10 @@ export class PlatformService {
       planNote: a.plan_note, contractStartsOn: dayValue(a.contract_starts_on), contractEndsOn: dayValue(a.contract_ends_on),
       admin: inner.owner ? { id: inner.owner.id, name: inner.owner.name, email: inner.owner.email, activated: inner.owner.activated } : null,
       quota: inner.quota,
+      line: {
+        configured: a.line_channel_id !== null,
+        events: inner.lineEvents.map((e) => ({ id: e.id as string, name: e.name as string, enabled: e.line_enabled as boolean, boundCount: e.bound as number })),
+      },
       ledger: inner.ledger.map((l) => ({ id: l.id, at: l.created_at, by: nameOf.get(l.created_by) ?? null, change: l.change, note: l.note, minTravelers: l.min_travelers, maxTravelers: l.max_travelers })),
     };
   }

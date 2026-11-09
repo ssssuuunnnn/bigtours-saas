@@ -6,6 +6,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from 'rea
 import { ApiError } from '../../lib/api';
 import { platformApi } from '../../lib/admin-api';
 import { p } from '../../messages/platform';
+import { DoneToast } from '../../lib/done-toast';
 
 export const platformError = (e: unknown) => p.errors[e instanceof ApiError ? e.code : 'fallback'] ?? p.errors.fallback!;
 
@@ -47,6 +48,7 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
           </div>
         </aside>
         {children}
+        <DoneToast />
       </div>
     </MeContext.Provider>
   );

@@ -48,7 +48,7 @@ async function makeFixture(opts: { capacity?: number; optionCapacity?: number; a
   const group = (await q1(`INSERT INTO option_groups (agency_id, event_id, name, min_select, max_select) VALUES ($1, $2, 'G', 0, 2) RETURNING id`, [agencyId, event])).id;
   const limitedOption = (await q1(`INSERT INTO options (agency_id, group_id, name, price) VALUES ($1, $2, '限量', 500) RETURNING id`, [agencyId, group])).id;
   const freeOption = (await q1(`INSERT INTO options (agency_id, group_id, name, price) VALUES ($1, $2, '不限', 0) RETURNING id`, [agencyId, group])).id;
-  const quotaId = (await q1(`INSERT INTO option_session_quotas (agency_id, option_id, session_id, capacity) VALUES ($1, $2, $3, $4) RETURNING id`, [agencyId, limitedOption, sessionId, opts.optionCapacity ?? 5])).id;
+  const quotaId = (await q1(`WITH q AS (INSERT INTO option_quotas (agency_id, option_id, capacity) VALUES ($1, $2, $4) RETURNING id, agency_id, option_id) INSERT INTO option_quota_sessions (agency_id, quota_id, option_id, session_id) SELECT agency_id, id, option_id, $3 FROM q RETURNING quota_id AS id`, [agencyId, limitedOption, sessionId, opts.optionCapacity ?? 5])).id;
   await admin.query(`INSERT INTO event_fields (agency_id, event_id, field_key, label, field_type, is_required, is_sensitive) VALUES ($1, $2, 'nid', '身分證', 'national_id', true, true)`, [agencyId, event]);
   return { agencyId, code, slug, host: `${code}.lvh.me`, sessionId, sessionFull, selfType, depType, limitedOption, freeOption, quotaId };
 }
@@ -138,7 +138,7 @@ describe('完整流程', () => {
     expect(done.body.travelers[0].fieldValues.nid).toBe('A1*******9');
 
     expect((await q1(`SELECT sold_count FROM event_sessions WHERE id = $1`, [f.sessionId])).sold_count).toBe(2);
-    expect((await q1(`SELECT sold_count FROM option_session_quotas WHERE id = $1`, [f.quotaId])).sold_count).toBe(2);
+    expect((await q1(`SELECT sold_count FROM option_quotas WHERE id = $1`, [f.quotaId])).sold_count).toBe(2);
     expect((await q1(`SELECT status FROM seat_holds WHERE event_employee_id = $1`, [id])).status).toBe('converted');
 
     const after = await api.availability();
@@ -537,7 +537,7 @@ describe('房型、不佔床與志願', () => {
     const selfFee = (await q1(`SELECT base_price FROM traveler_types WHERE id = $1`, [f.selfType])).base_price as number;
     expect(reg.totalAmount).toBe(selfFee);
     expect(reg.travelers[0].preferences).toEqual([{ rank: 2, groupName: expect.any(String), optionName: '限量' }, { rank: 3, groupName: expect.any(String), optionName: '第三個' }]);
-    expect((await q1(`SELECT sold_count FROM option_session_quotas WHERE id = $1`, [f.quotaId])).sold_count).toBe(0);
+    expect((await q1(`SELECT sold_count FROM option_quotas WHERE id = $1`, [f.quotaId])).sold_count).toBe(0);
   });
 
   it('群組沒開志願時不能填，超過開放的志願數也不行', async () => {
@@ -567,7 +567,7 @@ describe('修改報名', () => {
   });
   const pick = ({ key, travelerTypeId, optionIds }: { key: string; travelerTypeId: string; optionIds: string[] }) => ({ key, travelerTypeId, optionIds });
   const seats = async (f: Fixture, sessionId = f.sessionId) => (await q1(`SELECT sold_count FROM event_sessions WHERE id = $1`, [sessionId])).sold_count;
-  const quotaSold = async (f: Fixture) => (await q1(`SELECT sold_count FROM option_session_quotas WHERE id = $1`, [f.quotaId])).sold_count;
+  const quotaSold = async (f: Fixture) => (await q1(`SELECT sold_count FROM option_quotas WHERE id = $1`, [f.quotaId])).sold_count;
 
   it('送出前原報名不變，加人只保留多出來的名額，送出後名額與費用才更新', async () => {
     const f = await makeFixture({ capacity: 2 });
@@ -864,5 +864,76 @@ describe('報名相關通知信', () => {
     await register();
     await new Promise((r) => setTimeout(r, 200));
     expect(sent().filter((m) => m.to === team)).toHaveLength(1);
+  });
+});
+
+describe('跨梯次共用名額與梯次行程', () => {
+  /** 第二個梯次，與 f.sessionId 共用限量選項的名額。 */
+  const shareWithNewSession = async (f: Fixture, capacity: number) => {
+    const eventId = (await q1(`SELECT id FROM events WHERE agency_id = $1`, [f.agencyId])).id;
+    const s2 = (await q1(`INSERT INTO event_sessions (agency_id, event_id, name, capacity) VALUES ($1, $2, 'S3', 20) RETURNING id`, [f.agencyId, eventId])).id as string;
+    await admin.query(`UPDATE option_quotas SET capacity = $2 WHERE id = $1`, [f.quotaId, capacity]);
+    await admin.query(`INSERT INTO option_quota_sessions (agency_id, quota_id, option_id, session_id) VALUES ($1, $2, $3, $4)`, [f.agencyId, f.quotaId, f.limitedOption, s2]);
+    return s2;
+  };
+
+  it('兩個梯次扣同一組名額，額滿後兩個梯次都不能再選；剩餘數相同並標示共用', async () => {
+    const f = await makeFixture();
+    const s2 = await shareWithNewSession(f, 2);
+    const a = call(f, (await makeEmployee(f)).token);
+    const b = call(f, (await makeEmployee(f)).token);
+    const c = call(f, (await makeEmployee(f)).token);
+
+    await a.hold({ sessionId: f.sessionId, travelers: [sel(f.selfType, [f.limitedOption])] }).expect(201);
+    const avail = (await b.availability()).body;
+    const optionIn = (sessionId: string) => avail.find((s: any) => s.id === sessionId).options.find((o: any) => o.optionId === f.limitedOption);
+    expect(optionIn(f.sessionId)).toMatchObject({ remaining: 1, shared: true });
+    expect(optionIn(s2)).toMatchObject({ remaining: 1, shared: true });
+    expect(avail.find((s: any) => s.id === f.sessionFull).options).toEqual([]);
+
+    await b.hold({ sessionId: s2, travelers: [sel(f.selfType, [f.limitedOption])] }).expect(201);
+    const full = await c.hold({ sessionId: s2, travelers: [sel(f.selfType, [f.limitedOption])] });
+    expect(full.status).toBe(409);
+    expect(full.body.code).toBe('OPTION_FULL');
+    expect((await c.hold({ sessionId: f.sessionId, travelers: [sel(f.selfType, [f.limitedOption])] }).expect(409)).body.code).toBe('OPTION_FULL');
+
+  });
+
+  it('同時搶共用名額的最後一位，只有一人成功', async () => {
+    const f = await makeFixture();
+    const s2 = await shareWithNewSession(f, 1);
+    const people = await Promise.all(Array.from({ length: 10 }, () => makeEmployee(f)));
+    const results = await inBatches(people.map((p, i) => () => call(f, p.token).hold({ sessionId: i % 2 ? s2 : f.sessionId, travelers: [sel(f.selfType, [f.limitedOption])] }).then((r) => r.status)));
+    expect(results.filter((s) => s === 201)).toHaveLength(1);
+    expect(results.filter((s) => s === 409)).toHaveLength(9);
+  });
+
+  it('修改報名換梯次時，共用同一組名額的選項不用另外保留', async () => {
+    const f = await makeFixture();
+    const s2 = await shareWithNewSession(f, 1);
+    const { token } = await makeEmployee(f, { subsidy: 0 });
+    const api = call(f, token);
+    const self = sel(f.selfType, [f.limitedOption]);
+    await api.hold({ sessionId: f.sessionId, travelers: [self] }).expect(201);
+    const reg = (await api.submit({ travelers: [details(self)], termsAccepted: true }).expect(201)).body;
+    const t = reg.travelers[0];
+    const moved = { key: t.id, travelerTypeId: t.travelerTypeId, optionIds: [f.limitedOption] };
+    // 名額只有 1 個且已被自己佔用；換到共用的梯次仍可保留
+    await api.modifyHold({ sessionId: s2, travelers: [moved] }).expect(201);
+    const done = await api.modify({ travelers: [{ ...moved, name: '王小明', fieldValues: {}, requestedRoomNo: 1 }], roomPreferences: [] });
+    expect(done.status).toBe(200);
+    expect((await q1(`SELECT sold_count FROM option_quotas WHERE id = $1`, [f.quotaId])).sold_count).toBe(1);
+    expect((await q1(`SELECT session_id FROM registrations WHERE id = $1`, [reg.id])).session_id).toBe(s2);
+  });
+
+  it('前台取得群組的舉辦日期與梯次另外設定的每日行程', async () => {
+    const f = await makeFixture();
+    const days = [{ title: '第一天', description: '下午自選行程' }];
+    await admin.query(`UPDATE event_sessions SET itinerary_days = $2, departs_on = '2027-01-02' WHERE id = $1`, [f.sessionFull, JSON.stringify(days)]);
+    await admin.query(`UPDATE option_groups SET activity_date = '2027-01-03' WHERE agency_id = $1`, [f.agencyId]);
+    const state = (await call(f, (await makeEmployee(f)).token).state().expect(200)).body;
+    expect(state.optionGroups[0].activityDate).toBe('2027-01-03');
+    expect(state.availability.find((s: any) => s.id === f.sessionFull).itineraryDays).toEqual(days);
+    expect(state.availability.find((s: any) => s.id === f.sessionId).itineraryDays).toBeNull();
   });
 });

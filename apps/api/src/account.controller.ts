@@ -7,7 +7,7 @@ import { DomainError } from './errors.ts';
 import { assertSameOrigin, requestHost, sendImage, sessionTokenFrom, type RequestHeaders } from './http.ts';
 
 /** Cookie 限定此活動的路徑：帳號不跨活動共用，同一個瀏覽器也能分別登入不同活動。 */
-const cookieOptions = (slug: string) => ({
+export const employeeCookieOptions = (slug: string) => ({
   httpOnly: true,
   sameSite: 'lax' as const,
   secure: process.env.NODE_ENV === 'production',
@@ -48,7 +48,7 @@ export class AccountController {
     const req = loginRequest.safeParse(body);
     if (!req.success) throw new DomainError('INVALID_CREDENTIALS');
     const { token, maxAgeMs } = await this.accounts.login(requestHost(h), slug, req.data.employeeNo, req.data.password);
-    res.cookie(SESSION_COOKIE, token, { ...cookieOptions(slug), maxAge: maxAgeMs });
+    res.cookie(SESSION_COOKIE, token, { ...employeeCookieOptions(slug), maxAge: maxAgeMs });
   }
 
   @Delete('session')
@@ -56,7 +56,7 @@ export class AccountController {
   async logout(@Headers() h: RequestHeaders, @Param('slug') slug: string, @Res({ passthrough: true }) res: Response) {
     assertSameOrigin(h);
     await this.accounts.logout(requestHost(h), sessionTokenFrom(h));
-    res.clearCookie(SESSION_COOKIE, cookieOptions(slug));
+    res.clearCookie(SESSION_COOKIE, employeeCookieOptions(slug));
   }
 
   /** 連結放在 body，不進入 API 的存取紀錄。 */

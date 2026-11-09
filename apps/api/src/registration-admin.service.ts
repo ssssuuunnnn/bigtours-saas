@@ -351,7 +351,8 @@ export class RegistrationAdminService {
       `SELECT o.id, o.name, o.price, q.id AS quota_id, q.capacity, q.sold_count,
               COALESCE((SELECT sum(i.quantity) FROM seat_hold_items i JOIN seat_holds h ON h.id = i.hold_id
                          WHERE i.quota_id = q.id AND h.status = 'active' AND h.expires_at > now()), 0)::int AS held
-         FROM options o LEFT JOIN option_session_quotas q ON q.option_id = o.id AND q.session_id = $2
+         FROM options o LEFT JOIN option_quota_sessions qs ON qs.option_id = o.id AND qs.session_id = $2
+         LEFT JOIN option_quotas q ON q.id = qs.quota_id
         WHERE o.group_id = $1 AND o.id <> $3 ORDER BY o.sort_order, o.name`,
       [source[0].group_id, sessionId, optionId],
     );
@@ -414,9 +415,9 @@ export class RegistrationAdminService {
 
       // 與報名相同的鎖定順序：先梯次，再依 ID 排序的選項名額。
       await tx.query(`SELECT id FROM event_sessions WHERE id = $1 FOR UPDATE`, [input.sessionId]);
-      const { rows: sourceQuota } = await tx.query(`SELECT id FROM option_session_quotas WHERE option_id = $1 AND session_id = $2`, [input.optionId, input.sessionId]);
+      const { rows: sourceQuota } = await tx.query(`SELECT quota_id AS id FROM option_quota_sessions WHERE option_id = $1 AND session_id = $2`, [input.optionId, input.sessionId]);
       const quotaIds = [...new Set([...sourceQuota.map((q) => q.id as string), ...targets.flatMap((t) => (t.quota_id ? [t.quota_id as string] : []))])].sort();
-      for (const id of quotaIds) await tx.query(`SELECT id FROM option_session_quotas WHERE id = $1 FOR UPDATE`, [id]);
+      for (const id of quotaIds) await tx.query(`SELECT id FROM option_quotas WHERE id = $1 FOR UPDATE`, [id]);
 
       const need = new Map<string, number>();
       for (const a of input.assignments) need.set(a.toOptionId, (need.get(a.toOptionId) ?? 0) + 1);
@@ -426,7 +427,7 @@ export class RegistrationAdminService {
         const { rows: fresh } = await tx.query(
           `SELECT q.capacity, q.sold_count, COALESCE((SELECT sum(i.quantity) FROM seat_hold_items i JOIN seat_holds h ON h.id = i.hold_id
                      WHERE i.quota_id = q.id AND h.status = 'active' AND h.expires_at > now()), 0)::int AS held
-             FROM option_session_quotas q WHERE q.id = $1`,
+             FROM option_quotas q WHERE q.id = $1`,
           [t.quota_id],
         );
         const remaining = fresh[0].capacity - fresh[0].sold_count - fresh[0].held;
@@ -455,10 +456,10 @@ export class RegistrationAdminService {
         byRegistration.set(rows[0].registration_id, list);
       }
 
-      if (sourceQuota[0]) await tx.query(`UPDATE option_session_quotas SET sold_count = sold_count - $2 WHERE id = $1`, [sourceQuota[0].id, input.assignments.length]);
+      if (sourceQuota[0]) await tx.query(`UPDATE option_quotas SET sold_count = sold_count - $2 WHERE id = $1`, [sourceQuota[0].id, input.assignments.length]);
       for (const [optionId, n] of need) {
         const quotaId = targetById.get(optionId)!.quota_id;
-        if (quotaId) await tx.query(`UPDATE option_session_quotas SET sold_count = sold_count + $2 WHERE id = $1`, [quotaId, n]);
+        if (quotaId) await tx.query(`UPDATE option_quotas SET sold_count = sold_count + $2 WHERE id = $1`, [quotaId, n]);
       }
 
       const mails: PendingMail[] = [];

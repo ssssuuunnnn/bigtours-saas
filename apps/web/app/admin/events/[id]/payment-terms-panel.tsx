@@ -20,7 +20,6 @@ export function PaymentTermsPanel({ event, onSaved }: { event: AdminEvent; onSav
     setError(null); setNote(null); setBusy(true);
     try {
       await adminApi.savePaymentTerms(event.id, { paymentInstructions: payment || null, retentionDays: retention });
-      setNote(a.saved);
       onSaved();
     } catch (err) {
       setError(adminError(err));

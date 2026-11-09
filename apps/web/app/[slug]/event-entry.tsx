@@ -42,7 +42,13 @@ export function EventEntry({ slug }: { slug: string }) {
   return <LoginView slug={slug} landing={landing} onLoggedIn={() => setView('flow')} onPageClosed={load} />;
 }
 
-function LoginView({ slug, landing, onLoggedIn, onPageClosed }: { slug: string; landing: Landing; onLoggedIn: () => void; onPageClosed: () => void }) {
+interface LoginCopy { title: string; hint: string; submit: string; busy: string }
+
+/** 密碼登入表單；LINE 第一次綁定也用同一個表單，只換送出方式與文字。 */
+export function LoginView({ slug, landing, onLoggedIn, onPageClosed, submitLogin, copy }: {
+  slug: string; landing: Landing; onLoggedIn: () => void; onPageClosed: () => void;
+  submitLogin?: (employeeNo: string, password: string) => Promise<void>; copy?: LoginCopy;
+}) {
   const api = useMemo(() => createClient(slug), [slug]);
   const [employeeNo, setEmployeeNo] = useState('');
   const [password, setPassword] = useState('');
@@ -54,7 +60,7 @@ function LoginView({ slug, landing, onLoggedIn, onPageClosed }: { slug: string; 
     e.preventDefault();
     setBusy(true); setError(null);
     try {
-      await api.login(employeeNo, password);
+      await (submitLogin ?? api.login)(employeeNo, password);
       onLoggedIn();
     } catch (err) {
       if (err instanceof ApiError && err.code === 'PAGE_CLOSED') { onPageClosed(); return; }
@@ -68,6 +74,13 @@ function LoginView({ slug, landing, onLoggedIn, onPageClosed }: { slug: string; 
   const { event, agency } = landing;
   return (
     <div style={brandStyle(event.themeColor)} className={event.images.login ? 'login-shell' : undefined}>
+      {/* 背景圖鋪滿整頁，頁首與登入卡都疊在圖上，不分成兩個區塊。 */}
+      {event.images.login && (
+        <picture className="login-bg">
+          {event.images.loginMobile && <source media="(max-width: 640px)" srcSet={event.images.loginMobile} />}
+          <img src={event.images.login} alt="" />
+        </picture>
+      )}
       <header className="masthead">
         <p className="agency">{agency.name}</p>
         <h1>{event.name}</h1>
@@ -77,15 +90,10 @@ function LoginView({ slug, landing, onLoggedIn, onPageClosed }: { slug: string; 
         </dl>
       </header>
       <div className={event.images.login ? 'login-scene' : undefined}>
-      {event.images.login && (
-        <picture className="login-bg">
-          {event.images.loginMobile && <source media="(max-width: 640px)" srcSet={event.images.loginMobile} />}
-          <img src={event.images.login} alt="" />
-        </picture>
-      )}
       <main className="page">
         <form className="block auth-form" onSubmit={submit}>
-          <h2>{t.loginTitle}</h2>
+          <h2>{copy?.title ?? t.loginTitle}</h2>
+          {copy && <p>{copy.hint}</p>}
           {error && <p className="error" role="alert">{error}</p>}
           <label className="field">
             <span>{t.account}</span>
@@ -96,7 +104,7 @@ function LoginView({ slug, landing, onLoggedIn, onPageClosed }: { slug: string; 
             <input type={show ? 'text' : 'password'} autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
           </label>
           <button type="button" className="link password-toggle" onClick={() => setShow(!show)}>{show ? t.hidePassword : t.showPassword}</button>
-          <button type="submit" className="primary wide" disabled={busy}>{busy ? t.loggingIn : t.login}</button>
+          <button type="submit" className="primary wide" disabled={busy}>{busy ? copy?.busy ?? t.loggingIn : copy?.submit ?? t.login}</button>
           <p className="muted">{t.loginHelp}</p>
         </form>
       </main>

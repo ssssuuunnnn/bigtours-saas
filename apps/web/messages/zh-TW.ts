@@ -45,6 +45,9 @@ export const t = {
   greeting: (name: string) => `${name}，您好`,
   subsidy: (amount: string) => `公司補助 ${amount}`,
   itinerary: '行程',
+  itineraryOf: (session: string) => `行程・${session}`,
+  itineraryVaries: '各梯次的行程略有不同，選擇梯次後會顯示該梯次的行程。',
+  sharedQuota: '與其他梯次共用名額',
   departures: '選擇出發梯次',
   outbound: '去程',
   inbound: '回程',
@@ -158,6 +161,33 @@ export const t = {
   requestCancel: '申請取消報名',
   confirmCancel: '確定申請取消',
   keep: '保留報名',
+  line: {
+    opening: '正在用 LINE 開啟',
+    bindTitle: '第一次在 LINE 使用',
+    bindHint: '請以員工編號與密碼登入一次，之後在 LINE 開啟就會自動登入。',
+    bindSubmit: '登入並綁定 LINE',
+    binding: '綁定中',
+    notAvailableTitle: '這個活動沒有開放 LINE 登入',
+    notAvailableHint: '請改用報名網站登入。',
+    goSite: '前往報名網站',
+    agencyNotAvailable: '目前沒有開放 LINE 登入。',
+    openInLine: '請用手機 LINE 開啟這個連結',
+    openInLineHint: '在電腦或其他瀏覽器，請使用活動的報名網站網址登入。',
+    pickTitle: '選擇活動',
+    pickHint: '這個 LINE 帳號已綁定以下活動。',
+    noEventsTitle: '還沒有綁定的活動',
+    noEventsHint: '請先從公司或旅行社提供的活動 LINE 連結進入，以員工編號與密碼登入一次。',
+    noIdToken: 'LINE 登入設定不完整，請聯繫旅行社。',
+    retry: '重新開啟',
+    sectionTitle: 'LINE 登入',
+    boundHint: '這個帳號已綁定 LINE，在 LINE 開啟報名網站時會自動登入。',
+    unbind: '解除 LINE 綁定',
+    unbindConfirm: '解除後，下次在 LINE 開啟要重新以員工編號與密碼登入。確定要解除嗎？',
+    unbindDone: '已解除 LINE 綁定。',
+    keep: '保留綁定',
+    openWithLine: '用 LINE 開啟',
+    openWithLineHint: '在手機上用 LINE 開啟，第一次登入後就不用再輸入帳號密碼。',
+  },
   cancelWarning: '取消由旅行社確認後生效。',
   errors: {
     NOT_MODIFIABLE: '這筆報名目前不能修改。',
@@ -178,6 +208,10 @@ export const t = {
     PAGE_CLOSED: '活動頁目前未開放，請重新整理頁面。',
     FORBIDDEN_ORIGIN: '無法處理這個請求，請重新整理頁面。',
     INVALID_PASSWORD: '密碼不符合規則，請再確認。',
+    LINE_TOKEN_INVALID: 'LINE 登入已過期，請重新開啟。',
+    LINE_NOT_AVAILABLE: '這個活動沒有開放 LINE 登入。',
+    LINE_ACCOUNT_IN_USE: '這個 LINE 帳號已綁定這個活動的其他員工，請聯繫公司的活動窗口或旅行社。',
+    EMPLOYEE_LINE_BOUND: '這個帳號已綁定其他 LINE 帳號。如需更換，請先在報名網站解除綁定，或聯繫公司的活動窗口或旅行社。',
     fallback: '操作失敗，請再試一次。',
   } as Record<string, string>,
 };
@@ -191,4 +225,21 @@ export function formatDateTime(iso: string | null): string {
   }).formatToParts(new Date(iso));
   const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
   return `${get('year')}/${get('month')}/${get('day')}（${get('weekday')}）${get('hour')}:${get('minute')}`;
+}
+
+const CN_DAYS = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+const toUtc = (iso: string) => new Date(`${iso}T00:00:00Z`);
+
+/**
+ * 自選行程的舉辦日期，依梯次換算第幾天：「3/2（二）・第二天」。
+ * 沒選梯次或日期不在梯次期間內時只顯示日期。
+ */
+export function activityDayLabel(date: string, departsOn: string | null, returnsOn: string | null): string {
+  const d = toUtc(date);
+  const text = `${d.getUTCMonth() + 1}/${d.getUTCDate()}（${'日一二三四五六'[d.getUTCDay()]}）`;
+  if (!departsOn) return text;
+  const n = Math.round((d.getTime() - toUtc(departsOn).getTime()) / 86_400_000) + 1;
+  const last = returnsOn ? Math.round((toUtc(returnsOn).getTime() - toUtc(departsOn).getTime()) / 86_400_000) + 1 : n;
+  if (n < 1 || n > last) return text;
+  return `${text}・第${CN_DAYS[n - 1] ?? ` ${n} `}天`;
 }

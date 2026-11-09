@@ -15,13 +15,16 @@ export interface SessionAvailability {
   returnArrivalTime: string | null;
   remaining: number;
   status: 'available' | 'held' | 'sold_out';
-  options: { optionId: string; remaining: number; status: 'available' | 'held' | 'sold_out' }[];
+  /** shared：這組名額與其他梯次共用。 */
+  options: { optionId: string; remaining: number; status: 'available' | 'held' | 'sold_out'; shared: boolean }[];
   roomTypes: RoomTypeChoice[];
+  /** 梯次另外設定的每日行程；null 表示沿用活動預設。 */
+  itineraryDays: { title: string; description: string }[] | null;
 }
 export interface RoomTypeChoice { id: string; name: string; capacity: number; surcharge: number; remaining: number; status: 'available' | 'held' | 'sold_out' }
 export interface Option { id: string; groupId: string; name: string; price: number; hasPdf: boolean }
 export interface EventFrontImages { login: string | null; loginMobile: string | null; home: string | null }
-export interface OptionGroup { id: string; name: string; isRequired: boolean; minSelect: number; maxSelect: number; preferenceCount: number; options: Option[] }
+export interface OptionGroup { id: string; name: string; isRequired: boolean; minSelect: number; maxSelect: number; preferenceCount: number; activityDate: string | null; options: Option[] }
 export interface TravelerType { id: string; name: string; basePrice: number; isEmployeeSelf: boolean; note: string | null; occupiesBed: boolean }
 export interface Field { key: string; label: string; type: string; choices: string[] | null; isRequired: boolean; isSensitive: boolean }
 export interface Hold { id: string; sessionId: string; quantity: number; expiresAt: string; modifying: boolean }
@@ -94,7 +97,11 @@ export function createClient(slug: string) {
     login: (employeeNo: string, password: string) => call<void>('POST', '/session', { employeeNo, password }),
     logout: () => call<void>('DELETE', '/session'),
     lookupPasswordLink: (token: string) => call<PasswordLink>('POST', '/password-links/lookup', { token }),
-    setPassword: (token: string, password: string) => call<{ employeeNo: string }>('POST', '/password-links/set', { token, password }),
+    setPassword: (token: string, password: string) => call<{ employeeNo: string; lineUrl: string | null }>('POST', '/password-links/set', { token, password }),
+    lineLogin: (idToken: string) => call<void>('POST', '/line-session', { idToken }),
+    lineBind: (idToken: string, employeeNo: string, password: string) => call<void>('POST', '/line-binding', { idToken, employeeNo, password }),
+    lineStatus: () => call<{ available: boolean; bound: boolean; boundAt: string | null }>('GET', '/line-binding'),
+    lineUnbind: () => call<void>('DELETE', '/line-binding'),
     state: () => call<EventState>('GET', ''),
     availability: () => call<SessionAvailability[]>('GET', '/availability'),
     hold: (sessionId: string, travelers: unknown[]) => call<Hold>('POST', '/holds', { sessionId, travelers }),
@@ -107,3 +114,19 @@ export function createClient(slug: string) {
     requestCancel: () => call<Registration>('POST', '/registrations/current/cancel-request'),
   };
 }
+
+/** LINE 登入：旅行社層級，不屬於單一活動。 */
+export const lineApi = {
+  async config(): Promise<{ liffId: string; agencyName: string }> {
+    const res = await fetch('/api/v1/public/line/config');
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new ApiError(res.status, data?.code ?? 'fallback', data?.detail);
+    return data;
+  },
+  async events(idToken: string): Promise<{ slug: string; name: string; companyName: string }[]> {
+    const res = await fetch('/api/v1/public/line/events', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ idToken }) });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new ApiError(res.status, data?.code ?? 'fallback', data?.detail);
+    return data;
+  },
+};

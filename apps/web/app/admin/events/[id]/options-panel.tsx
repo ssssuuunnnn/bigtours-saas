@@ -6,7 +6,13 @@ import { adminApi, type AdminEvent, type AdminOption, type AdminOptionGroup, typ
 import { a } from '../../../../messages/admin';
 import { adminError, MoveButtons, swapped } from '../../admin-shell';
 
-const EMPTY_GROUP: OptionGroupValues = { name: '', isRequired: false, maxSelect: 1, preferenceCount: 1 };
+const EMPTY_GROUP: OptionGroupValues = { name: '', isRequired: false, maxSelect: 1, preferenceCount: 1, activityDate: null };
+
+/** 2027-03-02 → 2027/3/2（二） */
+export function formatDay(iso: string) {
+  const d = new Date(`${iso}T00:00:00Z`);
+  return `${d.getUTCFullYear()}/${d.getUTCMonth() + 1}/${d.getUTCDate()}（${'日一二三四五六'[d.getUTCDay()]}）`;
+}
 
 type Editing =
   | { kind: 'group'; group: AdminOptionGroup | null }
@@ -72,7 +78,7 @@ export function OptionsPanel({ event }: { event: AdminEvent }) {
           <div className="admin-group-head">
             <div>
               <h2>{g.name}</h2>
-              <p>{a.groupRule(g.isRequired, g.maxSelect, g.preferenceCount)}</p>
+              <p>{a.groupRule(g.isRequired, g.maxSelect, g.preferenceCount)}{g.activityDate && <>・{a.groupDateLine(formatDay(g.activityDate))}</>}</p>
             </div>
             <div className="admin-group-tools">
               <MoveButtons name={g.name} canUp={gi > 0} canDown={gi < groups.length - 1} onUp={() => moveGroup(gi, gi - 1)} onDown={() => moveGroup(gi, gi + 1)} />
@@ -107,8 +113,15 @@ export function OptionsPanel({ event }: { event: AdminEvent }) {
                       </td>
                       <td>{o.price === 0 ? a.noExtra : a.extra(o.price)}</td>
                       {sessions.map((s) => {
-                        const q = o.quotas[s.id];
-                        return <td key={s.id}>{q ? q.capacity : a.unlimited}{q && q.soldCount > 0 && <><br /><small className="muted admin-nowrap">{a.sold(q.soldCount)}</small></>}</td>;
+                        const q = o.quotas.find((x) => x.sessionIds.includes(s.id));
+                        if (!q) return <td key={s.id}>{a.unlimited}</td>;
+                        const shared = q.sessionIds.length > 1;
+                        return (
+                          <td key={s.id}>
+                            {q.capacity}{shared && <> <span className="admin-tag">{a.quotaShared}</span></>}
+                            {q.soldCount > 0 && <><br /><small className="muted admin-nowrap">{shared ? a.quotaSharedSold(q.soldCount) : a.sold(q.soldCount)}</small></>}
+                          </td>
+                        );
                       })}
                       <td className="admin-actions">
                         <button type="button" className="link" onClick={() => setEditing({ kind: 'option', groupId: g.id, option: o })}>{a.edit}</button>
@@ -130,7 +143,7 @@ export function OptionsPanel({ event }: { event: AdminEvent }) {
 }
 
 function GroupForm({ eventId, group, onCancel, onSaved }: { eventId: string; group: AdminOptionGroup | null; onCancel: () => void; onSaved: () => void }) {
-  const [v, setV] = useState<OptionGroupValues>(group ? { name: group.name, isRequired: group.isRequired, maxSelect: group.maxSelect, preferenceCount: group.preferenceCount } : EMPTY_GROUP);
+  const [v, setV] = useState<OptionGroupValues>(group ? { name: group.name, isRequired: group.isRequired, maxSelect: group.maxSelect, preferenceCount: group.preferenceCount, activityDate: group.activityDate } : EMPTY_GROUP);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -165,6 +178,11 @@ function GroupForm({ eventId, group, onCancel, onSaved }: { eventId: string; gro
         </select>
         <small className="muted">{single ? a.groupPreferenceHint : a.groupPreferenceSingleOnly}</small>
       </label>
+      <label className="field">
+        <span>{a.groupDate}</span>
+        <input type="date" value={v.activityDate ?? ''} onChange={(e) => setV({ ...v, activityDate: e.target.value || null })} />
+        <small className="muted">{a.groupDateHint}</small>
+      </label>
       <label className="check span-3"><input type="checkbox" checked={v.isRequired} onChange={(e) => setV({ ...v, isRequired: e.target.checked })} /><span>{a.groupRequired}</span></label>
       <div className="admin-form-actions span-3">
         {group && <button type="button" className="link" disabled={busy} onClick={remove}>{a.deleteGroup}</button>}
@@ -178,14 +196,29 @@ function GroupForm({ eventId, group, onCancel, onSaved }: { eventId: string; gro
 function OptionForm({ eventId, groupId, option, sessions, onCancel, onSaved }: { eventId: string; groupId: string; option: AdminOption | null; sessions: AdminSession[]; onCancel: () => void; onSaved: () => void }) {
   const [name, setName] = useState(option?.name ?? '');
   const [price, setPrice] = useState(option?.price ?? 0);
-  const [quotas, setQuotas] = useState<Record<string, string>>(() => Object.fromEntries(sessions.map((s) => [s.id, option?.quotas[s.id] ? String(option.quotas[s.id]!.capacity) : ''])));
+  const [pools, setPools] = useState<{ sessionIds: string[]; capacity: string }[]>(() =>
+    (option?.quotas ?? []).map((q) => ({ sessionIds: q.sessionIds, capacity: String(q.capacity) })));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const assigned = new Set(pools.flatMap((p) => p.sessionIds));
+  const unassigned = sessions.filter((s) => !assigned.has(s.id));
+  const setPool = (i: number, patch: Partial<{ sessionIds: string[]; capacity: string }>) => setPools(pools.map((p, j) => (j === i ? { ...p, ...patch } : p)));
+  const toggle = (i: number, sessionId: string) => {
+    const ids = pools[i]!.sessionIds;
+    // 依梯次排序存放，畫面與儲存的順序一致。
+    const next = ids.includes(sessionId) ? ids.filter((x) => x !== sessionId) : sessions.map((s) => s.id).filter((id) => id === sessionId || ids.includes(id));
+    setPool(i, { sessionIds: next });
+  };
+  // 新的一組預設勾選還沒設定名額的梯次，共用名額只要一步。
+  const addPool = () => setPools([...pools, { sessionIds: unassigned.map((s) => s.id), capacity: '' }]);
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const empty = pools.findIndex((p) => p.sessionIds.length === 0);
+    if (empty >= 0) { setError(a.quotaNeedSession(empty + 1)); return; }
     setBusy(true); setError(null);
-    const values = { name, price, quotas: sessions.map((s) => ({ sessionId: s.id, capacity: quotas[s.id] ? Number(quotas[s.id]) : null })) };
+    const values = { name, price, quotas: pools.map((p) => ({ sessionIds: p.sessionIds, capacity: Number(p.capacity) })) };
     try {
       if (option) await adminApi.updateOption(eventId, option.id, values);
       else await adminApi.createOption(eventId, groupId, values);
@@ -198,16 +231,41 @@ function OptionForm({ eventId, groupId, option, sessions, onCancel, onSaved }: {
 
   return (
     <form className="admin-form" onSubmit={submit}>
-      {error && <p className="error" role="alert">{error}</p>}
+      {error && <p className="error span-3" role="alert">{error}</p>}
       <label className="field span-2"><span>{a.optionName}</span><input type="text" required maxLength={100} value={name} onChange={(e) => setName(e.target.value)} /></label>
       <label className="field"><span>{a.optionPrice}</span><input type="number" required min={0} max={10000000} value={price} onChange={(e) => setPrice(Number(e.target.value))} /></label>
-      {sessions.map((s) => (
-        <label key={s.id} className="field">
-          <span>{a.optionQuota(s.name)}</span>
-          <input type="number" min={option?.quotas[s.id]?.soldCount ?? 0} max={5000} placeholder={a.unlimited} value={quotas[s.id] ?? ''} onChange={(e) => setQuotas({ ...quotas, [s.id]: e.target.value })} />
-          <small className="muted">{a.quotaBlankHint}</small>
-        </label>
-      ))}
+      <fieldset className="span-3 admin-quota-pools">
+        <legend>{a.optionQuotaTitle}</legend>
+        <p className="muted">{a.optionQuotaHint}</p>
+        {pools.map((p, i) => (
+          <fieldset key={i} className="admin-quota-pool">
+            <legend>{a.quotaPoolLabel(i + 1)}{p.sessionIds.length > 1 && <> <span className="admin-tag">{a.quotaShared}</span></>}</legend>
+            <label className="field">
+              <span>{a.quotaCapacity}</span>
+              <input type="number" required min={0} max={5000} value={p.capacity} onChange={(e) => setPool(i, { capacity: e.target.value })} />
+            </label>
+            <div className="admin-quota-sessions" role="group" aria-label={`${a.quotaPoolLabel(i + 1)}・${a.quotaSessions}`}>
+              <span>{a.quotaSessions}</span>
+              {sessions.map((s) => {
+                const elsewhere = !p.sessionIds.includes(s.id) && assigned.has(s.id);
+                return (
+                  <label key={s.id} className="check">
+                    <input type="checkbox" checked={p.sessionIds.includes(s.id)} disabled={elsewhere} onChange={() => toggle(i, s.id)} />
+                    <span>{s.name}</span>
+                  </label>
+                );
+              })}
+            </div>
+            <button type="button" className="link" onClick={() => setPools(pools.filter((_, j) => j !== i))}>{a.quotaRemove(i + 1)}</button>
+          </fieldset>
+        ))}
+        {unassigned.length > 0
+          ? <>
+              <p className="muted">{a.quotaUnlimitedList(unassigned.map((s) => s.name).join('、'))}</p>
+              <div><button type="button" className="ghost" onClick={addPool}>{a.quotaAdd}</button></div>
+            </>
+          : <p className="muted">{a.quotaAllAssigned}</p>}
+      </fieldset>
       <div className="admin-form-actions span-3">
         <button type="button" className="ghost" onClick={onCancel}>{a.cancel}</button>
         <button type="submit" className="primary" disabled={busy}>{busy ? a.saving : a.save}</button>

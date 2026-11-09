@@ -9,12 +9,12 @@
 | 平台與額度 | `agencies`、`platform_users` | 旅行社租戶、平台人員 |
 | | `pricing_tiers`、`agency_quota_ledger` | 收費級距；開通、扣除、退回額度的流水帳 |
 | 旅行社與企業 | `agency_users`、`companies`、`company_contacts` | 旅行社人員（管理員、活動操作員、營運人員，含釘選的選單項目）、企業客戶（含前台顯示的名稱與 Logo）、企業窗口 |
-| 活動設定 | `events`、`event_sessions`、`event_service_contacts` | 活動、梯次與名額、活動的服務人員 |
+| 活動設定 | `events`、`event_sessions`、`event_service_contacts` | 活動、梯次與名額（含梯次另外設定的每日行程）、活動的服務人員 |
 | | `traveler_types` | 旅客類型、團費、備註與是否佔床 |
 | | `session_room_types` | 各梯次的房型、可住人數、每人加價與可售床位 |
-| | `option_groups`、`options`、`option_session_quotas` | 選項群組、選項、各梯次的選項名額 |
+| | `option_groups`、`options`、`option_quotas`、`option_quota_sessions` | 選項群組（含舉辦日期）、選項、選項的名額組與名額組適用的梯次 |
 | | `event_fields` | 自訂欄位定義 |
-| 名單 | `event_employees` | 活動員工名單、補助金額、眷屬上限、登入密碼雜湊 |
+| 名單 | `event_employees` | 活動員工名單、補助金額、眷屬上限、登入密碼雜湊、LINE 綁定（識別碼雜湊與綁定時間） |
 | 帳號 | `employee_password_links`、`employee_sessions`、`agency_user_sessions` | 設定密碼連結、員工與旅行社人員的登入狀態 |
 | 報名 | `seat_holds`、`seat_hold_items` | 15 分鐘的名額保留與選項保留 |
 | | `registration_drafts` | 倒數結束後保留的已填內容（加密） |
@@ -36,7 +36,7 @@ agencies
       ├─ event_sessions ──┐
       ├─ traveler_types   │
       ├─ event_fields     │
-      ├─ option_groups ── options ── option_session_quotas（選項 × 梯次）
+      ├─ option_groups ── options ── option_quotas（名額組）── option_quota_sessions（名額組 × 梯次）
       └─ event_employees
          ├─ seat_holds ── seat_hold_items
          ├─ registration_drafts（一人一份）
@@ -70,6 +70,14 @@ agencies
 - `registration_drafts`、`registration_revisions` 含個資，整份加密。
 - 到達保存期限時，由背景工作清除敏感欄位、匿名化旅客資料與員工名單，刪除草稿，並記錄於 `events.personal_data_purged_at`。
 
+### 3.3.1 選項名額組
+
+- 一個選項可以有多組名額（`option_quotas`），每組適用的梯次記在 `option_quota_sessions`；適用多個梯次就是共用名額。`(option_id, session_id)` 唯一，每個梯次最多屬於一組；沒有列在任何一組的梯次不限名額。
+- 保留與已售都記在名額組上（`seat_hold_items.quota_id`、`option_quotas.sold_count`）；依梯次找名額時經由 `option_quota_sessions` 對應。鎖定順序不變：先梯次，再依 ID 排序的名額組。
+- 旅行社調整名額組時整份覆蓋：依各梯次實際已選（未取消的報名）與保留中的人數重新計算每組已售人數，盡量沿用原本的名額組，保留中的名額改指到梯次目前所屬的組。
+- 刪除梯次時從名額組移除；沒有任何梯次的名額組一併刪除。
+- `event_sessions.itinerary_days` 為 NULL 時沿用活動的每日行程；`option_groups.activity_date` 是群組的舉辦日期，前台依梯次去程日期換算第幾天。
+
 ### 3.4 員工帳號與登入
 
 - `events.theme_color` 必填，建立活動時預設為系統預設色；複製活動時帶入原活動的主色。
@@ -79,6 +87,9 @@ agencies
 - 使用連結時以同一筆更新確認並標記 `used_at`，同時送出也只會成功一次；設定完成後撤銷該員工所有登入狀態。
 - 產生連結與設定密碼都寫入 `audit_logs`，記錄產生人與時間。
 - `employee_sessions` 只存雜湊，登出或重設密碼時撤銷，12 小時後過期。
+- LINE 登入：`agencies.line_channel_id` 與 `line_liff_id` 一起設定或一起清空；`events.line_enabled` 是活動的 LINE 入口開關。
+- `event_employees.line_user_hash` 是 `line:Channel ID:LINE 帳號識別碼` 的 HMAC 雜湊，不存識別碼本身；`(event_id, line_user_hash)` 唯一，保證同一活動中一個 LINE 帳號只綁一位員工。移出名單、重新加入、換 Channel ID 時清除。
+- LINE 登入與密碼登入建立同一種 `employee_sessions`；綁定與解除寫入 `audit_logs`（`employee.line_bound`、`employee.line_unbound`）。
 
 ### 3.5 活動頁開關
 

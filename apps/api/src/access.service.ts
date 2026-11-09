@@ -12,6 +12,8 @@ export interface AgencyInfo {
   code: string;
   name: string;
   logoObjectKey: string | null;
+  /** 旅行社已設定 LINE Login 時才有值。 */
+  line: { channelId: string; liffId: string } | null;
 }
 
 export interface EventInfo {
@@ -34,6 +36,8 @@ export interface EventInfo {
   companyLogoKey: string | null;
   pageState: PageState;
   pageOpensAt: Date | null;
+  /** 活動的 LINE 入口開關；旅行社也要設定 LINE 才有作用。 */
+  lineEnabled: boolean;
 }
 
 export interface EmployeeContext {
@@ -63,12 +67,15 @@ export class AccessService {
   async findAgency(host: string | undefined): Promise<AgencyInfo> {
     const code = this.agencyCodeFromHost(host);
     const { rows } = await this.db.pool.query(
-      `SELECT id, code, name, logo_object_key FROM agencies WHERE code = $1 AND status = 'active'`,
+      `SELECT id, code, name, logo_object_key, line_channel_id, line_liff_id FROM agencies WHERE code = $1 AND status = 'active'`,
       [code],
     );
     const a = rows[0];
     if (!a) throw new DomainError('NOT_FOUND');
-    return { id: a.id, code: a.code, name: a.name, logoObjectKey: a.logo_object_key };
+    return {
+      id: a.id, code: a.code, name: a.name, logoObjectKey: a.logo_object_key,
+      line: a.line_channel_id && a.line_liff_id ? { channelId: a.line_channel_id, liffId: a.line_liff_id } : null,
+    };
   }
 
   async findEvent(agencyId: string, slug: string): Promise<EventInfo> {
@@ -76,7 +83,7 @@ export class AccessService {
       const { rows } = await tx.query(
         `SELECT id, slug, name, itinerary, status, registration_opens_at, registration_closes_at,
                 default_subsidy_amount, default_dependent_limit, allow_dependents_only, terms_version, terms_object_key, payment_instructions, hero_object_key, login_mobile_object_key, home_image_object_key,
-                page_mode, page_is_open, page_opens_at, page_closes_at, theme_color,
+                page_mode, page_is_open, page_opens_at, page_closes_at, theme_color, line_enabled,
                 (SELECT c.name FROM companies c WHERE c.id = company_id) AS company_name,
                 (SELECT c.logo_object_key FROM companies c WHERE c.id = company_id) AS company_logo_key
            FROM events WHERE slug = $1 AND status IN ('published', 'closed')`,
@@ -105,6 +112,7 @@ export class AccessService {
       images: { login: r.hero_object_key, 'login-mobile': r.login_mobile_object_key, home: r.home_image_object_key },
       pageState: pageState({ mode: r.page_mode, isOpen: r.page_is_open, opensAt: r.page_opens_at, closesAt: r.page_closes_at }),
       pageOpensAt: r.page_mode === 'scheduled' ? r.page_opens_at : null,
+      lineEnabled: r.line_enabled,
     };
   }
 

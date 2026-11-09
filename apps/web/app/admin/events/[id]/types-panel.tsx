@@ -10,7 +10,6 @@ const EMPTY_TYPE: TravelerTypeValues = { id: null, name: '', basePrice: 0, note:
 export function TypesPanel({ event }: { event: AdminEvent }) {
   const [v, setV] = useState<PricingValues | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => { adminApi.pricing(event.id).then(setV).catch((e) => setError(adminError(e))); }, [event.id]);
@@ -20,10 +19,9 @@ export function TypesPanel({ event }: { event: AdminEvent }) {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null); setSaved(false); setBusy(true);
+    setError(null); setBusy(true);
     try {
       setV(await adminApi.savePricing(event.id, v));
-      setSaved(true);
     } catch (err) {
       setError(adminError(err));
     } finally {
@@ -38,7 +36,6 @@ export function TypesPanel({ event }: { event: AdminEvent }) {
         <button type="button" className="link" onClick={() => setV({ ...v, types: [...v.types, EMPTY_TYPE] })}>{a.addType}</button>
       </div>
       {error && <p className="error span-3" role="alert">{error}</p>}
-      {saved && <p className="admin-note span-3" role="status">{a.saved}</p>}
       <div className="admin-table-wrap span-3">
         <table className="admin-table admin-edit-table">
           <thead>

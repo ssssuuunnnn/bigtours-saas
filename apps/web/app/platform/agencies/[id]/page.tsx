@@ -106,6 +106,16 @@ function Detail() {
         </form>
 
         <div className="admin-card">
+          <h2>{p.lineTitle}</h2>
+          <p className="muted">{p.lineHint}</p>
+          {!d.line.configured ? <p className="muted">{p.lineNotConfigured}</p> : d.line.events.length === 0 ? <p className="muted">{p.lineNoEvents}</p> : (
+            <ul className="admin-cell-list">
+              {d.line.events.map((e) => <li key={e.id}>{p.lineEventLine(e.name, e.boundCount, e.enabled)}</li>)}
+            </ul>
+          )}
+        </div>
+
+        <div className="admin-card">
           <h2>{p.ledgerTitle}</h2>
           {d.ledger.length === 0 && <p className="muted">{p.ledgerNone}</p>}
           <ul className="admin-cell-list">

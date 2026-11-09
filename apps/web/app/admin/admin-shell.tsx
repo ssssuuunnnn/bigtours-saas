@@ -6,6 +6,7 @@ import { ApiError } from '../../lib/api';
 import { adminApi, contactApi, type AdminMe } from '../../lib/admin-api';
 import { a } from '../../messages/admin';
 import { Sidebar } from './sidebar';
+import { DoneToast } from '../../lib/done-toast';
 
 export const adminError = (e: unknown) => a.errors[e instanceof ApiError ? e.code : 'fallback'] ?? a.errors.fallback!;
 
@@ -50,6 +51,7 @@ function Shell({ children }: { children: React.ReactNode }) {
           onLogout={() => adminApi.logout().finally(() => { setMe(null); setView('login'); })}
         />
         {children}
+        <DoneToast />
       </div>
     </MeContext.Provider>
   );

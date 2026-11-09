@@ -3,7 +3,7 @@
 import { calculateFees } from '@bigtours/shared';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, createClient, type EventState, type Field, type Registration, type SessionAvailability, type Traveler } from '../../lib/api';
-import { formatDateTime, money, t } from '../../messages/zh-TW';
+import { activityDayLabel, formatDateTime, money, t } from '../../messages/zh-TW';
 import { brandStyle } from '../../lib/brand';
 import { modifiedFees, uuid } from '../../lib/fees';
 
@@ -295,6 +295,7 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
           slug={state.event.slug}
           registration={registration}
           session={availability.find((s) => s.id === registration.sessionId)}
+          itinerary={<Itinerary state={state} session={availability.find((s) => s.id === registration.sessionId)} />}
           fields={state.fields}
           onCancel={async () => setRegistration(await api.requestCancel())}
           notice={notice}
@@ -572,11 +573,16 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
   const open = state.event.openState === 'open';
   return (
     <div style={brand}>
-      {masthead}
-      {state.event.images.home && <img className="home-banner" src={state.event.images.home} alt="" />}
+      {/* 活動首頁圖片鋪到頁首後面，頁首與圖片是同一個區塊。 */}
+      {state.event.images.home ? (
+        <div className="home-hero">
+          <img className="home-hero-bg" src={state.event.images.home} alt="" />
+          {masthead}
+        </div>
+      ) : masthead}
       <main className="page has-bar">
         {restored && <p className="notice">{t.draftRestored}</p>}
-        <Itinerary state={state} />
+        <Itinerary state={state} session={session} />
         <ServiceContacts contacts={state.serviceContacts} />
         <Board sessions={availability} selected={sessionId} onSelect={(id) => {
           setSessionId(id); setError(null);
@@ -587,6 +593,7 @@ export function RegistrationFlow({ slug, onSignedOut, onPageClosed }: { slug: st
         {!open && <section className="block"><h2>{t.records}</h2><p className="muted">{t.noRecords}</p></section>}
         {open && <FeeList types={state.travelerTypes} />}
         {open && picker}
+        <LineBinding slug={slug} />
       </main>
       {open && (
         <FeeBar fees={fees} error={error} note={t.holdNote}>
@@ -670,6 +677,44 @@ function Masthead({ state, onLogout }: { state: EventState; onLogout: () => void
   );
 }
 
+/** 已綁定 LINE 時顯示，員工可自行解除。未綁定時不顯示。 */
+function LineBinding({ slug }: { slug: string }) {
+  const api = useMemo(() => createClient(slug), [slug]);
+  const [bound, setBound] = useState(false);
+  const [done, setDone] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { api.lineStatus().then((s) => setBound(s.bound)).catch(() => undefined); }, [api]);
+  const unbind = async () => {
+    setBusy(true); setError(null);
+    try {
+      await api.lineUnbind();
+      setBound(false); setDone(true); setConfirming(false);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (done) return <p className="notice" role="status">{t.line.unbindDone}</p>;
+  if (!bound) return null;
+  return (
+    <section className="block">
+      <h2>{t.line.sectionTitle}</h2>
+      <p className="muted">{t.line.boundHint}</p>
+      {error && <p className="error" role="alert">{error}</p>}
+      {confirming ? (
+        <>
+          <p>{t.line.unbindConfirm}</p>
+          <button type="button" className="danger wide" disabled={busy} onClick={unbind}>{t.line.unbind}</button>
+          <button type="button" className="ghost wide" onClick={() => setConfirming(false)}>{t.line.keep}</button>
+        </>
+      ) : <button type="button" className="ghost wide" onClick={() => setConfirming(true)}>{t.line.unbind}</button>}
+    </section>
+  );
+}
+
 function ServiceContacts({ contacts }: { contacts: EventState['serviceContacts'] }) {
   if (contacts.length === 0) return null;
   return (
@@ -688,13 +733,18 @@ function ServiceContacts({ contacts }: { contacts: EventState['serviceContacts']
   );
 }
 
-function Itinerary({ state }: { state: EventState }) {
-  const { summary, days } = state.event.itinerary;
+/** 選了梯次就顯示該梯次的行程；梯次沒另外設定時沿用活動預設。 */
+function Itinerary({ state, session }: { state: EventState; session: SessionAvailability | null | undefined }) {
+  const { summary } = state.event.itinerary;
+  const own = session?.itineraryDays ?? null;
+  const days = own ?? state.event.itinerary.days;
+  const varies = !session && state.availability.some((s) => s.itineraryDays);
   if (!summary && !days?.length) return null;
   return (
     <section className="block">
-      <h2>{t.itinerary}</h2>
+      <h2>{own && session ? t.itineraryOf(session.name) : t.itinerary}</h2>
       {summary && <p>{summary}</p>}
+      {varies && <p className="muted">{t.itineraryVaries}</p>}
       {days && (
         <ol className="days">
           {days.map((d) => <li key={d.title}><strong>{d.title}</strong><span>{d.description}</span></li>)}
@@ -790,7 +840,10 @@ function TravelerPicks({ index, traveler, state, session, ownIds, canApplyToAll,
         ) : !session && state.availability.some((s) => s.roomTypes.length) ? <p className="muted">{t.roomTypeNeedSession}</p> : null)}
       {state.optionGroups.map((group) => (
         <fieldset key={group.id} className="group">
-          <legend>{group.name}<small>{group.isRequired ? t.required : t.chooseMax(group.maxSelect)}</small></legend>
+          <legend>
+            {group.name}<small>{group.isRequired ? t.required : t.chooseMax(group.maxSelect)}</small>
+            {group.activityDate && <small className="group-date">{activityDayLabel(group.activityDate, session?.departsOn ?? null, session?.returnsOn ?? null)}</small>}
+          </legend>
           {group.options.map((option) => {
             const quota = session?.options.find((q) => q.optionId === option.id);
             const checked = traveler.optionIds.includes(option.id);
@@ -802,6 +855,7 @@ function TravelerPicks({ index, traveler, state, session, ownIds, canApplyToAll,
                 <span>{option.name}</span>
                 <span className="choice-side">
                   {quota && quota.status === 'sold_out' ? t.soldOut : quota && quota.status === 'held' ? t.optionHeld : quota ? t.remaining(quota.remaining) : ''}
+                  {quota?.shared && <small className="shared-quota">{t.sharedQuota}</small>}
                   <b>{option.price ? t.plusPrice(money(option.price)) : t.included}</b>
                 </span>
               </label>
@@ -935,7 +989,7 @@ function FeeBar({ fees, error, note, children }: { fees: { total: number; subsid
   );
 }
 
-function Done({ serviceContacts, registration: r, session, fields, paymentInstructions, slug: slug, onCancel, notice, modifyUntil, onModify }: { serviceContacts: EventState['serviceContacts']; registration: Registration; paymentInstructions: string | null; slug: string; session?: SessionAvailability; fields: Field[]; onCancel: () => Promise<void>; notice: string | null; modifyUntil: string | null; onModify: () => Promise<void> }) {
+function Done({ serviceContacts, registration: r, session, itinerary, fields, paymentInstructions, slug: slug, onCancel, notice, modifyUntil, onModify }: { serviceContacts: EventState['serviceContacts']; registration: Registration; paymentInstructions: string | null; slug: string; session?: SessionAvailability; itinerary: React.ReactNode; fields: Field[]; onCancel: () => Promise<void>; notice: string | null; modifyUntil: string | null; onModify: () => Promise<void> }) {
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -965,6 +1019,7 @@ function Done({ serviceContacts, registration: r, session, fields, paymentInstru
           <p className="preline">{paymentInstructions}</p>
         </section>
       )}
+      {itinerary}
       <ServiceContacts contacts={serviceContacts} />
       {r.travelers.map((x, i) => (
         <section className="block" key={i}>
@@ -989,6 +1044,7 @@ function Done({ serviceContacts, registration: r, session, fields, paymentInstru
           </dl>
         )}
       </section>
+      <LineBinding slug={slug} />
       {!requested && (
         <section className="block">
           {error && <p className="error" role="alert">{error}</p>}

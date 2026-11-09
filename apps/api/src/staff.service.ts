@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { lineUrl, type LineSettingsInput } from '@bigtours/shared';
 import { generateToken, hashPassword } from '@bigtours/shared/crypto';
 import { AccessService } from './access.service.ts';
 import type { AgencyUserContext } from './agency-admin.service.ts';
@@ -176,7 +177,36 @@ export class StaffService {
 
   async settings(host: string | undefined) {
     const agency = await this.access.findAgency(host);
-    return { name: agency.name, code: agency.code, logoUrl: agency.logoObjectKey ? `/api/v1/agency/branding/logo?v=${agency.logoObjectKey.split('/').pop()}` : null };
+    return {
+      name: agency.name, code: agency.code, logoUrl: agency.logoObjectKey ? `/api/v1/agency/branding/logo?v=${agency.logoObjectKey.split('/').pop()}` : null,
+      line: {
+        channelId: agency.line?.channelId ?? null,
+        liffId: agency.line?.liffId ?? null,
+        /** 在 LINE Developers 建立 LIFF 時填的 Endpoint URL。 */
+        endpointUrl: `${siteBase(agency.code)}/line`,
+        sharedUrl: agency.line ? lineUrl(agency.line.liffId) : null,
+      },
+    };
+  }
+
+  /**
+   * 換成另一個 Channel 時，LINE 帳號識別碼也不同，舊的綁定全部失效，避免留下無法使用的資料。
+   * 只改 LIFF ID 時保留綁定。
+   */
+  async updateLine(ctx: AgencyUserContext, input: LineSettingsInput) {
+    return this.db.withTenant(ctx.agencyId, async (tx) => {
+      const { rows } = await tx.query(`SELECT line_channel_id FROM agencies WHERE id = $1 FOR UPDATE`, [ctx.agencyId]);
+      const channelChanged = rows[0].line_channel_id !== input.channelId;
+      await tx.query(`UPDATE agencies SET line_channel_id = $2, line_liff_id = $3, updated_at = now() WHERE id = $1`, [ctx.agencyId, input.channelId, input.liffId]);
+      const cleared = channelChanged
+        ? (await tx.query(`UPDATE event_employees SET line_user_hash = NULL, line_bound_at = NULL WHERE line_user_hash IS NOT NULL`)).rowCount ?? 0
+        : 0;
+      await tx.query(
+        `INSERT INTO audit_logs (agency_id, actor_type, actor_id, action, target_type, target_id, metadata) VALUES ($1, 'agency_user', $2, 'agency.line_updated', 'agency', $1, $3)`,
+        [ctx.agencyId, ctx.user.id, JSON.stringify({ channelId: input.channelId, liffId: input.liffId, clearedBindings: cleared })],
+      );
+      return { clearedBindings: cleared };
+    });
   }
 
   async updateName(ctx: AgencyUserContext, name: string) {

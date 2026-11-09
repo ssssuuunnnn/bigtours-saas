@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { lineUrl } from '@bigtours/shared';
 import { generateToken, hashPassword, verifyPassword } from '@bigtours/shared/crypto';
 import { AccessService } from './access.service.ts';
 import { DatabaseService } from './database.service.ts';
@@ -64,12 +65,17 @@ export class AccountService {
     const agency = await this.access.findAgency(host);
     const event = await this.access.findEvent(agency.id, slug);
     if (event.pageState !== 'open') throw new DomainError('PAGE_CLOSED', { pageState: event.pageState });
+    const employeeId = await this.authenticate(agency.id, event.id, employeeNo, password);
+    return this.createSession(agency.id, employeeId);
+  }
 
-    const employee = await this.db.withTenant(agency.id, async (tx) => {
+  /** 驗證員工編號與密碼，連續失敗會鎖定。成功時回傳員工 ID。 */
+  async authenticate(agencyId: string, eventId: string, employeeNo: string, password: string) {
+    const employee = await this.db.withTenant(agencyId, async (tx) => {
       const { rows } = await tx.query(
         `SELECT id, password_hash, locked_until > now() AS locked FROM event_employees
           WHERE event_id = $1 AND employee_no = $2 AND status = 'active'`,
-        [event.id, employeeNo],
+        [eventId, employeeNo],
       );
       return rows[0] as { id: string; password_hash: string | null; locked: boolean | null } | undefined;
     });
@@ -77,7 +83,7 @@ export class AccountService {
     const matched = await verifyPassword(password, employee?.password_hash ?? (await DUMMY_HASH));
     if (!employee?.password_hash || employee.locked) throw new DomainError('INVALID_CREDENTIALS');
     if (!matched) {
-      await this.db.withTenant(agency.id, (tx) =>
+      await this.db.withTenant(agencyId, (tx) =>
         tx.query(
           `UPDATE event_employees
               SET failed_login_count = CASE WHEN failed_login_count + 1 >= $2 THEN 0 ELSE failed_login_count + 1 END,
@@ -88,15 +94,21 @@ export class AccountService {
       );
       throw new DomainError('INVALID_CREDENTIALS');
     }
+    await this.db.withTenant(agencyId, (tx) =>
+      tx.query(`UPDATE event_employees SET failed_login_count = 0, locked_until = NULL WHERE id = $1`, [employee.id]),
+    );
+    return employee.id;
+  }
 
+  /** 密碼登入與 LINE 登入共用同一種登入狀態。 */
+  async createSession(agencyId: string, employeeId: string) {
     const token = generateToken();
-    await this.db.withTenant(agency.id, async (tx) => {
-      await tx.query(`UPDATE event_employees SET failed_login_count = 0, locked_until = NULL WHERE id = $1`, [employee.id]);
-      await tx.query(`DELETE FROM employee_sessions WHERE event_employee_id = $1 AND expires_at <= now()`, [employee.id]);
+    await this.db.withTenant(agencyId, async (tx) => {
+      await tx.query(`DELETE FROM employee_sessions WHERE event_employee_id = $1 AND expires_at <= now()`, [employeeId]);
       await tx.query(
         `INSERT INTO employee_sessions (agency_id, event_employee_id, token_hash, expires_at)
          VALUES ($1, $2, $3, now() + make_interval(hours => $4))`,
-        [agency.id, employee.id, this.encryption.hashToken(token), SESSION_HOURS],
+        [agencyId, employeeId, this.encryption.hashToken(token), SESSION_HOURS],
       );
     });
     return { token, maxAgeMs: SESSION_HOURS * 3_600_000 };
@@ -157,7 +169,9 @@ export class AccountService {
          VALUES ($1, 'employee', $2, 'employee.password_set', 'event_employee', $2)`,
         [agency.id, employee.id],
       );
-      return { employeeNo: employee.employee_no as string };
+      // 完成頁提供「用 LINE 開啟」，活動未開啟 LINE 入口時不顯示。
+      const line = agency.line && event.lineEnabled ? lineUrl(agency.line.liffId, event.slug) : null;
+      return { employeeNo: employee.employee_no as string, lineUrl: line };
     });
   }
 

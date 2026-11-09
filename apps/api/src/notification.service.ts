@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { lineUrl } from '@bigtours/shared';
 import { DatabaseService, type Tx } from './database.service.ts';
 import { fill, templateDefinition } from './email-templates.ts';
 import { MailService } from './mail.service.ts';
@@ -18,7 +19,11 @@ export type MailTemplate =
   | { key: 'agency_tier_alert'; people: number; limit: number; percent: number; eventId: string }
   | { key: 'agency_modified'; employeeName: string; employeeNo: string; from: number; to: number; eventId: string; registrationId: string };
 
-export interface MailEvent { name: string; slug: string; agency_code: string; agency_name: string }
+export interface MailEvent {
+  name: string; slug: string; agency_code: string; agency_name: string;
+  /** 旅行社設定 LINE 且活動開啟 LINE 入口時，帳號信附上 LINE 連結。 */
+  line_liff_id?: string | null; line_enabled?: boolean;
+}
 /** id 為 null 表示收件人不是員工，例如旅行社的通知信箱。 */
 export interface MailEmployee { id: string | null; name: string; email: string }
 export interface TemplateOverride { subject: string; body: string; sender_name: string | null }
@@ -62,6 +67,10 @@ export function composeMail(event: MailEvent, employee: MailEmployee, t: MailTem
   const body = fill(override?.body ?? def.body, data);
   // 沒有內容的段落（例如不用付款時的付款說明）不留空行。
   const paragraphs = body.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  // LINE 連結由系統附加在帳號信最後，旅行社不必修改範本；活動未開啟 LINE 入口時不附加。
+  if (t.key === 'account' && event.line_liff_id && event.line_enabled) {
+    paragraphs.push(`設定密碼後，也可以用手機 LINE 開啟報名網站。第一次以員工編號與密碼登入，之後在 LINE 裡就不用再輸入：\n${lineUrl(event.line_liff_id, event.slug)}`);
+  }
   return {
     to: employee.email,
     fromName: override?.sender_name || event.agency_name,
@@ -83,7 +92,8 @@ export class NotificationService {
 
   async mailEvent(tx: Tx, eventId: string): Promise<MailEvent> {
     const { rows } = await tx.query(
-      `SELECT e.name, e.slug, a.code AS agency_code, a.name AS agency_name FROM events e JOIN agencies a ON a.id = e.agency_id WHERE e.id = $1`,
+      `SELECT e.name, e.slug, e.line_enabled, a.code AS agency_code, a.name AS agency_name, a.line_liff_id
+         FROM events e JOIN agencies a ON a.id = e.agency_id WHERE e.id = $1`,
       [eventId],
     );
     return rows[0];

@@ -587,41 +587,57 @@ describe('旅客類型、房型與自選行程', () => {
     expect(row.min_select).toBe(0);
   });
 
-  it('選項名額依梯次設定，留空不限；有人選時不能改成不限、不能低於已售、不能刪除', async () => {
+  it('選項名額依梯次設定，沒勾的梯次不限；有人選時不能改成不限、不能低於已選與保留、不能刪除', async () => {
     const a = await makeAgency('admin');
     const s1 = (await api(a).post('/sessions', session()).expect(201)).body.id as string;
     const s2 = (await api(a).post('/sessions', session({ name: 'B' })).expect(201)).body.id as string;
     const g = (await api(a).post('/option-groups', group()).expect(201)).body.id as string;
-    const o = (await api(a).post(`/option-groups/${g}/options`, { name: '獨木舟', price: 1200, quotas: [{ sessionId: s1, capacity: 20 }, { sessionId: s2, capacity: null }] }).expect(201)).body.id as string;
+    const o = (await api(a).post(`/option-groups/${g}/options`, { name: '獨木舟', price: 1200, quotas: [{ sessionIds: [s1], capacity: 20 }] }).expect(201)).body.id as string;
     const quotas = async () => (await api(a).get('/option-groups').expect(200)).body[0].options[0].quotas;
-    expect(await quotas()).toEqual({ [s1]: { capacity: 20, soldCount: 0 } });
+    expect(await quotas()).toMatchObject([{ sessionIds: [s1], capacity: 20, soldCount: 0 }]);
 
-    const opt = (capacity: number | null) => ({ name: '獨木舟', price: 1000, quotas: [{ sessionId: s1, capacity }] });
-    await admin.query(`UPDATE option_session_quotas SET sold_count = 5 WHERE option_id = $1`, [o]);
-    expect((await api(a).patch(`/options/${o}`, opt(4)).expect(409)).body.code).toBe('CAPACITY_BELOW_SOLD');
-    expect((await api(a).patch(`/options/${o}`, opt(null)).expect(409)).body.code).toBe('QUOTA_IN_USE');
-    await api(a).patch(`/options/${o}`, opt(5)).expect(204);
-    await admin.query(`UPDATE option_session_quotas SET sold_count = 0 WHERE option_id = $1`, [o]);
-    await api(a).patch(`/options/${o}`, opt(null)).expect(204);
-    expect(await quotas()).toEqual({});
+    const opt = (pools: { sessionIds: string[]; capacity: number }[]) => ({ name: '獨木舟', price: 1000, quotas: pools });
+    // 梯次 1 有 5 人保留中
+    const emp = await q1(`INSERT INTO event_employees (agency_id, event_id, employee_no, name) VALUES ($1, $2, 'H1', 'N') RETURNING id`, [a.agencyId, a.eventId]);
+    const hold = await q1(`INSERT INTO seat_holds (agency_id, event_id, event_employee_id, session_id, quantity, expires_at) VALUES ($1, $2, $3, $4, 5, now() + interval '10 minutes') RETURNING id`,
+      [a.agencyId, a.eventId, emp.id, s1]);
+    const firstQuota = (await quotas())[0].id;
+    await admin.query(`INSERT INTO seat_hold_items (agency_id, hold_id, quota_id, quantity) VALUES ($1, $2, $3, 5)`, [a.agencyId, hold.id, firstQuota]);
+    expect((await api(a).patch(`/options/${o}`, opt([{ sessionIds: [s1], capacity: 4 }])).expect(409)).body.code).toBe('CAPACITY_BELOW_SOLD');
+    expect((await api(a).patch(`/options/${o}`, opt([])).expect(409)).body.code).toBe('QUOTA_IN_USE');
+    expect((await api(a).patch(`/options/${o}`, opt([{ sessionIds: [s2], capacity: 9 }])).expect(409)).body.code).toBe('QUOTA_IN_USE');
+    // 加入共用：同一組名額沿用，保留中的名額不用搬
+    await api(a).patch(`/options/${o}`, opt([{ sessionIds: [s1, s2], capacity: 6 }])).expect(204);
+    expect(await quotas()).toEqual([{ id: firstQuota, sessionIds: [s1, s2], capacity: 6, soldCount: 0 }]);
+    // 同一個梯次不能出現在兩組
+    await api(a).patch(`/options/${o}`, opt([{ sessionIds: [s1], capacity: 6 }, { sessionIds: [s1, s2], capacity: 6 }])).expect(422);
+    // 拆開：保留中的名額跟著梯次 1 的那組
+    await api(a).patch(`/options/${o}`, opt([{ sessionIds: [s2], capacity: 3 }, { sessionIds: [s1], capacity: 5 }])).expect(204);
+    const split = await quotas();
+    const s1Quota = split.find((q: any) => q.sessionIds[0] === s1);
+    expect((await q1(`SELECT quota_id FROM seat_hold_items WHERE hold_id = $1`, [hold.id])).quota_id).toBe(s1Quota.id);
+    await admin.query(`UPDATE seat_holds SET status = 'released' WHERE id = $1`, [hold.id]);
+    await api(a).patch(`/options/${o}`, opt([])).expect(204);
+    expect(await quotas()).toEqual([]);
+    expect((await q1(`SELECT count(*)::int AS n FROM seat_hold_items WHERE hold_id = $1`, [hold.id])).n).toBe(0);
 
     const other = await makeAgency('admin');
     const otherS = (await api(other).post('/sessions', session()).expect(201)).body.id as string;
-    await api(a).patch(`/options/${o}`, { ...opt(1), quotas: [{ sessionId: otherS, capacity: 1 }] }).expect(422);
+    await api(a).patch(`/options/${o}`, opt([{ sessionIds: [otherS], capacity: 1 }])).expect(422);
     await api(other).del(`/options/${o}`).expect(404);
 
     const s = await api(a).post('/sessions', session({ name: 'C' })).expect(201);
-    await api(a).patch(`/options/${o}`, { ...opt(9), quotas: [{ sessionId: s.body.id, capacity: 9 }] }).expect(204);
-    const emp = await q1(`INSERT INTO event_employees (agency_id, event_id, employee_no, name) VALUES ($1, $2, 'E1', 'N') RETURNING id`, [a.agencyId, a.eventId]);
-    const hold = await q1(`INSERT INTO seat_holds (agency_id, event_id, event_employee_id, session_id, quantity, expires_at) VALUES ($1, $2, $3, $4, 1, now() + interval '10 minutes') RETURNING id`,
-      [a.agencyId, a.eventId, emp.id, s.body.id]);
-    const quota = await q1(`SELECT id FROM option_session_quotas WHERE option_id = $1`, [o]);
-    await admin.query(`INSERT INTO seat_hold_items (agency_id, hold_id, quota_id, quantity) VALUES ($1, $2, $3, 1)`, [a.agencyId, hold.id, quota.id]);
+    await api(a).patch(`/options/${o}`, opt([{ sessionIds: [s.body.id], capacity: 9 }])).expect(204);
+    const emp2 = await q1(`INSERT INTO event_employees (agency_id, event_id, employee_no, name) VALUES ($1, $2, 'E1', 'N') RETURNING id`, [a.agencyId, a.eventId]);
+    const hold2 = await q1(`INSERT INTO seat_holds (agency_id, event_id, event_employee_id, session_id, quantity, expires_at) VALUES ($1, $2, $3, $4, 1, now() + interval '10 minutes') RETURNING id`,
+      [a.agencyId, a.eventId, emp2.id, s.body.id]);
+    const quota = await q1(`SELECT id FROM option_quotas WHERE option_id = $1`, [o]);
+    await admin.query(`INSERT INTO seat_hold_items (agency_id, hold_id, quota_id, quantity) VALUES ($1, $2, $3, 1)`, [a.agencyId, hold2.id, quota.id]);
     expect((await api(a).del(`/options/${o}`).expect(409)).body.code).toBe('OPTION_IN_USE');
     expect((await api(a).del(`/option-groups/${g}`).expect(409)).body.code).toBe('OPTION_IN_USE');
 
     // 保留結束後可以刪除，紀錄一併清除
-    await admin.query(`UPDATE seat_holds SET status = 'released' WHERE id = $1`, [hold.id]);
+    await admin.query(`UPDATE seat_holds SET status = 'released' WHERE id = $1`, [hold2.id]);
     await api(a).del(`/options/${o}`).expect(204);
     await api(a).del(`/option-groups/${g}`).expect(204);
   });
@@ -878,7 +894,7 @@ describe('前台圖片、行程 PDF 與複製活動', () => {
     const s = await session1(a);
     await api(a).patch(`/sessions/${s}`, session({ roomTypes: [{ id: null, name: '二人房', capacity: 2, surcharge: 0, bedQuota: 2 }] })).expect(200);
     const { optionId } = await option(a);
-    await api(a).patch(`/options/${optionId}`, { name: '獨木舟', price: 500, quotas: [{ sessionId: s, capacity: 5 }] }).expect(204);
+    await api(a).patch(`/options/${optionId}`, { name: '獨木舟', price: 500, quotas: [{ sessionIds: [s], capacity: 5 }] }).expect(204);
     await put(a, `/options/${optionId}/pdf?name=x.pdf`, PDF, 'application/pdf').expect(200);
     await q1(`INSERT INTO event_employees (agency_id, event_id, employee_no, name) VALUES ($1, $2, 'E1', 'N') RETURNING id`, [a.agencyId, a.eventId]);
 
@@ -1146,7 +1162,7 @@ describe('報名管理、取消與改派', () => {
     const group = (await q1(`INSERT INTO option_groups (agency_id, event_id, name, max_select, preference_count) VALUES ($1, $2, '下午', 1, 3) RETURNING id`, [a.agencyId, a.eventId])).id as string;
     const option = async (name: string, price: number, capacity: number | null) => {
       const id = (await q1(`INSERT INTO options (agency_id, group_id, name, price) VALUES ($1, $2, $3, $4) RETURNING id`, [a.agencyId, group, name, price])).id as string;
-      const quota = capacity === null ? null : (await q1(`INSERT INTO option_session_quotas (agency_id, option_id, session_id, capacity) VALUES ($1, $2, $3, $4) RETURNING id`, [a.agencyId, id, s, capacity])).id as string;
+      const quota = capacity === null ? null : (await q1(`WITH q AS (INSERT INTO option_quotas (agency_id, option_id, capacity) VALUES ($1, $2, $4) RETURNING id, agency_id, option_id) INSERT INTO option_quota_sessions (agency_id, quota_id, option_id, session_id) SELECT agency_id, id, option_id, $3 FROM q RETURNING quota_id AS id`, [a.agencyId, id, s, capacity])).id as string;
       return { id, quota };
     };
     return { a, s, type, group, option };
@@ -1172,10 +1188,10 @@ describe('報名管理、取消與改派', () => {
       await admin.query(`INSERT INTO traveler_option_preferences (agency_id, traveler_id, group_id, rank, option_id) VALUES ($1, $2, $3, $4, $5)`, [c.a.agencyId, t.id, c.group, i + 2, optionId]);
     }
     await admin.query(`UPDATE event_sessions SET sold_count = sold_count + 1 WHERE id = $1`, [c.s]);
-    if (o.option.quota) await admin.query(`UPDATE option_session_quotas SET sold_count = sold_count + 1 WHERE id = $1`, [o.option.quota]);
+    if (o.option.quota) await admin.query(`UPDATE option_quotas SET sold_count = sold_count + 1 WHERE id = $1`, [o.option.quota]);
     return { id: reg.id as string, travelerId: t.id as string, no, employeeId: emp.id as string };
   };
-  const soldOf = async (quota: string) => (await q1(`SELECT sold_count FROM option_session_quotas WHERE id = $1`, [quota])).sold_count as number;
+  const soldOf = async (quota: string) => (await q1(`SELECT sold_count FROM option_quotas WHERE id = $1`, [quota])).sold_count as number;
 
   it('總覽與列表：統計、篩選，已取消預設不列出', async () => {
     const c = await setup();
@@ -2234,7 +2250,7 @@ describe('人員管理與旅行社設定', () => {
   it('旅行社設定：改名、上傳 Logo，登入前的頁面看得到；不是圖片不能上傳', async () => {
     const a = await makeAgency('admin');
     const code = a.host.split('.')[0];
-    expect((await ag(a).get('/settings').expect(200)).body).toEqual({ name: 'T', code, logoUrl: null });
+    expect((await ag(a).get('/settings').expect(200)).body).toMatchObject({ name: 'T', code, logoUrl: null, line: { channelId: null, liffId: null, sharedUrl: null } });
     await ag(a).put('/settings/name', { name: '山海旅行社' }).expect(204);
     const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16)]);
     await http().put('/api/v1/agency/settings/logo').set('x-forwarded-host', a.host).set('cookie', a.cookie).set('content-type', 'image/png').send(png).expect(200);
@@ -2548,5 +2564,47 @@ describe('企業名稱與 Logo', () => {
     await put(stranger, id, 'image/png', PNG).expect(404);
     await authed(stranger, http().patch(`/api/v1/agency/companies/${id}`)).send({ name: 'x' }).expect(404);
     await authed(stranger, http().get(`/api/v1/agency/companies/${id}/logo`)).expect(404);
+  });
+});
+
+describe('梯次行程與共用名額設定', () => {
+  const group = (o: object = {}) => ({ name: '自選行程', isRequired: true, maxSelect: 1, preferenceCount: 3, ...o });
+  it('梯次可另外設定每日行程；不帶時不變更，null 改回沿用預設', async () => {
+    const a = await makeAgency('admin');
+    const days = [{ title: '第一天', description: '下午自選行程' }];
+    const s = (await api(a).post('/sessions', session({ itineraryDays: days })).expect(201)).body;
+    expect(s.itineraryDays).toEqual(days);
+    expect((await api(a).patch(`/sessions/${s.id}`, session({ capacity: 30 })).expect(200)).body.itineraryDays).toEqual(days);
+    expect((await api(a).patch(`/sessions/${s.id}`, session({ itineraryDays: null })).expect(200)).body.itineraryDays).toBeNull();
+    await api(a).patch(`/sessions/${s.id}`, session({ itineraryDays: [] })).expect(422);
+  });
+
+  it('群組可設定舉辦日期；複製活動帶入日期', async () => {
+    const a = await makeAgency('admin');
+    const g = (await api(a).post('/option-groups', group({ activityDate: '2027-01-03' })).expect(201)).body.id;
+    expect((await api(a).get('/option-groups').expect(200)).body[0].activityDate).toBe('2027-01-03');
+    await api(a).patch(`/option-groups/${g}`, group({ activityDate: null })).expect(204);
+    expect((await api(a).get('/option-groups').expect(200)).body[0].activityDate).toBeNull();
+    await api(a).patch(`/option-groups/${g}`, group({ activityDate: '2027-02-30' })).expect(422);
+    await api(a).patch(`/option-groups/${g}`, group({ activityDate: '2027-01-04' })).expect(204);
+    const company = (await q1(`SELECT company_id FROM events WHERE id = $1`, [a.eventId])).company_id;
+    await admin.query(`INSERT INTO agency_quota_ledger (agency_id, pricing_tier_id, change, reason) VALUES ($1, $2, 1, 'grant')`, [a.agencyId, tierId]);
+    const copy = (await request(app.getHttpServer()).post(`/api/v1/agency/events/${a.eventId}/copy`).set('x-forwarded-host', a.host).set('cookie', a.cookie)
+      .send({ companyId: company, name: '複製', slug: 'copy-1', pricingTierId: tierId }).expect(201)).body.id;
+    expect((await q1(`SELECT activity_date FROM option_groups WHERE event_id = $1`, [copy])).activity_date).toBe('2027-01-04');
+  });
+
+  it('刪除共用名額中的梯次，名額組保留給其他梯次；只剩它時一併刪除', async () => {
+    const a = await makeAgency('admin');
+    const s1 = (await api(a).post('/sessions', session()).expect(201)).body.id as string;
+    const s2 = (await api(a).post('/sessions', session({ name: 'B' })).expect(201)).body.id as string;
+    const s3 = (await api(a).post('/sessions', session({ name: 'C' })).expect(201)).body.id as string;
+    const g = (await api(a).post('/option-groups', group()).expect(201)).body.id as string;
+    const o = (await api(a).post(`/option-groups/${g}/options`, { name: '浮潛', price: 0, quotas: [{ sessionIds: [s1, s2], capacity: 10 }, { sessionIds: [s3], capacity: 5 }] }).expect(201)).body.id;
+    await api(a).del(`/sessions/${s2}`).expect(204);
+    await api(a).del(`/sessions/${s3}`).expect(204);
+    const quotas = (await api(a).get('/option-groups').expect(200)).body[0].options[0].quotas;
+    expect(quotas).toMatchObject([{ sessionIds: [s1], capacity: 10 }]);
+    expect((await q1(`SELECT count(*)::int AS n FROM option_quotas WHERE option_id = $1`, [o])).n).toBe(1);
   });
 });

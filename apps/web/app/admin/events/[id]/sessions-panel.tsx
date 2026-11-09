@@ -5,8 +5,9 @@ import { ApiError } from '../../../../lib/api';
 import { adminApi, type AdminEvent, type AdminSession, type RoomTypeValues, type SessionValues, type TierOptions } from '../../../../lib/admin-api';
 import { a } from '../../../../messages/admin';
 import { adminError, MoveButtons, swapped } from '../../admin-shell';
+import { DaysEditor } from './days-editor';
 
-const EMPTY: SessionValues = { name: '', departsOn: '', returnsOn: '', departureTime: '', returnArrivalTime: '', outboundFlightNo: '', returnFlightNo: '', capacity: 0, roomTypes: [] };
+const EMPTY: SessionValues = { name: '', departsOn: '', returnsOn: '', departureTime: '', returnArrivalTime: '', outboundFlightNo: '', returnFlightNo: '', capacity: 0, roomTypes: [], itineraryDays: null };
 const EMPTY_ROOM: RoomTypeValues = { id: null, name: '', capacity: 2, surcharge: 0, bedQuota: 0 };
 
 export function SessionsPanel({ event, onEventChanged }: { event: AdminEvent; onEventChanged: () => void }) {
@@ -78,7 +79,7 @@ export function SessionsPanel({ event, onEventChanged }: { event: AdminEvent; on
               {sessions.map((s, i) => (
                 <tr key={s.id}>
                   <td><MoveButtons name={s.name} canUp={i > 0} canDown={i < sessions.length - 1} onUp={() => move(i, i - 1)} onDown={() => move(i, i + 1)} /></td>
-                  <td><strong>{s.name}</strong></td>
+                  <td><strong>{s.name}</strong>{s.itineraryDays && <> <span className="admin-tag">{a.sessionItineraryTag}</span></>}</td>
                   <td>{s.departsOn} {s.departureTime}{s.outboundFlightNo ? ` ${s.outboundFlightNo}` : ''}</td>
                   <td>{s.returnsOn} {s.returnArrivalTime}{s.returnFlightNo ? ` ${s.returnFlightNo}` : ''}</td>
                   <td>{s.capacity}<br /><small className="muted admin-nowrap">{a.sold(s.soldCount)}</small></td>
@@ -122,6 +123,7 @@ function SessionForm({ event, session, sessions, onCancel, onSaved, onNeedsUpgra
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (v.itineraryDays && v.itineraryDays.length === 0) { setError(a.sessionItineraryEmpty); return; }
     setBusy(true); setError(null);
     try {
       if (session) await adminApi.updateSession(event.id, session.id, v);
@@ -184,6 +186,20 @@ function SessionForm({ event, session, sessions, onCancel, onSaved, onNeedsUpgra
           </div>
         )}
         {rooms.length > 0 && beds < v.capacity && <p className="admin-note" role="status">{a.bedsShort(beds, v.capacity)}</p>}
+      </fieldset>
+      <fieldset className="span-3">
+        <legend>{a.sessionItineraryTitle}</legend>
+        <label className="check">
+          <input type="checkbox" checked={v.itineraryDays !== null}
+            onChange={(e) => setV({ ...v, itineraryDays: e.target.checked ? (event.days.length ? event.days.map((d) => ({ ...d })) : [{ title: a.dayTitle(1), description: '' }]) : null })} />
+          <span>{a.sessionItineraryOwn}</span>
+        </label>
+        {v.itineraryDays === null
+          ? <small className="muted">{a.sessionItineraryDefault(event.days.length)}</small>
+          : <>
+              <small className="muted">{a.sessionItineraryHint}</small>
+              <DaysEditor days={v.itineraryDays} onChange={(itineraryDays) => setV({ ...v, itineraryDays })} />
+            </>}
       </fieldset>
       <div className="admin-form-actions span-3">
         <button type="button" className="ghost" onClick={onCancel}>{a.cancel}</button>

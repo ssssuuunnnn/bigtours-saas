@@ -1,5 +1,5 @@
 import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Param, Patch, Post, Put, Query, Req, Res } from '@nestjs/common';
-import { tierUpgradeRequest, agencyNameRequest, isValidPassword, staffInput, staffRoleRequest, exportRequest, exportTemplateInput, assignRoomRequest, createRoomRequest, roomSessionRequest, updateRoomRequest, emailResendRequest, emailTemplateInput, notifyEmailsRequest, agencyLoginRequest, contactInput, contactStatusRequest, accountEmailRequest, agencyModifyRequest, companyInput, contactsRequest, createEventRequest, employeeInput, feeAdjustRequest, paymentStatusRequest, reassignRequest, rosterCopyRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
+import { eventLineRequest, lineSettingsRequest, tierUpgradeRequest, agencyNameRequest, isValidPassword, staffInput, staffRoleRequest, exportRequest, exportTemplateInput, assignRoomRequest, createRoomRequest, roomSessionRequest, updateRoomRequest, emailResendRequest, emailTemplateInput, notifyEmailsRequest, agencyLoginRequest, contactInput, contactStatusRequest, accountEmailRequest, agencyModifyRequest, companyInput, contactsRequest, createEventRequest, employeeInput, feeAdjustRequest, paymentStatusRequest, reassignRequest, rosterCopyRequest, eventBasicRequest, eventScheduleRequest, fieldInput, optionGroupInput, optionInput, orderRequest, pageSwitchRequest, paymentTermsRequest, pinnedNavRequest, pricingRequest, publishRequest, sessionInput, type AgencyPermission } from '@bigtours/shared';
 import type { Request, Response } from 'express';
 import type { ZodType } from 'zod';
 import { AgencyAdminService } from './agency-admin.service.ts';
@@ -168,6 +168,12 @@ export class AgencyController {
     await this.staff.updateName(await this.manager(h), parse(agencyNameRequest, body).name);
   }
 
+  /** LINE Login 設定，只有管理員可以修改。 */
+  @Put('settings/line')
+  async saveLine(@Headers() h: RequestHeaders, @Body() body: unknown) {
+    return this.staff.updateLine(await this.manager(h), parse(lineSettingsRequest, body));
+  }
+
   @Put('settings/logo')
   async uploadLogo(@Headers() h: RequestHeaders, @Req() req: Request) {
     return this.staff.uploadLogo(await this.manager(h), req.body);
@@ -281,6 +287,12 @@ export class AgencyController {
   @HttpCode(204)
   async setPage(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
     await this.admin.setPageOpen(await this.configurer(h), eventId, parse(pageSwitchRequest, body).open);
+  }
+
+  @Put('events/:eventId/line')
+  @HttpCode(204)
+  async setLine(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Body() body: unknown) {
+    await this.admin.setLineEnabled(await this.configurer(h), eventId, parse(eventLineRequest, body).enabled);
   }
 
   @Get('events/:eventId/sessions')
@@ -469,7 +481,7 @@ export class AgencyController {
   @Get('events/:eventId/employees')
   async employees(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Query() q: Record<string, unknown>) {
     const text = (v: unknown) => (typeof v === 'string' ? v : undefined);
-    return this.roster.list(await this.configurer(h), eventId, { search: text(q.search), account: text(q.account), registration: text(q.registration), page: Number(q.page) || 1 });
+    return this.roster.list(await this.configurer(h), eventId, { search: text(q.search), account: text(q.account), registration: text(q.registration), line: text(q.line), page: Number(q.page) || 1 });
   }
 
   @Post('events/:eventId/employees')
@@ -516,6 +528,12 @@ export class AgencyController {
   @HttpCode(204)
   async removeEmployee(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('employeeId') employeeId: string) {
     await this.roster.remove(await this.configurer(h), eventId, employeeId);
+  }
+
+  @Delete('events/:eventId/employees/:employeeId/line-binding')
+  @HttpCode(204)
+  async unbindLine(@Headers() h: RequestHeaders, @Param('eventId') eventId: string, @Param('employeeId') employeeId: string) {
+    await this.roster.unbindLine(await this.configurer(h), eventId, employeeId);
   }
 
   @Post('events/:eventId/employees/:employeeId/password-link')

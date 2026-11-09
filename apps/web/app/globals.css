@@ -258,11 +258,16 @@ a.primary-link { display: flex; align-items: center; justify-content: center; mi
 @media (max-width: 560px) {
   .admin-image-row { grid-template-columns: minmax(0, 1fr); }
 }
-.login-shell { display: flex; flex-direction: column; min-height: 100dvh; }
+/* 有登入頁背景圖時，圖鋪滿整頁，頁首改為透明疊在圖上；上方加深色漸層確保文字可讀。 */
+.login-shell { position: relative; display: flex; flex-direction: column; min-height: 100dvh; isolation: isolate; }
+.login-shell .login-bg { position: absolute; inset: 0; z-index: -1; }
+.login-shell .login-bg img { width: 100%; height: 100%; object-fit: cover; }
+.login-shell .masthead, .home-hero .masthead { background: linear-gradient(rgb(18 48 61 / .78), rgb(18 48 61 / .45) 70%, rgb(18 48 61 / 0)); text-shadow: 0 1px 3px rgb(0 0 0 / .45); padding-bottom: 32px; }
+.login-shell .entry-dates div { background: rgb(18 48 61 / .55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
 .login-scene { position: relative; flex: 1; }
-.login-scene .login-bg img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-.login-scene .page { position: relative; }
-.home-banner { display: block; width: 100%; max-height: 240px; object-fit: cover; }
+/* 登入後首頁：活動首頁圖片延伸到頁首後面，頁首下方留出看得到圖片的高度。 */
+.home-hero { position: relative; isolation: isolate; padding-bottom: clamp(120px, 18vw, 220px); }
+.home-hero-bg { position: absolute; inset: 0; z-index: -1; width: 100%; height: 100%; object-fit: cover; }
 .option-pdf { display: inline-block; margin: 4px 0 8px; font-size: 14px; color: var(--brand-text); min-height: 24px; }
 .admin-roster-tools { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 12px; }
 .admin-roster-tools .field { flex: 1 1 160px; }
@@ -444,3 +449,33 @@ fieldset.admin-card { margin: 0; border: 0; min-width: 0; }
 .admin-settings-logo { max-height: 64px; max-width: 240px; object-fit: contain; display: block; }
 .admin-file-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
 .admin-matrix td:not(:first-child), .admin-matrix th:not(:first-child) { white-space: nowrap; }
+/* LINE 共用連結的活動清單 */
+.line-event { color: inherit; text-decoration: none; gap: 4px; }
+.line-event strong { font-size: 18px; }
+/* LINE 登入設定與活動 LINE 連結 */
+.admin-line-card { margin-bottom: 16px; }
+.admin-line-steps { margin: 0; padding-left: 20px; display: grid; gap: 4px; font-size: 14px; }
+.admin-line-qr { display: flex; align-items: center; gap: 16px; }
+.admin-line-qr img { border: 1px solid var(--line); border-radius: 4px; background: #fff; }
+.admin-line-qr a { color: var(--brand-text); font-size: 14px; }
+/* 後台寫入完成的提示：固定在畫面上方中央，捲動時也看得到，也不會蓋住表單底部的按鈕 */
+.done-toast-region { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 100; pointer-events: none; }
+.done-toast {
+  margin: 0; padding: 12px 18px; border-radius: 4px; background: #116149; color: #fff;
+  font-size: 15px; font-weight: 700; box-shadow: 0 6px 20px rgb(0 0 0 / .18);
+  animation: done-toast-in .18s ease-out;
+}
+@keyframes done-toast-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .done-toast { animation: none; } }
+@media (max-width: 640px) { .done-toast-region { left: 16px; right: 16px; transform: none; } .done-toast { text-align: center; } }
+/* 共用名額與梯次另訂行程的標籤、名額組編輯 */
+.admin-tag { display: inline-block; padding: 1px 6px; border-radius: 3px; background: #e3eef1; color: #1d4a5a; font-size: 12px; font-weight: 700; vertical-align: 1px; white-space: nowrap; }
+.admin-quota-pools { display: grid; gap: 12px; }
+.admin-quota-pool { display: grid; grid-template-columns: minmax(120px, 160px) 1fr auto; gap: 12px; align-items: start; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 4px; min-width: 0; }
+.admin-quota-pool legend { padding: 0 4px; font-weight: 700; font-size: 14px; }
+.admin-quota-sessions { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+.admin-quota-sessions > span { width: 100%; font-size: 14px; }
+@media (max-width: 720px) { .admin-quota-pool { grid-template-columns: 1fr; } }
+/* 自選行程的舉辦日期與共用名額標示 */
+.group legend small.group-date { display: block; margin: 2px 0 0; color: var(--brand-text); font-weight: 700; }
+.choice-side .shared-quota { font-size: 12px; }

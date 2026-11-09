@@ -1,5 +1,7 @@
 import type { EventNavKey } from '@bigtours/shared';
 import { ApiError } from './api';
+import { notifyDone } from './done-toast';
+import { a } from '../messages/admin';
 
 export interface AdminEventSummary { id: string; slug: string; name: string; status: string; companyName: string; registrationOpensAt: string | null; registrationClosesAt: string | null; tierMax: number; travelerCount: number }
 export interface AdminEvent {
@@ -9,14 +11,17 @@ export interface AdminEvent {
   registrationOpensAt: string | null; registrationClosesAt: string | null; paymentInstructions: string | null; retentionDays: number; termsFileName: string | null; termsVersion: number;
   images: { login: string | null; loginMobile: string | null; home: string | null };
   pageState: 'open' | 'not_open' | 'closed'; activeHolds: number; heldTravelers: number;
+  line: { configured: boolean; enabled: boolean; url: string | null };
 }
 export type AccountState = 'activated' | 'sending' | 'link_issued' | 'failed' | 'sent' | 'expired' | 'no_email' | 'none';
 export interface EmployeeValues { employeeNo: string; name: string; email: string | null; department: string | null; subsidyAmount: number | null; dependentLimit: number | null }
-export interface AdminEmployee extends EmployeeValues { id: string; accountState: AccountState; registered: boolean; activated: boolean }
+export interface AdminEmployee extends EmployeeValues { id: string; accountState: AccountState; registered: boolean; activated: boolean; lineBound: boolean }
 export interface RosterPage {
   rows: AdminEmployee[]; total: number; page: number; pageSize: number; rosterTotal: number;
   summary: Record<AccountState, number>;
   defaults: { subsidyAmount: number; dependentLimit: number };
+  /** available：旅行社已設定 LINE 且活動開啟 LINE 入口。 */
+  line: { available: boolean; url: string | null; boundCount: number };
 }
 export interface ImportIssue { row: number; employeeNo: string; name: string; code: string; value?: string; firstRow?: number }
 export interface ImportPreview { newCount: number; updateCount: number; errorCount: number; duplicateCount: number; issues: ImportIssue[]; issuesTruncated: boolean }
@@ -81,7 +86,10 @@ export interface DataLogRow {
 }
 export interface DataLogPage { rows: DataLogRow[]; hasMore: boolean; events: { id: string; name: string }[]; actors: { id: string; name: string }[] }
 export interface StaffMember { id: string; name: string; email: string; role: string; status: 'active' | 'disabled'; activated: boolean; lastLoginAt: string | null; isSelf: boolean }
-export interface AgencySettings { name: string; code: string; logoUrl: string | null }
+export interface AgencySettings {
+  name: string; code: string; logoUrl: string | null;
+  line: { channelId: string | null; liffId: string | null; endpointUrl: string; sharedUrl: string | null };
+}
 export interface TierOption { id: string; minTravelers: number; maxTravelers: number; price: number; remaining: number }
 export interface TierOptions { current: TierOption; options: TierOption[]; recommendedId: string | null; contractExpired: boolean }
 export interface CompanyContact { id: string; name: string; email: string; status: 'active' | 'disabled'; activated: boolean }
@@ -135,17 +143,34 @@ export interface SessionValues {
   returnFlightNo: string | null;
   capacity: number;
   roomTypes: RoomTypeValues[];
+  /** 梯次另外設定的每日行程；null 表示沿用活動預設。 */
+  itineraryDays: { title: string; description: string }[] | null;
 }
 export interface RoomTypeValues { id: string | null; name: string; capacity: number; surcharge: number; bedQuota: number; soldCount?: number }
 export interface AdminSession extends SessionValues { id: string; soldCount: number }
 export interface TravelerTypeValues { id: string | null; name: string; basePrice: number; note: string | null; occupiesBed: boolean; isEmployeeSelf?: boolean }
 export interface PricingValues { types: TravelerTypeValues[]; defaultSubsidyAmount: number; defaultDependentLimit: number; allowDependentsOnly: boolean }
-export interface OptionGroupValues { name: string; isRequired: boolean; maxSelect: number; preferenceCount: number }
-export interface OptionValues { name: string; price: number; quotas: { sessionId: string; capacity: number | null }[] }
-export interface AdminOption { id: string; name: string; price: number; pdfFileName: string | null; quotas: Record<string, { capacity: number; soldCount: number }> }
+export interface OptionGroupValues { name: string; isRequired: boolean; maxSelect: number; preferenceCount: number; activityDate: string | null }
+/** 名額組：勾多個梯次就是共用名額；沒有被勾選的梯次不限名額。 */
+export interface QuotaPoolValues { sessionIds: string[]; capacity: number }
+export interface OptionValues { name: string; price: number; quotas: QuotaPoolValues[] }
+export interface AdminOption { id: string; name: string; price: number; pdfFileName: string | null; quotas: (QuotaPoolValues & { id: string; soldCount: number })[] }
 export interface AdminOptionGroup extends OptionGroupValues { id: string; options: AdminOption[] }
 export interface FieldValues { label: string; type: string; choices: string[] | null; isRequired: boolean; isSensitive: boolean }
 export interface AdminField extends FieldValues { id: string }
+
+/**
+ * 寫入成功後顯示完成提示。登入登出、預覽、查看個資這類不是「儲存」的操作不提示；
+ * 背景進行的寄信與匯出由畫面自己說明進度，也不提示，避免讓人以為已經寄完或產生完。
+ */
+const QUIET = [
+  /^\/session$/, /^\/me\/pinned-nav$/, /\/password-links\//, /\/import\/preview$/, /\/sensitive$/,
+  /\/account-emails$/, /\/deadline-reminder$/, /\/exports$/,
+];
+function announce(method: string, path: string) {
+  if (method === 'GET' || QUIET.some((r) => r.test(path.split('?')[0]!))) return;
+  notifyDone(method === 'DELETE' ? a.done.removed : method === 'POST' ? a.done.done : a.done.saved);
+}
 
 const clientFor = (prefix: string) => {
   const call: Call = async <T,>(method: string, path: string, body?: unknown): Promise<T> => {
@@ -154,9 +179,10 @@ const clientFor = (prefix: string) => {
     headers: body ? { 'content-type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (res.status === 204) return undefined as T;
+  if (res.status === 204) { announce(method, path); return undefined as T; }
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new ApiError(res.status, data?.code ?? 'fallback', data?.detail);
+  announce(method, path);
   return data as T;
   };
   /** 檔案以原始內容送出，不走 JSON。 */
@@ -164,6 +190,7 @@ const clientFor = (prefix: string) => {
   const res = await fetch(`${prefix}${path}`, { method, headers: { 'content-type': contentType }, body: file });
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new ApiError(res.status, data?.code ?? 'fallback', data?.detail);
+  if (!QUIET.some((r) => r.test(path.split('?')[0]!))) notifyDone(method === 'PUT' ? a.done.uploaded : a.done.done);
   return data as T;
   };
   return { call, upload };
@@ -178,7 +205,7 @@ type Upload = <T>(path: string, file: File, contentType: string, method?: string
 
 /** 旅行社和企業窗口的員工名單操作相同，只有網址前綴不同。 */
 const rosterMethods = (call: Call, upload: Upload) => ({
-  employees: (id: string, q: { search?: string; account?: string; registration?: string; page?: number }) => {
+  employees: (id: string, q: { search?: string; account?: string; registration?: string; line?: string; page?: number }) => {
     const params = new URLSearchParams(Object.entries(q).flatMap(([k, v]) => (v ? [[k, String(v)]] : [])));
     return call<RosterPage>('GET', `/events/${id}/employees?${params}`);
   },
@@ -191,6 +218,7 @@ const rosterMethods = (call: Call, upload: Upload) => ({
   copyRoster: (id: string, fromEventId: string) => call<{ added: number; skipped: number }>('POST', `/events/${id}/employees/copy`, { fromEventId }),
   sendAccountEmails: (id: string, body: { employeeIds: string[] } | { allPending: true }) => call<{ queued: number; skipped: number }>('POST', `/events/${id}/employees/account-emails`, body),
   passwordLink: (id: string, eid: string) => call<PasswordLink>('POST', `/events/${id}/employees/${eid}/password-link`, {}),
+  unbindLine: (id: string, eid: string) => call<void>('DELETE', `/events/${id}/employees/${eid}/line-binding`),
 });
 export type RosterApi = ReturnType<typeof rosterMethods>;
 
@@ -218,6 +246,8 @@ export const adminApi = {
   saveAgencyName: (name: string) => call<void>('PUT', '/settings/name', { name }),
   uploadLogo: (file: File) => upload<{ ok: boolean }>('/settings/logo', file, file.type),
   removeLogo: () => call<void>('DELETE', '/settings/logo'),
+  saveLine: (v: { channelId: string | null; liffId: string | null }) => call<{ clearedBindings: number }>('PUT', '/settings/line', v),
+  setEventLine: (id: string, enabled: boolean) => call<void>('PUT', `/events/${id}/line`, { enabled }),
   branding: () => call<{ name: string; logoUrl: string | null }>('GET', '/branding'),
   companyContacts: (companyId: string) => call<CompanyContact[]>('GET', `/companies/${companyId}/contacts`),
   createContact: (companyId: string, v: { name: string; email: string }) => call<{ id: string }>('POST', `/companies/${companyId}/contacts`, v),
@@ -341,12 +371,13 @@ export const feeReportUrl = (id: string) => `/api/v1/company/events/${id}/fee-re
 
 export interface PlatformTier { id: string; minTravelers: number; maxTravelers: number; price: number }
 export type AgencyState = 'active' | 'expiring' | 'expired' | 'admin_pending' | 'suspended';
-export interface PlatformAgencyRow { id: string; name: string; code: string; contractStartsOn: string | null; contractEndsOn: string | null; state: AgencyState; opened: number; used: number; remaining: number }
+export interface PlatformAgencyRow { id: string; name: string; code: string; contractStartsOn: string | null; contractEndsOn: string | null; state: AgencyState; opened: number; used: number; remaining: number; lineConfigured: boolean }
 export interface PlatformAgency {
   id: string; name: string; code: string; state: AgencyState; suspended: boolean; planNote: string | null; contractStartsOn: string | null; contractEndsOn: string | null;
   admin: { id: string; name: string; email: string; activated: boolean } | null;
   quota: (PlatformTier & { opened: number; used: number; remaining: number })[];
   ledger: { id: string; at: string; by: string | null; change: number; note: string | null; minTravelers: number; maxTravelers: number }[];
+  line: { configured: boolean; events: { id: string; name: string; enabled: boolean; boundCount: number }[] };
 }
 export interface PlatformUsage {
   events: { id: string; name: string; slug: string; agencyId: string; agencyName: string; people: number; limit: number; full: boolean; percent: number }[];

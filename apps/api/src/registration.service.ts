@@ -24,7 +24,7 @@ type Selection = HoldRequest['travelers'];
 
 interface EventConfig {
   types: Map<string, { id: string; name: string; basePrice: number; isEmployeeSelf: boolean; note: string | null; occupiesBed: boolean }>;
-  groups: Map<string, { id: string; name: string; isRequired: boolean; minSelect: number; maxSelect: number; preferenceCount: number; options: string[] }>;
+  groups: Map<string, { id: string; name: string; isRequired: boolean; minSelect: number; maxSelect: number; preferenceCount: number; activityDate: string | null; options: string[] }>;
   options: Map<string, { id: string; groupId: string; name: string; price: number; hasPdf: boolean }>;
   fields: {
     id: string;
@@ -393,7 +393,7 @@ export class RegistrationService {
         hold.session_id,
       ]);
       for (const [quotaId, quantity] of needs.quotas) {
-        await tx.query(`UPDATE option_session_quotas SET sold_count = sold_count + $1 WHERE id = $2`, [quantity, quotaId]);
+        await tx.query(`UPDATE option_quotas SET sold_count = sold_count + $1 WHERE id = $2`, [quantity, quotaId]);
       }
       for (const [roomId, quantity] of needs.rooms) {
         await tx.query(`UPDATE session_room_types SET sold_count = sold_count + $1 WHERE id = $2`, [quantity, roomId]);
@@ -580,9 +580,9 @@ export class RegistrationService {
     const sessionId: string = rows[0].session_id;
     const count = await tx.query(`SELECT count(*)::int AS n FROM travelers WHERE registration_id = $1`, [registrationId]);
     const quotas = await tx.query(
-      `SELECT q.id, count(*)::int AS n FROM travelers t JOIN traveler_options o ON o.traveler_id = t.id
-         JOIN option_session_quotas q ON q.option_id = o.option_id AND q.session_id = $2
-        WHERE t.registration_id = $1 GROUP BY q.id`,
+      `SELECT q.quota_id AS id, count(*)::int AS n FROM travelers t JOIN traveler_options o ON o.traveler_id = t.id
+         JOIN option_quota_sessions q ON q.option_id = o.option_id AND q.session_id = $2
+        WHERE t.registration_id = $1 GROUP BY q.quota_id`,
       [registrationId, sessionId],
     );
     const rooms = await tx.query(
@@ -597,14 +597,15 @@ export class RegistrationService {
     };
   }
 
-  /** 新內容比原報名多佔的名額。換梯次時原梯次的名額不能抵用。 */
+  /** 新內容比原報名多佔的名額。換梯次時原梯次的名額不能抵用，共用的選項名額除外。 */
   private async modificationDelta(tx: Tx, registrationId: string, sessionId: string, travelers: number, full: SeatNeeds) {
     const old = await this.oldSeats(tx, registrationId);
-    if (old.sessionId !== sessionId) return { quantity: travelers, needs: full };
     const positive = (next: Map<string, number>, prev: Map<string, number>) => new Map([...next].flatMap(([id, n]) => {
       const more = n - (prev.get(id) ?? 0);
       return more > 0 ? [[id, more] as [string, number]] : [];
     }));
+    // 換梯次時梯次與房型名額要全部重新保留；選項名額若與原梯次共用同一組，原本佔用的可以抵用。
+    if (old.sessionId !== sessionId) return { quantity: travelers, needs: { quotas: positive(full.quotas, old.quotas), rooms: full.rooms } };
     return {
       quantity: Math.max(travelers - old.travelers, 0),
       needs: { quotas: positive(full.quotas, old.quotas), rooms: positive(full.rooms, old.rooms) },
@@ -735,10 +736,10 @@ export class RegistrationService {
 
     // 先釋出再佔用，同一個計數才不會暫時超過上限。
     await tx.query(`UPDATE event_sessions SET sold_count = sold_count - $1 WHERE id = $2`, [old.travelers, old.sessionId]);
-    for (const [id, n] of old.quotas) await tx.query(`UPDATE option_session_quotas SET sold_count = sold_count - $1 WHERE id = $2`, [n, id]);
+    for (const [id, n] of old.quotas) await tx.query(`UPDATE option_quotas SET sold_count = sold_count - $1 WHERE id = $2`, [n, id]);
     for (const [id, n] of old.rooms) await tx.query(`UPDATE session_room_types SET sold_count = sold_count - $1 WHERE id = $2`, [n, id]);
     await tx.query(`UPDATE event_sessions SET sold_count = sold_count + $1 WHERE id = $2`, [details.length, sessionId]);
-    for (const [id, n] of full.quotas) await tx.query(`UPDATE option_session_quotas SET sold_count = sold_count + $1 WHERE id = $2`, [n, id]);
+    for (const [id, n] of full.quotas) await tx.query(`UPDATE option_quotas SET sold_count = sold_count + $1 WHERE id = $2`, [n, id]);
     for (const [id, n] of full.rooms) await tx.query(`UPDATE session_room_types SET sold_count = sold_count + $1 WHERE id = $2`, [n, id]);
 
     const total = Math.max(reg.total_amount + newSum - oldSum, 0);
@@ -787,12 +788,12 @@ export class RegistrationService {
       if (!reg) throw new DomainError('NOT_FOUND');
 
       const { rows: quotaRows } = await tx.query(
-        `SELECT q.id, count(*)::int AS quantity
+        `SELECT q.quota_id AS id, count(*)::int AS quantity
            FROM travelers t
            JOIN traveler_options o ON o.traveler_id = t.id
-           JOIN option_session_quotas q ON q.option_id = o.option_id AND q.session_id = $2
+           JOIN option_quota_sessions q ON q.option_id = o.option_id AND q.session_id = $2
           WHERE t.registration_id = $1
-          GROUP BY q.id`,
+          GROUP BY q.quota_id`,
         [registrationId, reg.session_id],
       );
       const { rows: roomRows } = await tx.query(
@@ -818,7 +819,7 @@ export class RegistrationService {
         reg.session_id,
       ]);
       for (const q of quotaRows) {
-        await tx.query(`UPDATE option_session_quotas SET sold_count = sold_count - $1 WHERE id = $2`, [q.quantity, q.id]);
+        await tx.query(`UPDATE option_quotas SET sold_count = sold_count - $1 WHERE id = $2`, [q.quantity, q.id]);
       }
       for (const r of roomRows) {
         await tx.query(`UPDATE session_room_types SET sold_count = sold_count - $1 WHERE id = $2`, [r.quantity, r.id]);
@@ -951,7 +952,7 @@ export class RegistrationService {
     const quotas = new Map<string, number>();
     if (optionIds.length) {
       const { rows } = await tx.query(
-        `SELECT id, option_id FROM option_session_quotas WHERE session_id = $1 AND option_id = ANY($2::uuid[])`,
+        `SELECT quota_id AS id, option_id FROM option_quota_sessions WHERE session_id = $1 AND option_id = ANY($2::uuid[])`,
         [sessionId, optionIds],
       );
       const quotaByOption = new Map<string, string>(rows.map((r) => [r.option_id, r.id]));
@@ -970,7 +971,9 @@ export class RegistrationService {
       if (!session.rowCount) throw new DomainError('INVALID_SELECTION', { reason: 'unknown_session' });
     }
     for (const id of [...quotaIds].sort()) {
-      await tx.query(`SELECT id FROM option_session_quotas WHERE id = $1 FOR UPDATE`, [id]);
+      // 旅行社剛好調整了名額組時，先前查到的名額組可能已不存在，請員工重新操作。
+      const quota = await tx.query(`SELECT id FROM option_quotas WHERE id = $1 FOR UPDATE`, [id]);
+      if (!quota.rowCount) throw new DomainError('HOLD_MISMATCH', { reason: 'quota_changed' });
     }
     for (const id of [...roomIds].sort()) {
       await tx.query(`SELECT id FROM session_room_types WHERE id = $1 FOR UPDATE`, [id]);
@@ -999,7 +1002,7 @@ export class RegistrationService {
         `SELECT q.option_id, q.capacity, q.sold_count,
                 COALESCE((SELECT sum(i.quantity) FROM seat_hold_items i JOIN seat_holds h ON h.id = i.hold_id
                            WHERE i.quota_id = q.id AND h.status = 'active' AND h.expires_at > now() AND h.id <> $2), 0)::int AS held
-           FROM option_session_quotas q WHERE q.id = $1`,
+           FROM option_quotas q WHERE q.id = $1`,
         [quotaId, exclude],
       );
       const quota = q.rows[0];
@@ -1050,7 +1053,7 @@ export class RegistrationService {
       [eventId],
     );
     const groups = await tx.query(
-      `SELECT id, name, is_required, min_select, max_select, preference_count FROM option_groups WHERE event_id = $1 ORDER BY sort_order, name`,
+      `SELECT id, name, is_required, min_select, max_select, preference_count, activity_date FROM option_groups WHERE event_id = $1 ORDER BY sort_order, name`,
       [eventId],
     );
     const options = await tx.query(
@@ -1069,7 +1072,7 @@ export class RegistrationService {
       groups: new Map(
         groups.rows.map((r) => [
           r.id,
-          { id: r.id, name: r.name, isRequired: r.is_required, minSelect: r.min_select, maxSelect: r.max_select, preferenceCount: r.preference_count, options: [] as string[] },
+          { id: r.id, name: r.name, isRequired: r.is_required, minSelect: r.min_select, maxSelect: r.max_select, preferenceCount: r.preference_count, activityDate: r.activity_date, options: [] as string[] },
         ]),
       ),
       options: new Map(options.rows.map((r) => [r.id, { id: r.id, groupId: r.group_id, name: r.name, price: r.price, hasPdf: r.has_pdf }])),
@@ -1089,7 +1092,7 @@ export class RegistrationService {
 
   private async loadAvailability(tx: Tx, eventId: string) {
     const sessions = await tx.query(
-      `SELECT s.id, s.name, s.departs_on, s.returns_on, s.capacity, s.sold_count,
+      `SELECT s.id, s.name, s.departs_on, s.returns_on, s.capacity, s.sold_count, s.itinerary_days,
               s.outbound_flight_no, s.return_flight_no,
               to_char(s.departure_time, 'HH24:MI') AS departure_time,
               to_char(s.return_arrival_time, 'HH24:MI') AS return_arrival_time,
@@ -1098,11 +1101,14 @@ export class RegistrationService {
          FROM event_sessions s WHERE s.event_id = $1 ORDER BY s.sort_order, s.departs_on, s.name`,
       [eventId],
     );
+    // 共用名額在每個適用的梯次各出現一次，剩餘數相同。
     const quotas = await tx.query(
-      `SELECT q.session_id, q.option_id, q.capacity, q.sold_count,
+      `SELECT qs.session_id, q.option_id, q.capacity, q.sold_count,
+              (SELECT count(*) FROM option_quota_sessions x WHERE x.quota_id = q.id) > 1 AS shared,
               COALESCE((SELECT sum(i.quantity) FROM seat_hold_items i JOIN seat_holds h ON h.id = i.hold_id
                          WHERE i.quota_id = q.id AND h.status = 'active' AND h.expires_at > now()), 0)::int AS held
-         FROM option_session_quotas q JOIN event_sessions s ON s.id = q.session_id WHERE s.event_id = $1`,
+         FROM option_quotas q JOIN option_quota_sessions qs ON qs.quota_id = q.id
+         JOIN event_sessions s ON s.id = qs.session_id WHERE s.event_id = $1`,
       [eventId],
     );
     const rooms = await tx.query(
@@ -1121,6 +1127,8 @@ export class RegistrationService {
       returnFlightNo: s.return_flight_no,
       departureTime: s.departure_time,
       returnArrivalTime: s.return_arrival_time,
+      /** 梯次另外設定的每日行程；null 表示沿用活動預設。 */
+      itineraryDays: s.itinerary_days as { title: string; description: string }[] | null,
       remaining: Math.max(s.capacity - s.sold_count - s.held, 0),
       status: seatStatus(s.capacity, s.sold_count, s.held),
       roomTypes: rooms.rows
@@ -1139,6 +1147,7 @@ export class RegistrationService {
           optionId: q.option_id,
           remaining: Math.max(q.capacity - q.sold_count - q.held, 0),
           status: seatStatus(q.capacity, q.sold_count, q.held),
+          shared: q.shared,
         })),
     }));
   }

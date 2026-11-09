@@ -18,6 +18,7 @@ import { ExportPanel } from './export-panel';
 import { RoomsPanel } from './rooms-panel';
 import { RegistrationsPanel } from './registrations-panel';
 import { RosterPanel } from './roster-panel';
+import { EventLinePanel } from './line-panel';
 import { SchedulePanel } from './schedule-panel';
 import { SessionsPanel } from './sessions-panel';
 import { TypesPanel } from './types-panel';
@@ -40,6 +41,7 @@ export function EventSection({ id, section }: { id: string; section: EventNavKey
       <h1>{a.eventSections[section]}</h1>
       {section === 'basic' && <BasicPanel key={event.slug} event={event} onSaved={load} />}
       {section === 'schedule' && <SchedulePanel event={event} onSaved={load} />}
+      {section === 'schedule' && <EventLinePanel event={event} onSaved={load} />}
       {section === 'sessions' && <SessionsPanel event={event} onEventChanged={load} />}
       {section === 'types' && <TypesPanel event={event} />}
       {section === 'options' && <OptionsPanel event={event} />}

@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { employeeInput, type EmployeeInput } from '@bigtours/shared';
+import { employeeInput, lineUrl, type EmployeeInput } from '@bigtours/shared';
 import { parse as parseCsv } from 'csv-parse/sync';
 import { randomUUID } from 'node:crypto';
 import { AccountService } from './account.service.ts';
@@ -54,6 +54,7 @@ const employeeRow = (r: any) => ({
   accountState: r.account_state,
   registered: r.registered,
   activated: r.password_set_at !== null,
+  lineBound: r.line_bound_at !== null,
 });
 
 export interface ImportIssue { row: number; employeeNo: string; name: string; code: string; value?: string; firstRow?: number }
@@ -159,7 +160,7 @@ export class RosterService {
   private async assertEvent(tx: Tx, eventId: string, forUpdate = false) {
     if (!UUID.test(eventId)) throw new DomainError('NOT_FOUND');
     const { rows } = await tx.query(
-      `SELECT e.id, e.company_id, e.name, e.slug, e.registration_opens_at, e.default_subsidy_amount, e.default_dependent_limit, a.code AS agency_code, a.name AS agency_name
+      `SELECT e.id, e.company_id, e.name, e.slug, e.registration_opens_at, e.default_subsidy_amount, e.default_dependent_limit, e.line_enabled, a.code AS agency_code, a.name AS agency_name, a.line_liff_id
          FROM events e JOIN agencies a ON a.id = e.agency_id WHERE e.id = $1${forUpdate ? ' FOR UPDATE OF e' : ''}`,
       [eventId],
     );
@@ -169,7 +170,7 @@ export class RosterService {
 
   // ===== 列表 =====
 
-  list(ctx: RosterContext, eventId: string, q: { search?: string; account?: string; registration?: string; page?: number }) {
+  list(ctx: RosterContext, eventId: string, q: { search?: string; account?: string; registration?: string; line?: string; page?: number }) {
     return this.db.withTenant(ctx.agencyId, async (tx) => {
       const event = await this.assertEvent(tx, eventId);
       const page = Math.max(1, Math.floor(q.page ?? 1) || 1);
@@ -185,12 +186,15 @@ export class RosterService {
       }
       if (q.registration === 'registered') where.push('registered');
       if (q.registration === 'unregistered') where.push('NOT registered');
+      if (q.line === 'bound') where.push('line_bound_at IS NOT NULL');
+      if (q.line === 'unbound') where.push('line_bound_at IS NULL');
       const filter = where.length ? `WHERE ${where.join(' AND ')}` : '';
       const { rows } = await tx.query(
         `SELECT *, count(*) OVER()::int AS total_count FROM (${ROSTER_SQL}) x ${filter} ORDER BY employee_no LIMIT ${PAGE_SIZE} OFFSET ${(page - 1) * PAGE_SIZE}`,
         params,
       );
       const { rows: counts } = await tx.query(`SELECT account_state, count(*)::int AS n FROM (${ROSTER_SQL}) x GROUP BY account_state`, [eventId]);
+      const { rows: bound } = await tx.query(`SELECT count(*)::int AS n FROM event_employees WHERE event_id = $1 AND status = 'active' AND line_bound_at IS NOT NULL`, [eventId]);
       const summary = Object.fromEntries(ACCOUNT_STATES.map((s) => [s, counts.find((c) => c.account_state === s)?.n ?? 0]));
       return {
         rows: rows.map(employeeRow),
@@ -200,6 +204,7 @@ export class RosterService {
         summary,
         rosterTotal: counts.reduce((sum, c) => sum + c.n, 0),
         defaults: { subsidyAmount: event.default_subsidy_amount, dependentLimit: event.default_dependent_limit },
+        line: this.lineInfo(event, bound[0].n),
       };
     });
   }
@@ -215,7 +220,8 @@ export class RosterService {
       const { rows } = found[0]
         ? await tx.query(
           `UPDATE event_employees SET name = $2, email = $3, department = $4, subsidy_amount = $5, dependent_limit = $6, status = 'active',
-                  password_hash = NULL, password_set_at = NULL, failed_login_count = 0, locked_until = NULL, updated_at = now()
+                  password_hash = NULL, password_set_at = NULL, failed_login_count = 0, locked_until = NULL,
+                  line_user_hash = NULL, line_bound_at = NULL, updated_at = now()
             WHERE id = $1 RETURNING id`,
           [found[0].id, input.name, input.email, input.department, input.subsidyAmount, input.dependentLimit],
         )
@@ -255,10 +261,34 @@ export class RosterService {
       if (current.has_active_hold) throw new DomainError('EMPLOYEE_HAS_REGISTRATION');
       await tx.query(`UPDATE employee_password_links SET revoked_at = now() WHERE event_employee_id = $1 AND used_at IS NULL AND revoked_at IS NULL`, [employeeId]);
       await tx.query(`DELETE FROM employee_sessions WHERE event_employee_id = $1`, [employeeId]);
-      await tx.query(`UPDATE event_employees SET status = 'removed', updated_at = now() WHERE id = $1`, [employeeId]);
+      // 移除後 LINE 綁定一併刪除。
+      await tx.query(`UPDATE event_employees SET status = 'removed', line_user_hash = NULL, line_bound_at = NULL, updated_at = now() WHERE id = $1`, [employeeId]);
       await tx.query(
         `INSERT INTO audit_logs (agency_id, actor_type, actor_id, action, target_type, target_id) VALUES ($1, '${ctx.actorType ?? 'agency_user'}', $2, 'employee.removed', 'event_employee', $3)`,
         [ctx.agencyId, ctx.user.id, employeeId],
+      );
+    });
+  }
+
+  /** 旅行社設定 LINE、且活動開啟 LINE 入口時才提供連結；未開啟時名單仍顯示既有的綁定，方便解除。 */
+  private lineInfo(event: any, boundCount: number) {
+    const available = event.line_liff_id !== null && event.line_enabled;
+    return { available, url: available ? lineUrl(event.line_liff_id, event.slug) : null, boundCount };
+  }
+
+  /** 旅行社人員與企業窗口都可以解除，例如員工的 LINE 被別人綁走時。 */
+  async unbindLine(ctx: RosterContext, eventId: string, employeeId: string) {
+    await this.db.withTenant(ctx.agencyId, async (tx) => {
+      await this.assertEvent(tx, eventId);
+      await this.lockEmployee(tx, eventId, employeeId);
+      const { rowCount } = await tx.query(
+        `UPDATE event_employees SET line_user_hash = NULL, line_bound_at = NULL, updated_at = now() WHERE id = $1 AND line_user_hash IS NOT NULL`,
+        [employeeId],
+      );
+      if (!rowCount) return;
+      await tx.query(
+        `INSERT INTO audit_logs (agency_id, actor_type, actor_id, action, target_type, target_id) VALUES ($1, $2, $3, 'employee.line_unbound', 'event_employee', $4)`,
+        [ctx.agencyId, ctx.actorType ?? 'agency_user', ctx.user.id, employeeId],
       );
     });
   }

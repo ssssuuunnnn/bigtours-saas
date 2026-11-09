@@ -122,13 +122,11 @@ function CompanyBrandCard({ company, onChanged }: { company: AdminCompany; onCha
   const [name, setName] = useState(company.name);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
   const run = async (fn: () => Promise<unknown>) => {
-    setBusy(true); setError(null); setNote(null);
+    setBusy(true); setError(null);
     try {
       await fn();
       await onChanged();
-      setNote(a.companySaved);
     } catch (e) {
       setError(adminError(e));
     } finally {
@@ -146,7 +144,6 @@ function CompanyBrandCard({ company, onChanged }: { company: AdminCompany; onCha
     <div className="admin-card">
       <h2>{a.companyBrand(company.name)}</h2>
       {error && <p className="error" role="alert">{error}</p>}
-      {note && <p className="admin-note" role="status">{note}</p>}
       <div>
         <span>{a.companyLogo}</span>
         {company.logoUrl ? <img className="admin-settings-logo" src={company.logoUrl} alt={a.companyLogoAlt(company.name)} /> : <p className="muted">{a.companyLogoNone}</p>}
