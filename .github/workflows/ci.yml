@@ -36,7 +36,7 @@ jobs:
       DATA_ENCRYPTION_KEY: ZGV2LW9ubHkta2V5LWRvLW5vdC11c2UtaW4tcHJvZCE=
       TOKEN_HASH_KEY: ci-only-token-hash-key
       WEB_BASE_URL: http://localhost:3000/{agency}
-      STORAGE_DIR: ${{ runner.temp }}/storage
+      STORAGE_DIR: /tmp/bigtours-storage
       NEXT_TELEMETRY_DISABLED: "1"
     steps:
       - uses: actions/checkout@v4
