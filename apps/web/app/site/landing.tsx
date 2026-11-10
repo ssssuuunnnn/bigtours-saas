@@ -7,9 +7,10 @@ const LineIcon = () => (
   </svg>
 );
 
-const FAQS: [string, string][] = [
+export const FAQS: [string, string][] = [
   ['員工需要註冊帳號嗎？', '不用自己註冊。企業提供員工名單後，系統會寄出設定密碼的連結，員工用員工編號登入就能報名，之後也用同一組帳號查看或申請取消。'],
   ['很多人同時搶報，會不會超賣？', '不會。員工開始填寫時就保留名額 15 分鐘，名額判斷在資料庫裡一次完成，就算同時很多人送出也不會超過名額。'],
+  ['除了員工旅遊，也能用在會議或其他活動嗎？', '可以。家庭日、運動會、尾牙、內部會議、教育訓練這類以員工為對象的大人數活動，都能用梯次設定場次與名額、自訂報名欄位，員工登入就能報名。'],
   ['可以用我們旅行社自己的品牌嗎？', '可以。每家旅行社有自己的網址，例如 bigtour.bookdex.cc/你的代號，報名頁也能顯示企業的 Logo。'],
   ['企業窗口可以自己管理名單嗎？', '可以。旅行社建立活動後，企業窗口可以匯入員工名單、設定補助、查看報名進度，但看不到員工的身分證等個資。'],
   ['試用要怎麼開通？', '填寫下方的申請表，到信箱點開通連結、設定密碼，馬上就能使用。每個統一編號可以試用一次。'],
@@ -45,8 +46,8 @@ export function Landing({ domain, demoUrl, lineUrl, siblingUrl }: { domain: stri
         <section className="hero">
           <div className="wrap">
             <span className="pill"><b>免費</b>試用 30 天・不用信用卡</span>
-            <h1>員工旅遊報名<br />搶報也不超賣</h1>
-            <p className="lead">給旅行社的團體旅遊報名系統。員工登入就能報名，名額先保留 15 分鐘，公司補助自動計算，名單一鍵匯出。</p>
+            <h1>大人數活動報名系統<br />搶報也不超賣</h1>
+            <p className="lead">給旅行社、企業福委與 HR 的團體報名系統，員工旅遊、家庭日、會議與活動報名都適用。員工登入就能報名，名額先保留 15 分鐘，公司補助自動計算，名單一鍵匯出。</p>
             <div className="actions">
               <a className="btn btn-dark btn-lg" href="#signup">免費試用 30 天</a>
               <a className="btn btn-text btn-lg" href={demoUrl}>先試試員工報名畫面 ›</a>
@@ -65,7 +66,7 @@ export function Landing({ domain, demoUrl, lineUrl, siblingUrl }: { domain: stri
                   </div>
                   <div className="app-main">
                     <div className="app-top">
-                      <div><h4>2027 艾克米員工旅遊・沖繩三日</h4><p>艾克米科技・報名截止 1/15</p></div>
+                      <div><p className="app-title">2027 艾克米員工旅遊・沖繩三日</p><p>艾克米科技・報名截止 1/15</p></div>
                       <span className="chip">已發布</span>
                     </div>
                     <div className="stats">
@@ -88,7 +89,7 @@ export function Landing({ domain, demoUrl, lineUrl, siblingUrl }: { domain: stri
         <section className="fits" aria-label="適合的活動">
           <div className="wrap">
             <p>適合這些團體活動</p>
-            <ul><li>員工旅遊</li><li>家庭日</li><li>獎勵旅遊</li><li>企業參訪</li><li>運動會</li><li>春酒尾牙</li></ul>
+            <ul><li>員工旅遊</li><li>家庭日</li><li>獎勵旅遊</li><li>企業參訪</li><li>運動會</li><li>春酒尾牙</li><li>內部會議</li><li>教育訓練</li></ul>
           </div>
         </section>
 

@@ -37,7 +37,7 @@
 .app-item em{font-style:normal;background:var(--orange);color:#fff;border-radius:999px;font-size:11px;padding:0 7px}
 .app-main{flex:1;padding:22px 26px;min-width:0}
 .app-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:18px}
-.app-top h4{margin:0;font-size:18px}
+.app-top .app-title{margin:0;font-size:18px;font-weight:650;line-height:1.2;color:var(--ink)}
 .app-top p{margin:0;color:var(--muted);font-size:13px}
 .chip{border:1px solid var(--line-2);border-radius:999px;padding:3px 10px;font-size:12px;white-space:nowrap}
 .stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:18px}
