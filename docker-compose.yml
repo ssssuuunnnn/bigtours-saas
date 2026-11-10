@@ -26,6 +26,8 @@ x-app: &app
     TRIAL_JOBS_ENABLED: "true"
     # 官網的 LINE 官方帳號網址，留空時不顯示 LINE 按鈕
     SITE_LINE_URL: ""
+    # 官網與試玩頁的 Google Tag Manager 容器 ID，留空時不載入
+    SITE_GTM_ID: ""
 
 services:
   postgres:

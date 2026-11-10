@@ -27,6 +27,8 @@ MAIL_FROM=
 # 官網（選填）
 TRIAL_NOTIFY_EMAIL=
 SITE_LINE_URL=
+# Google Tag Manager 容器 ID（只載入於官網與試玩頁）
+SITE_GTM_ID=
 DEMO_ENABLED=true
 # 試用到期提醒與到期後刪除
 TRIAL_JOBS_ENABLED=true

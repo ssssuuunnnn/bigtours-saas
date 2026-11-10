@@ -94,7 +94,7 @@ SSL/TLS 加密模式沿用預約簿的 Full (strict)。
 2. Cloudflare 的 `_dmarc`（`bookdex.cc`）若還沒有 DMARC，新增 TXT：`v=DMARC1; p=none; rua=mailto:service@bookdex.cc`。一個網域只能有一筆 DMARC，已有就沿用。
 3. Account dashboard → Request production access（用途 Transactional：報名確認、密碼設定連結等系統通知）。核准前只能寄給已驗證的信箱。
 4. SMTP settings → Create SMTP credentials，記下使用者與密碼（只顯示一次）。
-5. 填進主機 `.env`：`SMTP_URL=smtps://<使用者>:<密碼>@email-smtp.ap-southeast-2.amazonaws.com:465`（密碼中的 `/`、`+`、`=` 寫成 `%2F`、`%2B`、`%3D`）、`MAIL_FROM=no-reply@bookdex.cc`；另外填 `TRIAL_NOTIFY_EMAIL=service@bookdex.cc`、`SITE_LINE_URL=https://line.me/R/ti/p/@184nyral`。
+5. 填進主機 `.env`：`SMTP_URL=smtps://<使用者>:<密碼>@email-smtp.ap-southeast-2.amazonaws.com:465`（密碼中的 `/`、`+`、`=` 寫成 `%2F`、`%2B`、`%3D`）、`MAIL_FROM=no-reply@bookdex.cc`；另外填 `TRIAL_NOTIFY_EMAIL=service@bookdex.cc`、`SITE_LINE_URL=https://line.me/R/ti/p/@184nyral`、`SITE_GTM_ID=GTM-P57ZQDMK`。
 
 試用旅行社的寄信數量有上限（總共 100 封、每天 40 封），避免自助試用被拿來大量寄信、影響 SES 的寄信信譽。
 
@@ -116,7 +116,7 @@ deploy/lightsail/deploy.sh ubuntu@<固定 IP>
 
 ```bash
 ssh -i ~/.ssh/gym-lightsail.pem ubuntu@<固定 IP>
-nano /opt/bigtours/.env   # 填 SMTP_URL、MAIL_FROM，以及選填的 TRIAL_NOTIFY_EMAIL、SITE_LINE_URL
+nano /opt/bigtours/.env   # 填 SMTP_URL、MAIL_FROM，以及選填的 TRIAL_NOTIFY_EMAIL、SITE_LINE_URL、SITE_GTM_ID
 ```
 
 部署完成後建立第一個平台人員帳號（密碼只顯示一次）：
