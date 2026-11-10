@@ -38,6 +38,7 @@ MAIL_DOMAIN=${MAIL_FROM#*@}
 TRIAL_NOTIFY_EMAIL=${TRIAL_NOTIFY_EMAIL:-service@bookdex.cc}
 DMARC_RUA=${DMARC_RUA:-service@bookdex.cc}
 SITE_LINE_URL=${SITE_LINE_URL:-https://line.me/R/ti/p/@184nyral}
+SITE_GTM_ID=${SITE_GTM_ID:-GTM-P57ZQDMK}
 REPO=${GITHUB_REPO:-ssssuuunnnn/bigtours-saas}
 ADMIN_KEY=${BIGTOURS_ADMIN_KEY:-$HOME/.ssh/gym-lightsail.pem}
 DEPLOY_KEY=${BIGTOURS_GITHUB_DEPLOY_KEY:-$HOME/.ssh/bigtours-github-deploy}
@@ -361,7 +362,7 @@ step_host() {
 
   local updates="$TMPDIR_SETUP/env-updates"
   (umask 077
-   printf 'MAIL_FROM=%s\nTRIAL_NOTIFY_EMAIL=%s\nSITE_LINE_URL=%s\n' "$MAIL_FROM" "$TRIAL_NOTIFY_EMAIL" "$SITE_LINE_URL" > "$updates"
+   printf 'MAIL_FROM=%s\nTRIAL_NOTIFY_EMAIL=%s\nSITE_LINE_URL=%s\nSITE_GTM_ID=%s\n' "$MAIL_FROM" "$TRIAL_NOTIFY_EMAIL" "$SITE_LINE_URL" "$SITE_GTM_ID" > "$updates"
    if [ -s "$SECRETS/ses-smtp-url" ]; then printf 'SMTP_URL=%s\n' "$(tr -d '\n' < "$SECRETS/ses-smtp-url")" >> "$updates"; fi)
   [ -s "$SECRETS/ses-smtp-url" ] || warn "本機沒有 SMTP_URL（smtp 步驟），主機 .env 的 SMTP_URL 不更動"
   # 只改這幾個鍵，其他（含 DATA_ENCRYPTION_KEY、TOKEN_HASH_KEY）原樣保留

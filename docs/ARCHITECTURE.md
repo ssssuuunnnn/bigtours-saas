@@ -86,6 +86,7 @@
 | `TRIAL_JOBS_ENABLED` | `true` 時每小時寄試用到期提醒，並刪除到期超過 30 天的試用旅行社 |
 | `SITE_LINE_URL` | 官網的 LINE 官方帳號網址；留空時不顯示 LINE 按鈕 |
 | `SITE_SIBLING_URL` | 頁尾連到 Bookdex 預約簿的網址，預設 `https://bookdex.cc` |
+| `SITE_GTM_ID` | Google Tag Manager 容器 ID（`GTM-` 開頭），只載入於官網 `/` 與試玩 `/try`；旅行社、企業窗口、員工報名、開通與平台後台不載入。留空時不載入 |
 
 ## 7. 部署前待決
 
