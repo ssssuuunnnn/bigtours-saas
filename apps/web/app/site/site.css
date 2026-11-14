@@ -11,9 +11,11 @@
 .bt .top-row{display:flex;align-items:center;gap:16px;min-height:60px}
 .brand{display:inline-flex;align-items:center;gap:8px;font-weight:700;text-decoration:none;font-size:15px}
 .brand-logo{display:block;height:40px;width:auto}
+.brand-name{font-size:24px;font-weight:700;line-height:1;color:#152446;white-space:nowrap}
 .top-nav{display:flex;gap:28px;font-size:14px;margin:0 auto}
 .top-nav a{color:var(--ink-2);text-decoration:none;font-weight:500}
-.top-cta{display:flex;gap:8px;align-items:center}
+.top-cta{display:flex;gap:8px;align-items:center;flex-shrink:0}
+.top-cta .btn{white-space:nowrap}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border-radius:999px;padding:9px 18px;text-decoration:none;border:1px solid transparent;font:inherit;font-size:14px;font-weight:600;cursor:pointer;min-height:40px;box-sizing:border-box}
 .btn-sm{padding:7px 14px;font-size:13px}
 .btn-lg{padding:12px 22px;font-size:15px;min-height:48px}
@@ -138,7 +140,7 @@
 .demo{padding:28px}.section{padding:72px 0}
 .form{grid-template-columns:minmax(0,1fr);padding:20px}
 }
-@media (max-width:480px){.top-cta .btn-line span{display:none}.board-row{grid-template-columns:72px 1fr}.board-row .s{grid-column:2}}
+@media (max-width:480px){.top-cta .btn-line{display:none}.brand-logo{height:36px}.board-row{grid-template-columns:72px 1fr}.board-row .s{grid-column:2}}
 .bt{min-height:100dvh}
 .bt .btn:focus-visible,.bt input:focus-visible,.bt select:focus-visible,.bt textarea:focus-visible,.bt summary:focus-visible,.bt a:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 .bt .hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
@@ -150,3 +152,5 @@
 .bt .done h3{font-size:22px}
 @media (prefers-reduced-motion:reduce){.bt *{scroll-behavior:auto !important}}
 html:has(.bt){scroll-behavior:smooth}
+@media (max-width:380px){.brand-logo{height:32px}.brand-name{font-size:20px}}
+@media (max-width:340px){.brand-logo{height:28px}.brand-name{font-size:18px}}

@@ -27,7 +27,7 @@ export function Landing({ domain, demoUrl, lineUrl, siblingUrl }: { domain: stri
 
       <header className="top">
         <div className="wrap top-row">
-          <a className="brand" href="#top"><img className="brand-logo" src="/logo-light.svg" alt="Bookdex 大團報名" width={148} height={40} /></a>
+          <a className="brand" href="#top"><img className="brand-logo" src="/bookdex-logo-light.svg" alt="Bookdex" width={148} height={40} /><span className="brand-name">大團報名</span></a>
           <nav className="top-nav" aria-label="主選單">
             <a href="#features">功能</a>
             <a href="#how">運作方式</a>
