@@ -9,7 +9,7 @@ import { siteContext } from './site/host';
 export default async function robots(): Promise<MetadataRoute.Robots> {
   const site = await siteContext();
   return {
-    rules: { userAgent: '*', allow: ['/$', '/_next/', '/og.png', '/icon.svg', '/apple-icon.png'], disallow: '/' },
+    rules: { userAgent: '*', allow: ['/$', '/_next/', '/og.png', '/logo-light.svg', '/logo-dark.svg', '/icon.svg', '/apple-icon.png'], disallow: '/' },
     sitemap: `${site.origin}/sitemap.xml`,
   };
 }
