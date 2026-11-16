@@ -61,7 +61,7 @@ async function activated(over: Record<string, unknown> = {}) {
   const body = application(over);
   await apply(body).expect(200);
   const token = tokenFor(body.email)!;
-  await http().post(`/api/v1/site/activation/${token}`).send({ password: 'trial1234' }).expect(201);
+  await http().post(`/api/v1/site/activation/${token}`).set('x-forwarded-for', nextIp()).send({ password: 'trial1234' }).expect(201);
   const agency = await q1(`SELECT * FROM agencies WHERE code = $1`, [body.code]);
   return { body, token, agency, cookie: await login(body.code, body.email, 'trial1234'), prefix: `/api/v1/a/${body.code}` };
 }
@@ -135,8 +135,8 @@ describe('試用申請', () => {
     await apply(body).expect(200);
     const token = tokenFor(body.email)!;
     await admin.query(`UPDATE trial_applications SET token_expires_at = now() - interval '1 minute' WHERE code = $1`, [body.code]);
-    expect((await http().get(`/api/v1/site/activation/${token}`).expect(410)).body.code).toBe('LINK_INVALID');
-    await http().post(`/api/v1/site/activation/${token}`).send({ password: 'trial1234' }).expect(410);
+    expect((await http().get(`/api/v1/site/activation/${token}`).set('x-forwarded-for', nextIp()).expect(410)).body.code).toBe('LINK_INVALID');
+    await http().post(`/api/v1/site/activation/${token}`).set('x-forwarded-for', nextIp()).send({ password: 'trial1234' }).expect(410);
     await apply(application({ code: body.code, taxId: body.taxId })).expect(200);
     expect((await q1(`SELECT status FROM trial_applications WHERE token_hash IS NOT NULL AND code = $1 ORDER BY created_at LIMIT 1`, [body.code])).status).toBe('expired');
   });
@@ -152,8 +152,8 @@ describe('略過 Email 驗證（TRIAL_SKIP_EMAIL_VERIFY）', () => {
       expect(mail.sent.slice(before).some((m) => m.to === body.email)).toBe(false);
       const token = res.body.activationToken as string;
       expect(token).toMatch(/^[A-Za-z0-9_-]{20,}$/);
-      expect((await http().get(`/api/v1/site/activation/${token}`).expect(200)).body).toMatchObject({ state: 'ready', mode: 'auto', code: body.code });
-      await http().post(`/api/v1/site/activation/${token}`).send({ password: 'trial1234' }).expect(201);
+      expect((await http().get(`/api/v1/site/activation/${token}`).set('x-forwarded-for', nextIp()).expect(200)).body).toMatchObject({ state: 'ready', mode: 'auto', code: body.code });
+      await http().post(`/api/v1/site/activation/${token}`).set('x-forwarded-for', nextIp()).send({ password: 'trial1234' }).expect(201);
       await login(body.code, body.email, 'trial1234');
       // 陷阱欄位仍假裝成功、不回傳 token
       expect((await apply(application({ website: 'spam' })).expect(200)).body).toEqual({ activationToken: null });
@@ -174,12 +174,12 @@ describe('自助開通', () => {
     const body = application();
     await apply(body).expect(200);
     const token = tokenFor(body.email)!;
-    const info = await http().get(`/api/v1/site/activation/${token}`).expect(200);
+    const info = await http().get(`/api/v1/site/activation/${token}`).set('x-forwarded-for', nextIp()).expect(200);
     expect(info.body).toEqual({ state: 'ready', mode: 'auto', agencyName: body.agencyName, code: body.code, email: body.email, contactName: body.contactName });
 
-    expect((await http().post(`/api/v1/site/activation/${token}`).send({}).expect(422)).body.code).toBe('INVALID_INPUT');
-    expect((await http().post(`/api/v1/site/activation/${token}`).send({ password: 'short' }).expect(422)).body.code).toBe('INVALID_PASSWORD');
-    const done = await http().post(`/api/v1/site/activation/${token}`).send({ password: 'trial1234' }).expect(201);
+    expect((await http().post(`/api/v1/site/activation/${token}`).set('x-forwarded-for', nextIp()).send({}).expect(422)).body.code).toBe('INVALID_INPUT');
+    expect((await http().post(`/api/v1/site/activation/${token}`).set('x-forwarded-for', nextIp()).send({ password: 'short' }).expect(422)).body.code).toBe('INVALID_PASSWORD');
+    const done = await http().post(`/api/v1/site/activation/${token}`).set('x-forwarded-for', nextIp()).send({ password: 'trial1234' }).expect(201);
     expect(done.body).toEqual({ state: 'activated', code: body.code, email: body.email });
 
     const agency = await q1(
@@ -198,8 +198,8 @@ describe('自助開通', () => {
     expect(quota.body.filter((t: { remaining: number }) => t.remaining > 0)).toEqual([expect.objectContaining({ minTravelers: 1, maxTravelers: 40, price: 0, remaining: 1 })]);
 
     // 連結只能用一次；再點顯示已開通
-    expect((await http().get(`/api/v1/site/activation/${token}`).expect(200)).body).toEqual({ state: 'activated', code: body.code });
-    await http().post(`/api/v1/site/activation/${token}`).send({ password: 'trial1234' }).expect(410);
+    expect((await http().get(`/api/v1/site/activation/${token}`).set('x-forwarded-for', nextIp()).expect(200)).body).toEqual({ state: 'activated', code: body.code });
+    await http().post(`/api/v1/site/activation/${token}`).set('x-forwarded-for', nextIp()).send({ password: 'trial1234' }).expect(410);
     // 一個統編只能試用一次
     expect((await apply(application({ taxId: body.taxId })).expect(409)).body.code).toBe('TAX_ID_USED');
   });
@@ -208,7 +208,7 @@ describe('自助開通', () => {
     const body = application();
     await apply(body).expect(200);
     const token = tokenFor(body.email)!;
-    const results = await Promise.all([1, 2].map(() => http().post(`/api/v1/site/activation/${token}`).send({ password: 'trial1234' })));
+    const results = await Promise.all([1, 2].map(() => http().post(`/api/v1/site/activation/${token}`).set('x-forwarded-for', nextIp()).send({ password: 'trial1234' })));
     expect(results.map((r) => r.status).sort()).toEqual([201, 410]);
     expect((await q1(`SELECT count(*)::int AS n FROM agencies WHERE code = $1`, [body.code])).n).toBe(1);
   });
@@ -236,9 +236,9 @@ describe('關閉自動開通', () => {
       const body = application();
       await apply(body).expect(200);
       const token = tokenFor(body.email)!;
-      expect((await http().get(`/api/v1/site/activation/${token}`).expect(200)).body.mode).toBe('manual');
-      expect((await http().post(`/api/v1/site/activation/${token}`).send({}).expect(201)).body).toEqual({ state: 'pending' });
-      expect((await http().get(`/api/v1/site/activation/${token}`).expect(200)).body).toEqual({ state: 'pending' });
+      expect((await http().get(`/api/v1/site/activation/${token}`).set('x-forwarded-for', nextIp()).expect(200)).body.mode).toBe('manual');
+      expect((await http().post(`/api/v1/site/activation/${token}`).set('x-forwarded-for', nextIp()).send({}).expect(201)).body).toEqual({ state: 'pending' });
+      expect((await http().get(`/api/v1/site/activation/${token}`).set('x-forwarded-for', nextIp()).expect(200)).body).toEqual({ state: 'pending' });
       expect(await q1(`SELECT 1 AS x FROM agencies WHERE code = $1`, [body.code])).toBeUndefined();
 
       const list = await http().get('/api/v1/platform/trial-applications?status=pending').set('cookie', cookie).expect(200);
@@ -271,7 +271,7 @@ describe('關閉自動開通', () => {
     try {
       const body = application();
       await apply(body).expect(200);
-      await http().post(`/api/v1/site/activation/${tokenFor(body.email)}`).send({}).expect(201);
+      await http().post(`/api/v1/site/activation/${tokenFor(body.email)}`).set('x-forwarded-for', nextIp()).send({}).expect(201);
       const row = await q1(`SELECT id FROM trial_applications WHERE code = $1`, [body.code]);
       await http().patch(`/api/v1/platform/trial-applications/${row.id}`).set('cookie', cookie).send({ status: 'rejected' }).expect(204);
       await http().patch(`/api/v1/platform/trial-applications/${row.id}`).set('cookie', cookie).send({ status: 'pending' }).expect(204);
