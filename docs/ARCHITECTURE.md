@@ -83,6 +83,7 @@
 |---|---|
 | `TRIAL_NOTIFY_EMAIL` | 試用申請的通知信收件人；留空時只寄確認信給申請人 |
 | `DEMO_ENABLED` | `true` 時 API 啟動後建立試玩活動，並每 10 分鐘檢查是否該重建 |
+| `TRIAL_SKIP_EMAIL_VERIFY` | `true` 時試用申請不寄驗證信，送出後直接導到開通頁設定密碼（寄信服務尚未能寄給一般信箱時使用，例如 SES 未核准 production access）；預設 `false` |
 | `TRIAL_JOBS_ENABLED` | `true` 時每小時寄試用到期提醒，並刪除到期超過 30 天的試用旅行社 |
 | `SITE_LINE_URL` | 官網的 LINE 官方帳號網址；留空時不顯示 LINE 按鈕 |
 | `SITE_SIBLING_URL` | 頁尾連到 Bookdex 預約簿的網址，預設 `https://bookdex.cc` |

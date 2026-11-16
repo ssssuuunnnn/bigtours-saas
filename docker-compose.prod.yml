@@ -23,6 +23,8 @@ x-app: &app
     TRIAL_NOTIFY_EMAIL: ${TRIAL_NOTIFY_EMAIL:-}
     DEMO_ENABLED: ${DEMO_ENABLED:-true}
     TRIAL_JOBS_ENABLED: ${TRIAL_JOBS_ENABLED:-true}
+    # 寄信服務還不能寄給一般信箱時設 true：試用申請不寄驗證信，送出後直接設定密碼開通
+    TRIAL_SKIP_EMAIL_VERIFY: ${TRIAL_SKIP_EMAIL_VERIFY:-false}
     SITE_LINE_URL: ${SITE_LINE_URL:-}
     SITE_SIBLING_URL: ${SITE_SIBLING_URL:-https://bookdex.cc}
     SITE_GTM_ID: ${SITE_GTM_ID:-}

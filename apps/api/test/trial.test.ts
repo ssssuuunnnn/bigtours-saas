@@ -59,7 +59,7 @@ async function login(code: string, email: string, password: string) {
 /** 申請並自助開通，回傳登入後的 Cookie。 */
 async function activated(over: Record<string, unknown> = {}) {
   const body = application(over);
-  await apply(body).expect(204);
+  await apply(body).expect(200);
   const token = tokenFor(body.email)!;
   await http().post(`/api/v1/site/activation/${token}`).send({ password: 'trial1234' }).expect(201);
   const agency = await q1(`SELECT * FROM agencies WHERE code = $1`, [body.code]);
@@ -93,7 +93,7 @@ afterAll(async () => {
 describe('試用申請', () => {
   it('送出後等待 Email 驗證，保留網址與統編，寄出驗證信', async () => {
     const body = application();
-    await apply(body).expect(204);
+    await apply(body).expect(200);
     const row = await q1(`SELECT * FROM trial_applications WHERE code = $1`, [body.code]);
     expect(row).toMatchObject({ status: 'unverified', tax_id: body.taxId });
     expect(row.token_hash).not.toBeNull();
@@ -114,15 +114,15 @@ describe('試用申請', () => {
 
   it('陷阱欄位有值時假裝成功但不寫入；同一來源一小時最多 5 筆；同一 Email 一天最多 3 筆', async () => {
     const spam = application({ website: 'http://spam.example' });
-    await apply(spam).expect(204);
+    await apply(spam).expect(200);
     expect(await q1(`SELECT 1 AS x FROM trial_applications WHERE code = $1`, [spam.code])).toBeUndefined();
 
     const ip = nextIp();
-    for (let i = 0; i < 5; i += 1) await apply(application(), ip).expect(204);
+    for (let i = 0; i < 5; i += 1) await apply(application(), ip).expect(200);
     expect((await apply(application(), ip).expect(429)).body.code).toBe('TOO_MANY_REQUESTS');
 
     const email = `${randomUUID().slice(0, 8)}@example.com`;
-    for (let i = 0; i < 3; i += 1) await apply(application({ email })).expect(204);
+    for (let i = 0; i < 3; i += 1) await apply(application({ email })).expect(200);
     expect((await apply(application({ email })).expect(429)).body.code).toBe('TOO_MANY_REQUESTS');
   });
 
@@ -132,20 +132,47 @@ describe('試用申請', () => {
 
   it('驗證連結過期後不能使用，網址與統編釋出', async () => {
     const body = application();
-    await apply(body).expect(204);
+    await apply(body).expect(200);
     const token = tokenFor(body.email)!;
     await admin.query(`UPDATE trial_applications SET token_expires_at = now() - interval '1 minute' WHERE code = $1`, [body.code]);
     expect((await http().get(`/api/v1/site/activation/${token}`).expect(410)).body.code).toBe('LINK_INVALID');
     await http().post(`/api/v1/site/activation/${token}`).send({ password: 'trial1234' }).expect(410);
-    await apply(application({ code: body.code, taxId: body.taxId })).expect(204);
+    await apply(application({ code: body.code, taxId: body.taxId })).expect(200);
     expect((await q1(`SELECT status FROM trial_applications WHERE token_hash IS NOT NULL AND code = $1 ORDER BY created_at LIMIT 1`, [body.code])).status).toBe('expired');
+  });
+});
+
+describe('略過 Email 驗證（TRIAL_SKIP_EMAIL_VERIFY）', () => {
+  it('送出後不寄驗證信，直接回傳開通 token，設定密碼即開通', async () => {
+    process.env.TRIAL_SKIP_EMAIL_VERIFY = 'true';
+    try {
+      const body = application();
+      const before = mail.sent.length;
+      const res = await apply(body).expect(200);
+      expect(mail.sent.slice(before).some((m) => m.to === body.email)).toBe(false);
+      const token = res.body.activationToken as string;
+      expect(token).toMatch(/^[A-Za-z0-9_-]{20,}$/);
+      expect((await http().get(`/api/v1/site/activation/${token}`).expect(200)).body).toMatchObject({ state: 'ready', mode: 'auto', code: body.code });
+      await http().post(`/api/v1/site/activation/${token}`).send({ password: 'trial1234' }).expect(201);
+      await login(body.code, body.email, 'trial1234');
+      // 陷阱欄位仍假裝成功、不回傳 token
+      expect((await apply(application({ website: 'spam' })).expect(200)).body).toEqual({ activationToken: null });
+    } finally {
+      delete process.env.TRIAL_SKIP_EMAIL_VERIFY;
+    }
+  });
+
+  it('沒有設定時照常寄驗證信，不回傳 token', async () => {
+    const body = application();
+    expect((await apply(body).expect(200)).body).toEqual({ activationToken: null });
+    expect(tokenFor(body.email)).toBeTruthy();
   });
 });
 
 describe('自助開通', () => {
   it('點連結設定密碼即開通：30 天、一場 40 人的活動額度、自己是管理員', async () => {
     const body = application();
-    await apply(body).expect(204);
+    await apply(body).expect(200);
     const token = tokenFor(body.email)!;
     const info = await http().get(`/api/v1/site/activation/${token}`).expect(200);
     expect(info.body).toEqual({ state: 'ready', mode: 'auto', agencyName: body.agencyName, code: body.code, email: body.email, contactName: body.contactName });
@@ -179,7 +206,7 @@ describe('自助開通', () => {
 
   it('同一個連結同時送出兩次只會開通一次', async () => {
     const body = application();
-    await apply(body).expect(204);
+    await apply(body).expect(200);
     const token = tokenFor(body.email)!;
     const results = await Promise.all([1, 2].map(() => http().post(`/api/v1/site/activation/${token}`).send({ password: 'trial1234' })));
     expect(results.map((r) => r.status).sort()).toEqual([201, 410]);
@@ -207,7 +234,7 @@ describe('關閉自動開通', () => {
       const cookie = await platformCookie();
       expect((await http().get('/api/v1/platform/settings').set('cookie', cookie).expect(200)).body).toEqual({ trialAutoApprove: false });
       const body = application();
-      await apply(body).expect(204);
+      await apply(body).expect(200);
       const token = tokenFor(body.email)!;
       expect((await http().get(`/api/v1/site/activation/${token}`).expect(200)).body.mode).toBe('manual');
       expect((await http().post(`/api/v1/site/activation/${token}`).send({}).expect(201)).body).toEqual({ state: 'pending' });
@@ -243,13 +270,13 @@ describe('關閉自動開通', () => {
     await setAuto(false);
     try {
       const body = application();
-      await apply(body).expect(204);
+      await apply(body).expect(200);
       await http().post(`/api/v1/site/activation/${tokenFor(body.email)}`).send({}).expect(201);
       const row = await q1(`SELECT id FROM trial_applications WHERE code = $1`, [body.code]);
       await http().patch(`/api/v1/platform/trial-applications/${row.id}`).set('cookie', cookie).send({ status: 'rejected' }).expect(204);
       await http().patch(`/api/v1/platform/trial-applications/${row.id}`).set('cookie', cookie).send({ status: 'pending' }).expect(204);
       await http().patch(`/api/v1/platform/trial-applications/${row.id}`).set('cookie', cookie).send({ status: 'rejected' }).expect(204);
-      await apply(application({ code: body.code, taxId: body.taxId })).expect(204);
+      await apply(application({ code: body.code, taxId: body.taxId })).expect(200);
       // 同一個網址已有新的申請，不能改回待核准
       expect(['CODE_UNAVAILABLE', 'TAX_ID_USED']).toContain((await http().patch(`/api/v1/platform/trial-applications/${row.id}`).set('cookie', cookie).send({ status: 'pending' }).expect(409)).body.code);
       await http().patch('/api/v1/platform/trial-applications/not-a-uuid').set('cookie', cookie).send({ status: 'rejected' }).expect(404);

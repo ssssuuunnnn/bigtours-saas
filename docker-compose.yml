@@ -24,6 +24,8 @@ x-app: &app
     DEMO_ENABLED: "true"
     # 試用到期提醒與到期後刪除（每小時檢查）
     TRIAL_JOBS_ENABLED: "true"
+    # 試用申請不寄驗證信、送出後直接設定密碼開通（寄信服務尚未開通時使用）
+    TRIAL_SKIP_EMAIL_VERIFY: "false"
     # 官網的 LINE 官方帳號網址，留空時不顯示 LINE 按鈕
     SITE_LINE_URL: ""
     # 官網與試玩頁的 Google Tag Manager 容器 ID，留空時不載入

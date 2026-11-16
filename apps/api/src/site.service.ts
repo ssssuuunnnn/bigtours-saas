@@ -18,6 +18,11 @@ const TODAY = `(now() AT TIME ZONE 'Asia/Taipei')::date`;
 const OPEN = `(status = 'pending' OR (status = 'unverified' AND token_expires_at > now()))`;
 
 const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+/**
+ * 寄信服務還不能寄給一般信箱時（例如 SES 尚未核准 production access）設為 true：
+ * 不寄驗證信，送出申請後直接回傳開通連結，申請人在同一個頁面設定密碼開通。之後改回 false 即恢復 Email 驗證。
+ */
+const skipEmailVerify = () => process.env.TRIAL_SKIP_EMAIL_VERIFY === 'true';
 /** 平台網址，例如 https://bigtour.bookdex.cc（由旅行社網址的格式推得）。 */
 const siteBase = () => (process.env.WEB_BASE_URL ?? 'http://localhost:3000/{agency}').replace(/\/?\{agency\}.*$/, '');
 
@@ -95,9 +100,10 @@ export class SiteService {
   /**
    * 送出申請：保留網址與統編 24 小時，寄出驗證信。機器人填了陷阱欄位時假裝成功，不寫入也不寄信。
    * 一個統編只能試用一次（已開通過或已有旅行社使用就不能再申請）；被退回的申請不算。
+   * 略過 Email 驗證時（TRIAL_SKIP_EMAIL_VERIFY）不寄信，改為回傳開通連結的 token，前端直接導到開通頁。
    */
-  async apply(input: TrialApplicationInput, ip: string | null) {
-    if (input.website) return;
+  async apply(input: TrialApplicationInput, ip: string | null): Promise<{ activationToken: string | null }> {
+    if (input.website) return { activationToken: null };
     const recent = await this.db.pool.query(
       `SELECT count(*) FILTER (WHERE ip_address = $1 AND created_at > now() - interval '1 hour')::int AS by_ip,
               count(*) FILTER (WHERE email = $2 AND created_at > now() - interval '1 day')::int AS by_email
@@ -134,8 +140,10 @@ export class SiteService {
     } finally {
       client.release();
     }
+    if (skipEmailVerify()) return { activationToken: token };
     // 申請已存下；驗證信寄失敗時可以重新申請（24 小時後網址釋出，或換一個 Email）
     await this.sendVerification(input, token).catch((e) => this.logger.error(`試用驗證信寄送失敗：${(e as Error).message}`));
+    return { activationToken: null };
   }
 
   private async sendVerification(input: TrialApplicationInput, token: string) {

@@ -59,8 +59,13 @@ export function TrialForm({ domain }: { domain: string }) {
     setBusy(true); setError(null);
     try {
       const res = await fetch('/api/v1/site/trial-applications', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(v) });
-      if (res.ok) { setDone(true); return; }
       const data = await res.json().catch(() => null);
+      if (res.ok) {
+        // 略過 Email 驗證時，直接到開通頁設定密碼
+        if (typeof data?.activationToken === 'string') { window.location.assign(`/activate/${encodeURIComponent(data.activationToken)}`); return; }
+        setDone(true);
+        return;
+      }
       if (data?.code === 'INVALID_INPUT' && Array.isArray(data.detail?.fields)) {
         setInvalid(new Set(data.detail.fields));
         setError('請修正標示的欄位後再送出。');
