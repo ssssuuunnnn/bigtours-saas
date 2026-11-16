@@ -18,13 +18,14 @@ export class SiteController {
     return this.site.checkCode(String(code ?? '').trim().toLowerCase(), clientIp(h));
   }
 
+  /** 一般回傳 activationToken: null（開通連結寄到信箱）；略過 Email 驗證時回傳 token，前端直接導到開通頁。 */
   @Post('trial-applications')
-  @HttpCode(204)
+  @HttpCode(200)
   async apply(@Headers() h: RequestHeaders, @Body() body: unknown) {
     assertSameOrigin(h);
     const parsed = trialApplicationInput.safeParse(body);
     if (!parsed.success) throw new DomainError('INVALID_INPUT', { fields: [...new Set(parsed.error.issues.map((i) => String(i.path[0])))] });
-    await this.site.apply(parsed.data, clientIp(h));
+    return this.site.apply(parsed.data, clientIp(h));
   }
 
   /** Email 驗證連結的內容（只查詢，不會開通）。 */

@@ -32,6 +32,8 @@ SITE_GTM_ID=
 DEMO_ENABLED=true
 # 試用到期提醒與到期後刪除
 TRIAL_JOBS_ENABLED=true
+# SES 尚未核准 production access 時設 true：試用申請不寄驗證信，送出後直接設定密碼開通
+TRIAL_SKIP_EMAIL_VERIFY=false
 
 # 對外連接埠：443 已由預約簿使用，Cloudflare Origin Rule 轉到這裡
 HTTPS_PORT=8443
